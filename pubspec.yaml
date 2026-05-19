@@ -23,6 +23,7 @@ dependencies:
   media_kit_video: ^1.2.5
   media_kit_libs_windows_video: ^1.0.9
   video_player_win: ^3.2.2
+  crypto: ^3.0.3 
  
 dev_dependencies:
   flutter_test:
