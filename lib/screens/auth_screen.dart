@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:audioplayers/audioplayers.dart'; // 🎵 MUSIC: Import para audio
 import '../services/auth_service.dart';
 import '../services/peer_service.dart';
 import 'menu_screen.dart';
@@ -19,12 +20,14 @@ class AuthScreen extends StatefulWidget {
 class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   final _auth = AuthService();
   final _peer = PeerService();
+  final _musicPlayer = AudioPlayer(); // 🎵 MUSIC: Instancia del reproductor
 
-  bool _isLogin = true; // true = login, false = registro
+  bool _isLogin = true;
   bool _loading = false;
   bool _peerServiceReady = false;
+  bool _musicReady = false; // 🎵 MUSIC: Flag para saber si la música cargó
   String? _errorMsg;
-  String? _warnMsg; // aviso de cuenta no formalizada
+  String? _warnMsg;
 
   late AnimationController _scanlineCtrl;
   late AnimationController _pulseCtrl;
@@ -34,7 +37,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   final _passwordCtrl = TextEditingController();
   bool _obscurePass = true;
 
-  // Campos registro (adicionales)
+  // Campos registro
   final _nombreCtrl = TextEditingController();
   final _telefonoCtrl = TextEditingController();
   final _edadCtrl = TextEditingController();
@@ -55,23 +58,41 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     )..repeat(reverse: true);
 
     _initServices();
+    _startMusic(); // 🎵 MUSIC: Iniciar música después de servicios
   }
 
   Future<void> _initServices() async {
-    // Arrancar PeerService primero para tener IPs
     await _peer.start();
     setState(() => _peerServiceReady = true);
-
-    // Arrancar AuthService con los peers conocidos para sincronizar users.json
     await _auth.start(_peer.knownPeers.keys.toList());
 
-    // Escuchar nuevos peers para sincronizar en tiempo real
     _peer.events.listen((e) {
       if (e.type == 'peer_online') {
         final ip = (e.data as Map)['ip'] as String;
         _auth.syncWithNewPeer(ip);
       }
     });
+  }
+
+  // 🎵 MUSIC: Método para iniciar la música de fondo en loop
+  Future<void> _startMusic() async {
+    try {
+      await _musicPlayer.setReleaseMode(ReleaseMode.loop);
+      await _musicPlayer.play(AssetSource('login.mp3'));
+      if (mounted) setState(() => _musicReady = true);
+    } catch (e) {
+      // Si falla el audio, continuar sin música (no bloquear la UI)
+      debugPrint('[AuthScreen] Error al cargar música: $e');
+    }
+  }
+
+  // 🎵 MUSIC: Método para detener la música explícitamente
+  Future<void> _stopMusic() async {
+    try {
+      await _musicPlayer.stop();
+    } catch (e) {
+      debugPrint('[AuthScreen] Error al detener música: $e');
+    }
   }
 
   @override
@@ -85,6 +106,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     _edadCtrl.dispose();
     _correoCtrl.dispose();
     _password2Ctrl.dispose();
+    _musicPlayer.dispose(); // 🎵 MUSIC: Liberar recursos de audio
     super.dispose();
   }
 
@@ -126,7 +148,6 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       return;
     }
 
-    // Intentar propagar a peers
     final peers = _peer.knownPeers.keys.toList();
     if (peers.isEmpty) {
       setState(() => _warnMsg =
@@ -140,6 +161,10 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
 
   void _goToMenu() {
     if (!mounted) return;
+    
+    // 🎵 MUSIC: Detener música ANTES de navegar para evitar solapamiento
+    _stopMusic();
+    
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(builder: (_) => const MenuScreen()),
@@ -173,6 +198,11 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
                       _buildLogo(),
                       const SizedBox(height: 40),
                       _buildCard(),
+                      // 🎵 MUSIC: Indicador sutil de que la música está cargada (opcional, para debug)
+                      // if (!_musicReady) ...[
+                      //   const SizedBox(height: 8),
+                      //   Text('♪ cargando...', style: TextStyle(color: kNeon.withOpacity(0.3), fontFamily: 'monospace', fontSize: 9)),
+                      // ],
                     ],
                   ),
                 ),
@@ -238,7 +268,6 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Tabs login/registro
           Row(
             children: [
               _TabButton(
@@ -256,16 +285,13 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
           ),
           const SizedBox(height: 28),
 
-          // Campos
           if (_isLogin) _buildLoginFields() else _buildRegisterFields(),
 
-          // Error
           if (_errorMsg != null) ...[
             const SizedBox(height: 16),
             _buildMessage(_errorMsg!, kPink, Icons.error_outline),
           ],
 
-          // Warning cuenta no formalizada
           if (_warnMsg != null) ...[
             const SizedBox(height: 16),
             _buildMessage(_warnMsg!, const Color(0xFFFFB300), Icons.warning_amber_outlined),
@@ -273,7 +299,6 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
 
           const SizedBox(height: 24),
 
-          // Botón principal
           SizedBox(
             width: double.infinity,
             child: _loading
@@ -418,6 +443,8 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
 }
 
 // ─── Widgets auxiliares ───────────────────────────────────────────────────────
+// (Sin cambios en _TabButton, _NeonField, _NeonButton, _AuthScanlinePainter)
+// Los copias tal cual de tu código original 👇
 
 class _TabButton extends StatelessWidget {
   final String label;
@@ -548,7 +575,6 @@ class _NeonButton extends StatelessWidget {
   }
 }
 
-// ─── Painter ──────────────────────────────────────────────────────────────────
 class _AuthScanlinePainter extends CustomPainter {
   final double t;
   _AuthScanlinePainter(this.t);

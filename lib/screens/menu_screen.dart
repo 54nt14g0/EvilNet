@@ -6,7 +6,10 @@ import 'package:file_picker/file_picker.dart';
 import 'package:video_player/video_player.dart';
 import 'package:audioplayers/audioplayers.dart';
 import '../services/peer_service.dart';
+import '../services/auth_service.dart'; // 🔐 MERGE: AuthService import
 import 'lobby_screen.dart';
+import 'profile_screen.dart'; // 🔐 MERGE: Nuevas vistas
+import 'control_panel_screen.dart'; // 🔐 MERGE: Nuevas vistas
 
 // ─── Paleta retrowave / matrix ────────────────────────────────────────────────
 const Color kNeon = Color(0xFF00FFB2);
@@ -25,10 +28,9 @@ class MenuScreen extends StatefulWidget {
 class _MenuScreenState extends State<MenuScreen>
     with TickerProviderStateMixin, RouteAware {
   final _peer = PeerService();
+  final _auth = AuthService(); // 🔐 MERGE: AuthService instance
   final _musicPlayer = AudioPlayer();
   bool _initialized = false;
-
-  //GUard que verifica si se está o no en el menu para reproducir o no el audio
   bool _isRouteActive = false;
 
   // Fondo y canción aleatorios
@@ -38,27 +40,39 @@ class _MenuScreenState extends State<MenuScreen>
   // Video de fondo
   VideoPlayerController? _videoCtrl;
   String? _videoPath;
-
-  // _videoActive: true cuando hay un video de fondo configurado (aunque esté pausado)
   bool _videoActive = false;
 
   // Animaciones
   late AnimationController _glitchCtrl;
   late AnimationController _scanlineCtrl;
   late AnimationController _pulseCtrl;
+  late AnimationController _rainCtrl;
   int _hoveredIndex = -1;
 
-  // Rain matrix
-  late AnimationController _rainCtrl;
-
-  final List<_MenuItem> _items = [
-    _MenuItem('01', 'Cámara de Estudio', Icons.videocam_outlined),
-    _MenuItem('02', 'Lobby', Icons.hub_outlined),
-    _MenuItem('03', 'Recovecos', Icons.explore_outlined),
-    _MenuItem('04', 'Material', Icons.layers_outlined),
-    _MenuItem('05', 'Rincón de Ideas', Icons.lightbulb_outlined),
-    _MenuItem('06', 'Exit', Icons.power_settings_new),
-  ];
+  // 🔐 MERGE: Getter dinámico para menú según jerarquía de usuario
+  List<_MenuItem> get _items {
+    final user = _auth.currentUser;
+    final items = <_MenuItem>[
+      _MenuItem('01', 'Cámara de Estudio', Icons.videocam_outlined),
+      _MenuItem('02', 'Lobby', Icons.hub_outlined),
+      _MenuItem('03', 'Recovecos', Icons.explore_outlined),
+      _MenuItem('04', 'Material', Icons.layers_outlined),
+      _MenuItem('05', 'Rincón de Ideas', Icons.lightbulb_outlined),
+    ];
+    
+    // Panel de Control solo para jerarquía >= 7
+    if (user != null && user.jerarquia >= 7) {
+      items.add(const _MenuItem('06', 'Panel de Control', Icons.admin_panel_settings_outlined, isSpecial: true));
+    }
+    
+    // Mi Perfil y Exit siempre al final, numeración dinámica
+    final nextNum = (items.length + 1).toString().padLeft(2, '0');
+    items.add(_MenuItem(nextNum, 'Mi Perfil', Icons.person_outline));
+    final exitNum = (items.length + 1).toString().padLeft(2, '0');
+    items.add(_MenuItem(exitNum, 'Exit', Icons.power_settings_new));
+    
+    return items;
+  }
 
   @override
   void initState() {
@@ -90,6 +104,13 @@ class _MenuScreenState extends State<MenuScreen>
 
     _startMusic();
     _initService();
+
+    // 🔐 MERGE: Escuchar eventos de AuthService para refrescar UI
+    _auth.events.listen((e) {
+      if (mounted && e == 'users_updated') {
+        setState(() {}); // Refresca menú si cambian permisos de usuario
+      }
+    });
   }
 
   @override
@@ -99,7 +120,6 @@ class _MenuScreenState extends State<MenuScreen>
     final wasActive = _isRouteActive;
     _isRouteActive = route != null && route.isCurrent;
 
-    // Si acabamos de volver al menú y el servicio ya está listo, recargar video/música
     if (_isRouteActive && !wasActive && _initialized) {
       _loadVideo();
     }
@@ -107,7 +127,6 @@ class _MenuScreenState extends State<MenuScreen>
 
   // ── Música ──────────────────────────────────────────────────────────────────
 
-  /// Arranca la música solo si NO hay video activo.
   Future<void> _startMusic() async {
     if (_videoActive) return;
     await _musicPlayer.setReleaseMode(ReleaseMode.loop);
@@ -126,7 +145,6 @@ class _MenuScreenState extends State<MenuScreen>
     _loadVideo();
 
     _peer.events.listen((e) {
-      // 🛑 Si el widget se descartó o la pantalla NO está visible, ignorar evento
       if (!mounted || !_isRouteActive) return;
 
       if (e.type == 'background_video_updated') {
@@ -139,62 +157,43 @@ class _MenuScreenState extends State<MenuScreen>
 
   // ── Video de fondo ───────────────────────────────────────────────────────────
 
-  /// Carga y activa el video de fondo.
-  /// Carga y activa el video de fondo con manejo robusto de errores y rutas.
   Future<void> _loadVideo({String? path}) async {
     try {
-      // 1. Obtener ruta: parámetro explícito o desde SharedPreferences
       final p = path ?? await _peer.getBackgroundVideoPath();
       if (p == null) {
         debugPrint('[MenuScreen] _loadVideo: no path provided');
         return;
       }
 
-      // 2. Verificar existencia del archivo con reintentos (útil si viene por P2P)
       if (!await File(p).exists()) {
-        debugPrint(
-          '[MenuScreen] _loadVideo: archivo no encontrado, esperando transferencia...',
-        );
-        // Esperar hasta 3 intentos de 2 segundos cada uno
+        debugPrint('[MenuScreen] _loadVideo: archivo no encontrado, esperando transferencia...');
         for (int i = 0; i < 3; i++) {
           await Future.delayed(const Duration(seconds: 2));
           if (await File(p).exists()) break;
         }
-        // Si aún no existe, abortar
         if (!await File(p).exists()) {
-          debugPrint(
-            '[MenuScreen] _loadVideo: archivo sigue sin existir tras reintentos',
-          );
+          debugPrint('[MenuScreen] _loadVideo: archivo sigue sin existir tras reintentos');
           return;
         }
       }
 
-      // 3. Normalizar ruta para Windows (evitar problemas con barras invertidas)
       final normalizedPath = p.replaceAll('\\', '/');
       final videoFile = File(normalizedPath);
 
-      // 4. Crear e inicializar el controlador de video
       final ctrl = VideoPlayerController.file(videoFile);
       await ctrl.initialize();
 
-      // Verificar que la inicialización fue exitosa
       if (!ctrl.value.isInitialized) {
-        debugPrint(
-          '[MenuScreen] _loadVideo: fallo al inicializar VideoPlayerController',
-        );
+        debugPrint('[MenuScreen] _loadVideo: fallo al inicializar VideoPlayerController');
         await ctrl.dispose();
         return;
       }
 
-      // 5. Configurar reproducción
       ctrl.setLooping(true);
       ctrl.setVolume(1.0);
       await ctrl.play();
-
-      // 6. Silenciar música de fondo si el video tiene audio
       await _stopMusic();
 
-      // 7. Actualizar estado UI
       if (mounted) {
         setState(() {
           _videoCtrl?.dispose();
@@ -202,14 +201,11 @@ class _MenuScreenState extends State<MenuScreen>
           _videoPath = normalizedPath;
           _videoActive = true;
         });
-        debugPrint(
-          '[MenuScreen] _loadVideo: video cargado exitosamente: $normalizedPath',
-        );
+        debugPrint('[MenuScreen] _loadVideo: video cargado exitosamente: $normalizedPath');
       }
     } catch (e, stack) {
       debugPrint('[MenuScreen] _loadVideo ERROR: $e');
       debugPrint('Stack: $stack');
-      // Limpiar estado en caso de error
       if (mounted) {
         setState(() {
           _videoCtrl?.dispose();
@@ -221,7 +217,6 @@ class _MenuScreenState extends State<MenuScreen>
     }
   }
 
-  /// Limpia el video y vuelve a los fondos/música default.
   Future<void> _clearVideo() async {
     _videoCtrl?.pause();
     _videoCtrl?.dispose();
@@ -230,21 +225,11 @@ class _MenuScreenState extends State<MenuScreen>
       _videoPath = null;
       _videoActive = false;
     });
-    // Reanudar música default
     await _startMusic();
   }
 
-  /// Pausa el video (sin descartarlo) al salir del menú.
-  void _pauseVideo() {
-    _videoCtrl?.pause();
-  }
-
-  /// Reanuda el video al volver al menú.
-  void _resumeVideo() {
-    _videoCtrl?.play();
-  }
-
-  // ── Selector de video para el admin ─────────────────────────────────────────
+  void _pauseVideo() => _videoCtrl?.pause();
+  void _resumeVideo() => _videoCtrl?.play();
 
   Future<void> _pickAndBroadcastVideo() async {
     final result = await FilePicker.platform.pickFiles(
@@ -258,15 +243,18 @@ class _MenuScreenState extends State<MenuScreen>
     await _peer.broadcastBackgroundVideo(path);
   }
 
-  /// Cancela el video de fondo en todos los peers.
   Future<void> _cancelBackgroundVideo() async {
-    await _peer.clearBackgroundVideo(); // ver peer_service.dart
+    await _peer.clearBackgroundVideo();
     await _clearVideo();
   }
 
   // ── Diálogo de opciones admin ────────────────────────────────────────────────
 
   void _showAdminOptions() {
+    // 🔐 MERGE: Validación de permisos - solo J9+ puede gestionar video
+    final user = _auth.currentUser;
+    if (user == null || user.jerarquia < 9) return;
+
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
@@ -325,9 +313,6 @@ class _MenuScreenState extends State<MenuScreen>
 
   // ── Navegación ───────────────────────────────────────────────────────────────
 
-  /// Navega a una pantalla:
-  /// - Pausa video (si activo) o detiene música
-  /// - Al regresar: reanuda video o música según corresponda
   Future<void> _navigateTo(Widget screen) async {
     if (_videoActive) {
       _pauseVideo();
@@ -337,7 +322,6 @@ class _MenuScreenState extends State<MenuScreen>
 
     await Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
 
-    // Al volver al menú
     if (_videoActive) {
       _resumeVideo();
     } else {
@@ -345,25 +329,34 @@ class _MenuScreenState extends State<MenuScreen>
     }
   }
 
+  // 🔐 MERGE: _onItemTap con switch por label para manejar nuevas vistas
   void _onItemTap(int index) {
-    switch (index) {
-      case 0:
+    final label = _items[index].label;
+    switch (label) {
+      case 'Cámara de Estudio':
         _showComingSoon('Cámara de Estudio');
         break;
-      case 1:
+      case 'Lobby':
         _navigateTo(const LobbyScreen());
         break;
-      case 2:
+      case 'Recovecos':
         _showComingSoon('Recovecos');
         break;
-      case 3:
+      case 'Material':
         _showComingSoon('Material');
         break;
-      case 4:
+      case 'Rincón de Ideas':
         _showComingSoon('Rincón de Ideas');
         break;
-      case 5:
+      case 'Panel de Control': // 🔐 MERGE: Nueva navegación
+        _navigateTo(const ControlPanelScreen());
+        break;
+      case 'Mi Perfil': // 🔐 MERGE: Nueva navegación
+        _navigateTo(const ProfileScreen());
+        break;
+      case 'Exit':
         exit(0);
+        break;
     }
   }
 
@@ -406,7 +399,6 @@ class _MenuScreenState extends State<MenuScreen>
       ),
     );
 
-    // Al cerrar el diálogo, reanudar
     if (_videoActive) {
       _resumeVideo();
     } else {
@@ -427,16 +419,27 @@ class _MenuScreenState extends State<MenuScreen>
     super.dispose();
   }
 
+  // ── Helpers ─────────────────────────────────────────────────────────────────
+
+  // 🔐 MERGE: Helper para colores según jerarquía
+  Color _jerarquiaColor(int j) {
+    if (j >= 10) return kPink;
+    if (j >= 7) return kPurple;
+    if (j >= 4) return kNeon;
+    return Colors.white38;
+  }
+
   // ── Build ────────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
-    final isMobile = size.width < 600; // Detecta celular automáticamente
+    final isMobile = size.width < 600;
+    // 🔐 MERGE: Variable para controlar visibilidad del botón admin
+    final canManageVideo = _auth.currentUser?.jerarquia != null && _auth.currentUser!.jerarquia >= 9;
 
     return Scaffold(
       backgroundColor: kDark,
-      //  SafeArea respeta el notch, barra de estado y navegación de Android
       body: SafeArea(
         child: Stack(
           children: [
@@ -444,15 +447,16 @@ class _MenuScreenState extends State<MenuScreen>
             Positioned.fill(child: _buildScanlines()),
             Positioned.fill(child: _buildVignette()),
             Positioned.fill(child: _buildLayout()),
-            // 📍 Botón admin ajustado para no chocar con gestos de navegación
-            Positioned(
-              bottom: isMobile ? 8 : 12,
-              right: isMobile ? 8 : 12,
-              child: _AdminVideoButton(
-                videoActive: _videoActive,
-                onTap: _showAdminOptions,
+            // 🔐 MERGE: Botón admin solo visible para usuarios autorizados
+            if (canManageVideo)
+              Positioned(
+                bottom: isMobile ? 8 : 12,
+                right: isMobile ? 8 : 12,
+                child: _AdminVideoButton(
+                  videoActive: _videoActive,
+                  onTap: _showAdminOptions,
+                ),
               ),
-            ),
           ],
         ),
       ),
@@ -464,13 +468,12 @@ class _MenuScreenState extends State<MenuScreen>
     final isMobile = size.width < 600;
 
     if (_videoCtrl != null && _videoCtrl!.value.isInitialized) {
-      // 📱 MÓVIL: Video completo sin recortes
       if (isMobile) {
         return Container(
-          color: kDark, // Fondo para las barras que quedan libres
+          color: kDark,
           alignment: Alignment.center,
           child: FittedBox(
-            fit: BoxFit.contain, // Muestra el 100% del frame
+            fit: BoxFit.contain,
             child: SizedBox(
               width: _videoCtrl!.value.size.width,
               height: _videoCtrl!.value.size.height,
@@ -479,8 +482,6 @@ class _MenuScreenState extends State<MenuScreen>
           ),
         );
       }
-
-      // 💻 WINDOWS: Comportamiento original intacto
       return FittedBox(
         fit: BoxFit.cover,
         child: SizedBox(
@@ -491,7 +492,6 @@ class _MenuScreenState extends State<MenuScreen>
       );
     }
 
-    // Fallback: imagen estática
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -530,7 +530,6 @@ class _MenuScreenState extends State<MenuScreen>
     final size = MediaQuery.of(context).size;
     final isMobile = size.width < 600;
 
-    // 📱 MÓVIL: Scroll + sin Expanded para evitar overflow
     if (isMobile) {
       return Container(
         color: kDarkPanel.withOpacity(0.85),
@@ -543,9 +542,7 @@ class _MenuScreenState extends State<MenuScreen>
           ),
           child: Column(
             children: [
-              _buildLogo(
-                isMobile: true,
-              ), // ← Pasamos flag para versión responsive
+              _buildLogo(isMobile: true),
               const SizedBox(height: 24),
               _buildMenu(isMobile: true),
             ],
@@ -554,7 +551,6 @@ class _MenuScreenState extends State<MenuScreen>
       );
     }
 
-    // 💻 WINDOWS: Layout original INTACTO
     return Row(
       children: [
         Expanded(flex: 5, child: _buildLogo(isMobile: false)),
@@ -574,7 +570,6 @@ class _MenuScreenState extends State<MenuScreen>
         builder: (_, __) {
           final glow = 0.4 + _pulseCtrl.value * 0.6;
 
-          // 📱 Tamaños responsive
           final logoSize = isMobile ? 140.0 : 250.0;
           final titleSize = isMobile ? 24.0 : 38.0;
           final subtitleSize = isMobile ? 10.0 : 11.0;
@@ -624,7 +619,8 @@ class _MenuScreenState extends State<MenuScreen>
                 ),
               ),
               const SizedBox(height: 16),
-              if (_initialized)
+              if (_initialized) ...[
+                // IP y peers info (preservado del código #2)
                 Container(
                   padding: EdgeInsets.symmetric(
                     horizontal: isMobile ? 8 : 12,
@@ -646,6 +642,32 @@ class _MenuScreenState extends State<MenuScreen>
                     ),
                   ),
                 ),
+                // 🔐 MERGE: Info de usuario logueado con colores por jerarquía
+                if (_auth.currentUser != null) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: isMobile ? 8 : 12,
+                      vertical: isMobile ? 2 : 4,
+                    ),
+                    decoration: BoxDecoration(
+                      border: Border.all(
+                        color: _jerarquiaColor(_auth.currentUser!.jerarquia).withOpacity(0.4),
+                      ),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                    child: Text(
+                      '@${_auth.currentUser!.username}  ·  J${_auth.currentUser!.jerarquia}',
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: subtitleSize,
+                        color: _jerarquiaColor(_auth.currentUser!.jerarquia),
+                        letterSpacing: isMobile ? 0.5 : 1.0,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
             ],
           );
         },
@@ -662,12 +684,9 @@ class _MenuScreenState extends State<MenuScreen>
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        // 📱 Quitar MainAxisAlignment.center en móvil para evitar overflow
-        mainAxisAlignment: isMobile
-            ? MainAxisAlignment.start
-            : MainAxisAlignment.center,
+        mainAxisAlignment: isMobile ? MainAxisAlignment.start : MainAxisAlignment.center,
         children: [
-          if (!isMobile) // En móvil, el título ya está en el scroll padding
+          if (!isMobile)
             Text(
               '> SELECCIONAR_MÓDULO',
               style: TextStyle(
@@ -678,7 +697,7 @@ class _MenuScreenState extends State<MenuScreen>
               ),
             ),
           SizedBox(height: isMobile ? 16 : 32),
-          ..._items.asMap().entries.map((e) => _buildMenuItem(e.key, e.value)),
+          ..._items.asMap().entries.map((e) => _buildMenuItem(e.key, e.value, isMobile: isMobile)),
         ],
       ),
     );
@@ -686,9 +705,10 @@ class _MenuScreenState extends State<MenuScreen>
 
   Widget _buildMenuItem(int index, _MenuItem item, {bool isMobile = false}) {
     final isHovered = _hoveredIndex == index;
-    final isExit = index == 5;
+    final isExit = item.label == 'Exit';
+    final isSpecial = item.isSpecial; // 🔐 MERGE: Usar isSpecial del item
+    final activeColor = isExit ? kPink : isSpecial ? kPurple : kNeon; // 🔐 MERGE: Color según tipo
 
-    // 📱 Valores responsive
     final fontSizeNumber = isMobile ? 10.0 : 11.0;
     final fontSizeLabel = isMobile ? 13.0 : 14.0;
     final fontSizeArrow = isMobile ? 11.0 : 12.0;
@@ -706,10 +726,7 @@ class _MenuScreenState extends State<MenuScreen>
       onExit: (_) => setState(() => _hoveredIndex = -1),
       child: GestureDetector(
         onTap: () => _onItemTap(index),
-        // 📱 Feedback visual en móvil al tocar (sin hover)
-        onTapDown: isMobile
-            ? (_) => setState(() => _hoveredIndex = index)
-            : null,
+        onTapDown: isMobile ? (_) => setState(() => _hoveredIndex = index) : null,
         onTapUp: isMobile ? (_) => setState(() => _hoveredIndex = -1) : null,
         onTapCancel: isMobile ? () => setState(() => _hoveredIndex = -1) : null,
         child: AnimatedContainer(
@@ -720,14 +737,10 @@ class _MenuScreenState extends State<MenuScreen>
             vertical: verticalPadding,
           ),
           decoration: BoxDecoration(
-            color: isHovered
-                ? (isExit ? kPink : kNeon).withOpacity(0.08)
-                : Colors.transparent,
+            color: isHovered ? activeColor.withOpacity(0.08) : Colors.transparent,
             border: Border(
               left: BorderSide(
-                color: isHovered
-                    ? (isExit ? kPink : kNeon)
-                    : kNeon.withOpacity(0.15),
+                color: isHovered ? activeColor : activeColor.withOpacity(0.15),
                 width: isHovered ? 3 : 1,
               ),
             ),
@@ -739,9 +752,7 @@ class _MenuScreenState extends State<MenuScreen>
                 style: TextStyle(
                   fontFamily: 'monospace',
                   fontSize: fontSizeNumber,
-                  color: isExit
-                      ? kPink.withOpacity(0.5)
-                      : kNeon.withOpacity(0.4),
+                  color: activeColor.withOpacity(0.4),
                   letterSpacing: letterSpacing,
                 ),
               ),
@@ -749,7 +760,7 @@ class _MenuScreenState extends State<MenuScreen>
               Icon(
                 item.icon,
                 size: iconSize,
-                color: isHovered ? (isExit ? kPink : kNeon) : Colors.white38,
+                color: isHovered ? activeColor : Colors.white38,
               ),
               SizedBox(width: spacingIcon),
               Expanded(
@@ -759,17 +770,12 @@ class _MenuScreenState extends State<MenuScreen>
                     fontFamily: 'monospace',
                     fontSize: fontSizeLabel,
                     fontWeight: isHovered ? FontWeight.bold : FontWeight.normal,
-                    color: isHovered
-                        ? (isExit ? kPink : Colors.white)
-                        : Colors.white60,
+                    color: isHovered ? (isExit ? kPink : Colors.white) : Colors.white60,
                     letterSpacing: letterSpacing,
-                    // 📱 Sombras más sutiles en móvil para rendimiento
                     shadows: isHovered && !isMobile
                         ? [
                             Shadow(
-                              color: isExit
-                                  ? kPink.withOpacity(0.6)
-                                  : kNeon.withOpacity(0.6),
+                              color: activeColor.withOpacity(0.6),
                               blurRadius: shadowBlur,
                             ),
                           ]
@@ -781,7 +787,7 @@ class _MenuScreenState extends State<MenuScreen>
                 Text(
                   '▶',
                   style: TextStyle(
-                    color: isExit ? kPink : kNeon,
+                    color: activeColor,
                     fontSize: fontSizeArrow,
                   ),
                 ),
@@ -809,16 +815,13 @@ class _AdminVideoButton extends StatelessWidget {
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
             border: Border.all(
-              // Si hay video activo, el borde parpadea en rosa para indicarlo
               color: videoActive ? kPink : kNeon,
               width: 1,
             ),
             borderRadius: BorderRadius.circular(2),
           ),
           child: Icon(
-            videoActive
-                ? Icons.video_settings_outlined
-                : Icons.video_library_outlined,
+            videoActive ? Icons.video_settings_outlined : Icons.video_library_outlined,
             color: videoActive ? kPink : kNeon,
             size: 16,
           ),
@@ -874,14 +877,16 @@ class _AdminDialogOption extends StatelessWidget {
 }
 
 // ─── Modelo de item ───────────────────────────────────────────────────────────
+// 🔐 MERGE: Clase actualizada con parámetro isSpecial
 class _MenuItem {
   final String number;
   final String label;
   final IconData icon;
-  const _MenuItem(this.number, this.label, this.icon);
+  final bool isSpecial;
+  const _MenuItem(this.number, this.label, this.icon, {this.isSpecial = false});
 }
 
-// ─── Painters ─────────────────────────────────────────────────────────────────
+// ─── Painters (PRESERVADOS DEL CÓDIGO #2 - NO MODIFICAR) ──────────────────────
 
 class _RetrowaveGridPainter extends CustomPainter {
   final double t;
@@ -907,8 +912,7 @@ class _RetrowaveGridPainter extends CustomPainter {
     canvas.drawRect(Rect.fromLTWH(0, 0, size.width, horizon), skyPaint);
 
     final sunPaint = Paint()
-      ..shader =
-          LinearGradient(
+      ..shader = LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [kPink, kPurple],
