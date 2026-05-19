@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../models/app_user.dart';
+import '../services/peer_service.dart'; 
 
 const _uuid = Uuid();
 const int kAuthPort = 9001; // Puerto exclusivo para sincronización de usuarios
@@ -116,6 +117,7 @@ class AuthService {
       final found = _users.where((u) => u.id == savedId);
       if (found.isNotEmpty) {
         _currentUser = found.first;
+        PeerService().setMyHierarchy(_currentUser!.jerarquia);
         _authController.add('logged_in');
       }
     }
@@ -135,6 +137,7 @@ class AuthService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(kLoggedUserKey, _currentUser!.id);
     _authController.add('logged_in');
+    PeerService().setMyHierarchy(_currentUser!.jerarquia);
     return null;
   }
 
@@ -184,6 +187,7 @@ class AuthService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(kLoggedUserKey, newUser.id);
     _authController.add('logged_in');
+    PeerService().setMyHierarchy(newUser.jerarquia);
 
     return null;
   }
