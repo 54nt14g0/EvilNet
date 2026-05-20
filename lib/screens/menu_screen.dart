@@ -10,6 +10,9 @@ import '../services/auth_service.dart'; // 🔐 MERGE: AuthService import
 import 'lobby_screen.dart';
 import 'profile_screen.dart'; // 🔐 MERGE: Nuevas vistas
 import 'control_panel_screen.dart'; // 🔐 MERGE: Nuevas vistas
+import 'material_screen.dart';
+import '../services/material_service.dart';
+import 'study_room_screen.dart';
 
 // ─── Paleta retrowave / matrix ────────────────────────────────────────────────
 const Color kNeon = Color(0xFF00FFB2);
@@ -59,18 +62,25 @@ class _MenuScreenState extends State<MenuScreen>
       _MenuItem('04', 'Material', Icons.layers_outlined),
       _MenuItem('05', 'Rincón de Ideas', Icons.lightbulb_outlined),
     ];
-    
+
     // Panel de Control solo para jerarquía >= 7
     if (user != null && user.jerarquia >= 7) {
-      items.add(const _MenuItem('06', 'Panel de Control', Icons.admin_panel_settings_outlined, isSpecial: true));
+      items.add(
+        const _MenuItem(
+          '06',
+          'Panel de Control',
+          Icons.admin_panel_settings_outlined,
+          isSpecial: true,
+        ),
+      );
     }
-    
+
     // Mi Perfil y Exit siempre al final, numeración dinámica
     final nextNum = (items.length + 1).toString().padLeft(2, '0');
     items.add(_MenuItem(nextNum, 'Mi Perfil', Icons.person_outline));
     final exitNum = (items.length + 1).toString().padLeft(2, '0');
     items.add(_MenuItem(exitNum, 'Exit', Icons.power_settings_new));
-    
+
     return items;
   }
 
@@ -103,7 +113,12 @@ class _MenuScreenState extends State<MenuScreen>
     )..repeat();
 
     _startMusic();
-    _initService();
+    Future.microtask(() async {
+      await _initService();
+      await Future.delayed(const Duration(seconds: 1));
+      print('📦 [MenuScreen] Starting MaterialService...');
+      await MaterialService().start();
+    });
 
     // 🔐 MERGE: Escuchar eventos de AuthService para refrescar UI
     _auth.events.listen((e) {
@@ -140,19 +155,35 @@ class _MenuScreenState extends State<MenuScreen>
   // ── Servicio P2P ─────────────────────────────────────────────────────────────
 
   Future<void> _initService() async {
-    await _peer.start();
+    print('🚀 [MenuScreen] Initializing services...');
+
+    try {
+      await _peer.start();
+      print('✅ [MenuScreen] PeerService started on ${_peer.myIp}');
+    } catch (e) {
+      print('❌ [MenuScreen] PeerService failed: $e');
+    }
+
     setState(() => _initialized = true);
     _loadVideo();
 
+    // Escuchar eventos del peer service
     _peer.events.listen((e) {
-      if (!mounted || !_isRouteActive) return;
+      print('📩 [MenuScreen] Received event: ${e.type}');
+
+      // Permitir eventos incluso si no está activo en ruta (para background video)
+      if (!mounted) return;
 
       if (e.type == 'background_video_updated') {
+        print('🎬 [MenuScreen] Loading background video: ${e.data}');
         _loadVideo(path: e.data as String);
       } else if (e.type == 'background_video_cleared') {
+        print('🚫 [MenuScreen] Clearing background video');
         _clearVideo();
       }
     });
+
+    print('✅ [MenuScreen] Event listener registered');
   }
 
   // ── Video de fondo ───────────────────────────────────────────────────────────
@@ -166,13 +197,17 @@ class _MenuScreenState extends State<MenuScreen>
       }
 
       if (!await File(p).exists()) {
-        debugPrint('[MenuScreen] _loadVideo: archivo no encontrado, esperando transferencia...');
+        debugPrint(
+          '[MenuScreen] _loadVideo: archivo no encontrado, esperando transferencia...',
+        );
         for (int i = 0; i < 3; i++) {
           await Future.delayed(const Duration(seconds: 2));
           if (await File(p).exists()) break;
         }
         if (!await File(p).exists()) {
-          debugPrint('[MenuScreen] _loadVideo: archivo sigue sin existir tras reintentos');
+          debugPrint(
+            '[MenuScreen] _loadVideo: archivo sigue sin existir tras reintentos',
+          );
           return;
         }
       }
@@ -184,7 +219,9 @@ class _MenuScreenState extends State<MenuScreen>
       await ctrl.initialize();
 
       if (!ctrl.value.isInitialized) {
-        debugPrint('[MenuScreen] _loadVideo: fallo al inicializar VideoPlayerController');
+        debugPrint(
+          '[MenuScreen] _loadVideo: fallo al inicializar VideoPlayerController',
+        );
         await ctrl.dispose();
         return;
       }
@@ -201,7 +238,9 @@ class _MenuScreenState extends State<MenuScreen>
           _videoPath = normalizedPath;
           _videoActive = true;
         });
-        debugPrint('[MenuScreen] _loadVideo: video cargado exitosamente: $normalizedPath');
+        debugPrint(
+          '[MenuScreen] _loadVideo: video cargado exitosamente: $normalizedPath',
+        );
       }
     } catch (e, stack) {
       debugPrint('[MenuScreen] _loadVideo ERROR: $e');
@@ -334,7 +373,7 @@ class _MenuScreenState extends State<MenuScreen>
     final label = _items[index].label;
     switch (label) {
       case 'Cámara de Estudio':
-        _showComingSoon('Cámara de Estudio');
+        _navigateTo(const StudyRoomScreen());
         break;
       case 'Lobby':
         _navigateTo(const LobbyScreen());
@@ -343,7 +382,8 @@ class _MenuScreenState extends State<MenuScreen>
         _showComingSoon('Recovecos');
         break;
       case 'Material':
-        _showComingSoon('Material');
+        _navigateTo(const MaterialScreen());
+
         break;
       case 'Rincón de Ideas':
         _showComingSoon('Rincón de Ideas');
@@ -436,7 +476,9 @@ class _MenuScreenState extends State<MenuScreen>
     final size = MediaQuery.of(context).size;
     final isMobile = size.width < 600;
     // 🔐 MERGE: Variable para controlar visibilidad del botón admin
-    final canManageVideo = _auth.currentUser?.jerarquia != null && _auth.currentUser!.jerarquia >= 9;
+    final canManageVideo =
+        _auth.currentUser?.jerarquia != null &&
+        _auth.currentUser!.jerarquia >= 9;
 
     return Scaffold(
       backgroundColor: kDark,
@@ -652,7 +694,9 @@ class _MenuScreenState extends State<MenuScreen>
                     ),
                     decoration: BoxDecoration(
                       border: Border.all(
-                        color: _jerarquiaColor(_auth.currentUser!.jerarquia).withOpacity(0.4),
+                        color: _jerarquiaColor(
+                          _auth.currentUser!.jerarquia,
+                        ).withOpacity(0.4),
                       ),
                       borderRadius: BorderRadius.circular(2),
                     ),
@@ -684,7 +728,9 @@ class _MenuScreenState extends State<MenuScreen>
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: isMobile ? MainAxisAlignment.start : MainAxisAlignment.center,
+        mainAxisAlignment: isMobile
+            ? MainAxisAlignment.start
+            : MainAxisAlignment.center,
         children: [
           if (!isMobile)
             Text(
@@ -697,7 +743,9 @@ class _MenuScreenState extends State<MenuScreen>
               ),
             ),
           SizedBox(height: isMobile ? 16 : 32),
-          ..._items.asMap().entries.map((e) => _buildMenuItem(e.key, e.value, isMobile: isMobile)),
+          ..._items.asMap().entries.map(
+            (e) => _buildMenuItem(e.key, e.value, isMobile: isMobile),
+          ),
         ],
       ),
     );
@@ -707,7 +755,11 @@ class _MenuScreenState extends State<MenuScreen>
     final isHovered = _hoveredIndex == index;
     final isExit = item.label == 'Exit';
     final isSpecial = item.isSpecial; // 🔐 MERGE: Usar isSpecial del item
-    final activeColor = isExit ? kPink : isSpecial ? kPurple : kNeon; // 🔐 MERGE: Color según tipo
+    final activeColor = isExit
+        ? kPink
+        : isSpecial
+        ? kPurple
+        : kNeon; // 🔐 MERGE: Color según tipo
 
     final fontSizeNumber = isMobile ? 10.0 : 11.0;
     final fontSizeLabel = isMobile ? 13.0 : 14.0;
@@ -726,7 +778,9 @@ class _MenuScreenState extends State<MenuScreen>
       onExit: (_) => setState(() => _hoveredIndex = -1),
       child: GestureDetector(
         onTap: () => _onItemTap(index),
-        onTapDown: isMobile ? (_) => setState(() => _hoveredIndex = index) : null,
+        onTapDown: isMobile
+            ? (_) => setState(() => _hoveredIndex = index)
+            : null,
         onTapUp: isMobile ? (_) => setState(() => _hoveredIndex = -1) : null,
         onTapCancel: isMobile ? () => setState(() => _hoveredIndex = -1) : null,
         child: AnimatedContainer(
@@ -737,7 +791,9 @@ class _MenuScreenState extends State<MenuScreen>
             vertical: verticalPadding,
           ),
           decoration: BoxDecoration(
-            color: isHovered ? activeColor.withOpacity(0.08) : Colors.transparent,
+            color: isHovered
+                ? activeColor.withOpacity(0.08)
+                : Colors.transparent,
             border: Border(
               left: BorderSide(
                 color: isHovered ? activeColor : activeColor.withOpacity(0.15),
@@ -770,7 +826,9 @@ class _MenuScreenState extends State<MenuScreen>
                     fontFamily: 'monospace',
                     fontSize: fontSizeLabel,
                     fontWeight: isHovered ? FontWeight.bold : FontWeight.normal,
-                    color: isHovered ? (isExit ? kPink : Colors.white) : Colors.white60,
+                    color: isHovered
+                        ? (isExit ? kPink : Colors.white)
+                        : Colors.white60,
                     letterSpacing: letterSpacing,
                     shadows: isHovered && !isMobile
                         ? [
@@ -786,10 +844,7 @@ class _MenuScreenState extends State<MenuScreen>
               if (isHovered)
                 Text(
                   '▶',
-                  style: TextStyle(
-                    color: activeColor,
-                    fontSize: fontSizeArrow,
-                  ),
+                  style: TextStyle(color: activeColor, fontSize: fontSizeArrow),
                 ),
             ],
           ),
@@ -814,14 +869,13 @@ class _AdminVideoButton extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            border: Border.all(
-              color: videoActive ? kPink : kNeon,
-              width: 1,
-            ),
+            border: Border.all(color: videoActive ? kPink : kNeon, width: 1),
             borderRadius: BorderRadius.circular(2),
           ),
           child: Icon(
-            videoActive ? Icons.video_settings_outlined : Icons.video_library_outlined,
+            videoActive
+                ? Icons.video_settings_outlined
+                : Icons.video_library_outlined,
             color: videoActive ? kPink : kNeon,
             size: 16,
           ),
@@ -912,7 +966,8 @@ class _RetrowaveGridPainter extends CustomPainter {
     canvas.drawRect(Rect.fromLTWH(0, 0, size.width, horizon), skyPaint);
 
     final sunPaint = Paint()
-      ..shader = LinearGradient(
+      ..shader =
+          LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [kPink, kPurple],

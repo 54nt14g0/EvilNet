@@ -8,6 +8,8 @@ import 'package:uuid/uuid.dart';
 import '../models/message.dart';
 import '../models/group.dart';
 import '../services/auth_service.dart';
+import '../services/material_service.dart';
+import 'study_room_service.dart';
 
 const int kPort = 9000;
 const _uuid = Uuid();
@@ -49,21 +51,27 @@ class PeerService {
 
   // ─── Inicio ────────────────────────────────────────────────────────────────
 
-    // ─── [NUEVO] Obtener nombre para mostrar: username registrado o fallback a hostname/IP
+  // ─── [NUEVO] Obtener nombre para mostrar: username registrado o fallback a hostname/IP
   String getDisplayNameForIp(String ip) {
     // 1. Primero intenta obtener el username registrado desde AuthService
     final registeredName = AuthService().getUsernameForIp(ip);
-    
+
     // 2. Si está registrado y es diferente a la IP, úsalo
     if (registeredName != ip) {
       return registeredName;
     }
-    
+
     // 3. Si no está registrado, fallback al hostname de Tailscale o la IP
     return peerNames[ip] ?? ip;
   }
 
   Future<void> start() async {
+    // Evitar múltiples inicios
+    if (_server != null) {
+      print('⚠️ [PeerService] Server already running');
+      return;
+    }
+
     final prefs = await SharedPreferences.getInstance();
     myId = prefs.getString('myId') ?? _uuid.v4();
     myName = prefs.getString('myName') ?? 'Usuario';
@@ -71,9 +79,16 @@ class PeerService {
     await _loadUserData();
 
     myIp = await _getTailscaleIp();
+    print('🔌 [PeerService] Starting server on port $kPort...');
 
-    _server = await ServerSocket.bind(InternetAddress.anyIPv4, kPort);
-    _server!.listen(_handleIncomingConnection);
+    try {
+      _server = await ServerSocket.bind(InternetAddress.anyIPv4, kPort);
+      _server!.listen(_handleIncomingConnection);
+      print('✅ [PeerService] Server started successfully');
+    } catch (e) {
+      print('❌ [PeerService] Failed to bind server: $e');
+      rethrow;
+    }
 
     _discoverPeers();
     Timer.periodic(const Duration(seconds: 10), (_) => _discoverPeers());
@@ -168,16 +183,44 @@ class PeerService {
             knownPeers[ipStr] = DateTime.now();
             peerNames[ipStr] = name;
           } else {
-            if (knownPeers.containsKey(ipStr)) {
-              knownPeers.remove(ipStr);
-              peerNames.remove(ipStr);
-              _controller.add(PeerEvent('peer_offline', {'ip': ipStr}));
+            if (!knownPeers.containsKey(ipStr)) {
+              _controller.add(
+                PeerEvent('peer_online', {'ip': ipStr, 'name': name}),
+              );
+              // ← AÑADIR ESTAS DOS LÍNEAS:
               AuthService().syncWithNewPeer(ipStr);
+              StudyRoomService().syncWithNewPeer(ipStr);
             }
           }
         }
       }
     } catch (_) {}
+  }
+
+  /// Envía un paquete de MaterialService a través del canal existente (puerto 9000)
+  Future<void> sendMaterialPacket(
+    String peerIp,
+    Map<String, dynamic> data,
+  ) async {
+    try {
+      final socket = await Socket.connect(
+        peerIp,
+        kPort,
+        timeout: const Duration(seconds: 10),
+      );
+
+      final headerBytes = utf8.encode(jsonEncode(data));
+      final lenBytes = ByteData(4)..setInt32(0, headerBytes.length, Endian.big);
+
+      socket.add(lenBytes.buffer.asUint8List());
+      socket.add(headerBytes);
+      // Solo metadata, no bytes de archivo aquí
+      await socket.flush();
+      await socket.close();
+    } catch (e) {
+      print('❌ [PeerService] sendMaterialPacket failed: $e');
+      rethrow;
+    }
   }
 
   Future<String> _getTailscaleIp() async {
@@ -260,9 +303,26 @@ class PeerService {
 
     // ── Cancelar video de fondo ───────────────────────────────────────────
     if (header['isClearBackgroundVideo'] == true) {
+      print('🚫 [ReceiveClear] Received clear background video command');
+
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(kBgVideoKey);
+
       _controller.add(PeerEvent('background_video_cleared', null));
+      print('✅ [ReceiveClear] Local video cleared and event sent');
+      return;
+    }
+    final type = header['type'] as String?;
+    if (type == 'material_broadcast') {
+      print('[PeerService] Forwarding material_broadcast to MaterialService');
+      MaterialService().handleIncomingBroadcast(header);
+      return;
+    }
+
+    // Eliminación remota de archivo
+    if (type == 'material_delete') {
+      print('[PeerService] Forwarding material_delete to MaterialService');
+      MaterialService().handleIncomingDelete(header);
       return;
     }
 
@@ -276,9 +336,35 @@ class PeerService {
 
       // Si es video de fondo, guardamos la ruta
       if (header['isBackgroundVideo'] == true) {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString(kBgVideoKey, path);
-        _controller.add(PeerEvent('background_video_updated', path));
+        print('🎬 [ReceiveVideo] Received background video header');
+
+        final fileBytes = allBytes.sublist(4 + headerLen);
+        final fileName =
+            header['fileName'] as String? ?? 'background_video.mp4';
+
+        try {
+          final dir = await getApplicationDocumentsDirectory();
+          final destPath = '${dir.path}/$fileName';
+          final destFile = File(destPath);
+
+          print('💾 [ReceiveVideo] Saving to: $destPath');
+          await destFile.writeAsBytes(fileBytes);
+          print(
+            '✅ [ReceiveVideo] File saved, size: ${await destFile.length()}',
+          );
+
+          // Guardar ruta en prefs
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString(kBgVideoKey, destPath);
+          print('✅ [ReceiveVideo] Preferences updated');
+
+          // Notificar a la UI
+          _controller.add(PeerEvent('background_video_updated', destPath));
+          print('✅ [ReceiveVideo] Event sent to UI');
+        } catch (e, stack) {
+          print('❌ [ReceiveVideo] Error saving video: $e');
+          print('Stack: $stack');
+        }
         return;
       }
 
@@ -383,14 +469,26 @@ class PeerService {
   // ─── ADMIN: enviar video de fondo ─────────────────────────────────────────
 
   /// Solo el ADMIN llama esto. Envía el video a todos los peers.
+  /// Solo el ADMIN llama esto. Envía el video a todos los peers.
   Future<void> broadcastBackgroundVideo(String filePath) async {
+    print('🎬 [BroadcastVideo] Starting broadcast of: $filePath');
+
     final file = File(filePath);
+    if (!await file.exists()) {
+      print('❌ [BroadcastVideo] File does not exist: $filePath');
+      return;
+    }
+
     final bytes = await file.readAsBytes();
     final fileName = filePath.split(Platform.pathSeparator).last;
 
+    print('📦 [BroadcastVideo] File size: ${bytes.length} bytes');
+
+    // Guardar localmente primero
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(kBgVideoKey, filePath);
     _controller.add(PeerEvent('background_video_updated', filePath));
+    print('✅ [BroadcastVideo] Local state updated');
 
     final header = {
       'id': _uuid.v4(),
@@ -405,9 +503,40 @@ class PeerService {
       'isBackgroundVideo': true,
     };
 
+    print('📤 [BroadcastVideo] Sending to ${knownPeers.length} peers...');
+
     for (final ip in List.from(knownPeers.keys)) {
-      await _sendPacket(ip, header, bytes);
+      if (ip == myIp) {
+        print('⚠️ [BroadcastVideo] Skipping self: $ip');
+        continue;
+      }
+
+      try {
+        print('📤 [BroadcastVideo] Connecting to $ip:$kPort...');
+        final socket = await Socket.connect(
+          ip,
+          kPort,
+          timeout: const Duration(seconds: 10),
+        );
+
+        final headerBytes = utf8.encode(jsonEncode(header));
+        final lenBytes = ByteData(4)
+          ..setInt32(0, headerBytes.length, Endian.big);
+
+        socket.add(lenBytes.buffer.asUint8List());
+        socket.add(headerBytes);
+        socket.add(bytes);
+
+        await socket.flush();
+        await socket.close();
+
+        print('✅ [BroadcastVideo] Sent to $ip successfully');
+      } catch (e) {
+        print('❌ [BroadcastVideo] Failed to send to $ip: $e');
+      }
     }
+
+    print('🏁 [BroadcastVideo] Broadcast complete');
   }
 
   // ─── ADMIN: cancelar video de fondo ──────────────────────────────────────
@@ -415,9 +544,14 @@ class PeerService {
   /// El admin cancela el video: borra la preferencia local y avisa a los peers.
   /// Los peers recibirán un paquete 'isClearBackgroundVideo' y limpiarán su estado.
   Future<void> clearBackgroundVideo() async {
+    print('🚫 [ClearVideo] Clearing background video');
+
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(kBgVideoKey);
-    // El admin ya limpia su propio estado en MenuScreen._clearVideo()
+
+    // Notificar localmente
+    _controller.add(PeerEvent('background_video_cleared', null));
+    print('✅ [ClearVideo] Local state cleared');
 
     final header = {
       'id': _uuid.v4(),
@@ -427,8 +561,19 @@ class PeerService {
       'timestamp': DateTime.now().toIso8601String(),
     };
 
+    print(
+      '📤 [ClearVideo] Broadcasting clear to ${knownPeers.length} peers...',
+    );
+
     for (final ip in List.from(knownPeers.keys)) {
-      await _sendPacket(ip, header, null);
+      if (ip == myIp) continue;
+
+      try {
+        await _sendPacket(ip, header, null);
+        print('✅ [ClearVideo] Sent clear to $ip');
+      } catch (e) {
+        print('❌ [ClearVideo] Failed to send to $ip: $e');
+      }
     }
   }
 
