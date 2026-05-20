@@ -4,63 +4,81 @@ import 'package:flutter/material.dart';
 import 'package:open_filex/open_filex.dart';
 import '../models/message.dart';
 import '../services/peer_service.dart';
- 
+
 const Color kNeon = Color(0xFF00FFB2);
 const Color kPink = Color(0xFFFF2D78);
 const Color kDark = Color(0xFF020A06);
 const Color kDarkPanel = Color(0xFF050F0A);
- 
+
 class ChatScreen extends StatefulWidget {
   /// null = broadcast (grupo "Todos"), valor = chat 1 a 1 con ese peer
   final String? peerIp;
+  final String? groupId;
   final String peerName;
   final bool isGroup;
- 
+
   const ChatScreen({
     super.key,
     required this.peerIp,
+    this.groupId,
     required this.peerName,
     required this.isGroup,
   });
- 
+
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
- 
+
 class _ChatScreenState extends State<ChatScreen> {
   final _peer = PeerService();
   final _ctrl = TextEditingController();
   final _scroll = ScrollController();
   List<Message> _messages = [];
   bool _initialized = false;
- 
+
   @override
   void initState() {
     super.initState();
     _init();
   }
- 
+
   Future<void> _init() async {
-    // PeerService ya fue iniciado en MenuScreen, no llamar start() de nuevo
-    _messages = await _peer.loadMessages(peerIp: widget.peerIp);
+    // ← AGREGA groupId aquí
+    _messages = await _peer.loadMessages(
+      peerIp: widget.peerIp,
+      groupId: widget.groupId,
+    );
     setState(() => _initialized = true);
     _scrollToBottom();
- 
+
     _peer.events.listen((event) {
       if (event.type == 'message') {
         final msg = event.data as Message;
-        final relevant = widget.peerIp == null
-            ? msg.recipientIp == null // broadcast
-            : (msg.senderIp == widget.peerIp ||
-                msg.recipientIp == widget.peerIp); // 1 a 1
-        if (relevant) {
+        bool show = false;
+
+        if (widget.groupId != null) {
+          show = msg.groupId == widget.groupId;
+        } else if (widget.peerIp == null) {
+          // Broadcast: solo si NO es grupo y NO es 1-a-1
+          show = msg.groupId == null && msg.recipientIp == null;
+        } else {
+          // 1-a-1: solo si es directo y NO es grupo
+          show =
+              msg.groupId == null &&
+              ((msg.senderIp == widget.peerIp &&
+                      msg.recipientIp == _peer.myIp) ||
+                  (msg.senderIp == _peer.myIp &&
+                      msg.recipientIp == widget.peerIp));
+        }
+
+        if (show) {
           setState(() => _messages.add(msg));
           _scrollToBottom();
         }
       }
     });
   }
- 
+
   void _scrollToBottom() {
     Future.delayed(const Duration(milliseconds: 100), () {
       if (_scroll.hasClients) {
@@ -72,19 +90,24 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     });
   }
- 
+
   Future<void> _sendText() async {
     final text = _ctrl.text.trim();
     if (text.isEmpty) return;
     _ctrl.clear();
- 
-    if (widget.peerIp == null) {
+
+    if (widget.groupId != null) {
+      // ← Modo grupo
+      await _peer.sendToGroup(widget.groupId!, text, MessageType.text);
+    } else if (widget.peerIp == null) {
+      // Modo broadcast
       await _peer.broadcastText(text);
     } else {
+      // Modo 1-a-1
       await _peer.sendTextTo(widget.peerIp!, text);
     }
   }
- 
+
   Future<void> _sendFile() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.any,
@@ -93,21 +116,24 @@ class _ChatScreenState extends State<ChatScreen> {
     if (result == null || result.files.isEmpty) return;
     final path = result.files.first.path!;
     final ext = path.split('.').last.toLowerCase();
- 
+
     MessageType type = MessageType.file;
     if (['mp4', 'mov', 'avi', 'mkv'].contains(ext)) type = MessageType.video;
     if (['jpg', 'jpeg', 'png', 'gif', 'webp'].contains(ext))
       type = MessageType.image;
     if (['mp3', 'aac', 'ogg', 'm4a', 'wav'].contains(ext))
       type = MessageType.audio;
- 
-    if (widget.peerIp == null) {
+
+    if (widget.groupId != null) {
+      // ← Modo grupo (solo texto por ahora; para archivos requiere extensión)
+      await _peer.sendToGroup(widget.groupId!, path, type);
+    } else if (widget.peerIp == null) {
       await _peer.broadcastFile(path, type);
     } else {
       await _peer.sendFileTo(widget.peerIp!, path, type);
     }
   }
- 
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -118,9 +144,7 @@ class _ChatScreenState extends State<ChatScreen> {
             _buildAppBar(),
             if (!_initialized)
               const Expanded(
-                child: Center(
-                  child: CircularProgressIndicator(color: kNeon),
-                ),
+                child: Center(child: CircularProgressIndicator(color: kNeon)),
               )
             else
               Expanded(
@@ -138,15 +162,13 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     );
   }
- 
+
   Widget _buildAppBar() {
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 12, 16, 12),
       decoration: BoxDecoration(
         color: kDarkPanel,
-        border: Border(
-          bottom: BorderSide(color: kNeon.withOpacity(0.2)),
-        ),
+        border: Border(bottom: BorderSide(color: kNeon.withOpacity(0.2))),
       ),
       child: Row(
         children: [
@@ -158,8 +180,11 @@ class _ChatScreenState extends State<ChatScreen> {
                 border: Border.all(color: kNeon.withOpacity(0.3)),
                 borderRadius: BorderRadius.circular(2),
               ),
-              child: const Icon(Icons.arrow_back_ios_new,
-                  color: kNeon, size: 14),
+              child: const Icon(
+                Icons.arrow_back_ios_new,
+                color: kNeon,
+                size: 14,
+              ),
             ),
           ),
           const SizedBox(width: 12),
@@ -185,7 +210,9 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 Text(
                   widget.isGroup
-                      ? 'CANAL GLOBAL · BROADCAST'
+                      ? (widget.groupId != null
+                            ? 'GRUPO PRIVADO'
+                            : 'CANAL GLOBAL · BROADCAST')
                       : widget.peerIp ?? '',
                   style: const TextStyle(
                     fontFamily: 'monospace',
@@ -201,7 +228,7 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     );
   }
- 
+
   Widget _buildInputBar() {
     return Container(
       padding: const EdgeInsets.fromLTRB(8, 6, 8, 10),
@@ -219,13 +246,17 @@ class _ChatScreenState extends State<ChatScreen> {
             child: TextField(
               controller: _ctrl,
               style: const TextStyle(
-                  fontFamily: 'monospace', color: Colors.white, fontSize: 13),
+                fontFamily: 'monospace',
+                color: Colors.white,
+                fontSize: 13,
+              ),
               decoration: InputDecoration(
                 hintText: '> escribir mensaje...',
                 hintStyle: TextStyle(
-                    fontFamily: 'monospace',
-                    color: Colors.white24,
-                    fontSize: 13),
+                  fontFamily: 'monospace',
+                  color: Colors.white24,
+                  fontSize: 13,
+                ),
                 filled: true,
                 fillColor: Colors.white.withOpacity(0.04),
                 border: OutlineInputBorder(
@@ -264,13 +295,13 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 }
- 
+
 // ─── Burbuja de mensaje ───────────────────────────────────────────────────────
 class _MessageBubble extends StatelessWidget {
   final Message msg;
   final PeerService peer;
   const _MessageBubble({required this.msg, required this.peer});
- 
+
   @override
   Widget build(BuildContext context) {
     final isMe = msg.isMe;
@@ -280,7 +311,8 @@ class _MessageBubble extends StatelessWidget {
         margin: const EdgeInsets.symmetric(vertical: 3),
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
         constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * 0.78),
+          maxWidth: MediaQuery.of(context).size.width * 0.78,
+        ),
         decoration: BoxDecoration(
           color: isMe
               ? kNeon.withOpacity(0.12)
@@ -302,8 +334,7 @@ class _MessageBubble extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Text(
-                  (peer.peerNames[msg.senderIp] ?? msg.senderIp)
-                      .toUpperCase(),
+                  (peer.peerNames[msg.senderIp] ?? msg.senderIp).toUpperCase(),
                   style: TextStyle(
                     fontFamily: 'monospace',
                     fontSize: 9,
@@ -328,10 +359,13 @@ class _MessageBubble extends StatelessWidget {
       ),
     );
   }
- 
+
   Widget _buildContent(BuildContext context) {
-    const textStyle =
-        TextStyle(fontFamily: 'monospace', color: Colors.white, fontSize: 13);
+    const textStyle = TextStyle(
+      fontFamily: 'monospace',
+      color: Colors.white,
+      fontSize: 13,
+    );
     switch (msg.type) {
       case MessageType.text:
         return Text(msg.content, style: textStyle);
@@ -340,31 +374,35 @@ class _MessageBubble extends StatelessWidget {
           onTap: () => OpenFilex.open(msg.content),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(4),
-            child: Image.file(File(msg.content),
-                height: 180, fit: BoxFit.cover),
+            child: Image.file(
+              File(msg.content),
+              height: 180,
+              fit: BoxFit.cover,
+            ),
           ),
         );
       default:
         return GestureDetector(
           onTap: () => OpenFilex.open(msg.content),
-          child: Row(children: [
-            Icon(Icons.attach_file, size: 16, color: kNeon.withOpacity(0.7)),
-            const SizedBox(width: 6),
-            Flexible(
-              child: Text(
-                msg.fileName ?? 'Archivo',
-                style: TextStyle(
-                  fontFamily: 'monospace',
-                  color: kNeon.withOpacity(0.8),
-                  fontSize: 12,
-                  decoration: TextDecoration.underline,
-                  decorationColor: const Color.fromARGB(255, 0, 255, 0),
+          child: Row(
+            children: [
+              Icon(Icons.attach_file, size: 16, color: kNeon.withOpacity(0.7)),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  msg.fileName ?? 'Archivo',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    color: kNeon.withOpacity(0.8),
+                    fontSize: 12,
+                    decoration: TextDecoration.underline,
+                    decorationColor: const Color.fromARGB(255, 0, 255, 0),
+                  ),
                 ),
               ),
-            ),
-          ]),
+            ],
+          ),
         );
     }
   }
 }
- 

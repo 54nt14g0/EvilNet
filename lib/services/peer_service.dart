@@ -53,6 +53,7 @@ class PeerService {
     myId = prefs.getString('myId') ?? _uuid.v4();
     myName = prefs.getString('myName') ?? 'Usuario';
     await prefs.setString('myId', myId);
+    await _loadUserData();
 
     myIp = await _getTailscaleIp();
 
@@ -61,9 +62,47 @@ class PeerService {
 
     _discoverPeers();
     Timer.periodic(const Duration(seconds: 10), (_) => _discoverPeers());
+  }
 
+  // ─── Envío: mensaje a grupo (solo miembros) ────────────────────────────────
 
-    
+  Future<void> sendToGroup(
+    String groupId,
+    String content,
+    MessageType type,
+  ) async {
+    final group = _groups[groupId];
+    if (group == null) return;
+
+    final msg = Message(
+      id: _uuid.v4(),
+      senderId: myId,
+      senderIp: myIp,
+      type: type,
+      content: content,
+      timestamp: DateTime.now(),
+      isMe: true,
+      recipientIp: null, // No es 1-a-1
+      groupId: groupId, // ← Identificador de grupo
+    );
+
+    await _saveMessage(msg);
+    _controller.add(PeerEvent('message', msg));
+
+    // Enviar solo a miembros del grupo (incluyéndome si estoy en la lista)
+    final targets = group.memberIps.isEmpty
+        ? knownPeers
+              .keys // Si no hay miembros explícitos, broadcast dentro del grupo
+        : group.memberIps.where((ip) => ip != myIp);
+
+    for (final ip in targets) {
+      if (type == MessageType.text) {
+        await _sendPacket(ip, msg.toJson(), null);
+      } else {
+        // Para archivos: necesitarías leer el archivo desde content
+        // Opcional: pasar bytes como parámetro adicional
+      }
+    }
   }
 
   // ─── Nombre de usuario ────────────────────────────────────────────────────
@@ -180,6 +219,17 @@ class PeerService {
         ['group_create', 'group_delete', 'group_update'].contains(packetType)) {
       _handleGroupPacket(header);
       return; // Los paquetes de grupo no son mensajes de chat, salir aquí
+    }
+    final msgGroupId = header['groupId'] as String?;
+    if (msgGroupId != null) {
+      final group = _groups[msgGroupId];
+      // Si el grupo no existe o no soy miembro (y no soy el creador), ignorar
+      if (group == null ||
+          (group.memberIps.isNotEmpty &&
+              !group.memberIps.contains(myIp) &&
+              group.creatorId != myId)) {
+        return;
+      }
     }
     // ────────────────────────────────────────────────────────────────────────
 
@@ -409,7 +459,7 @@ class PeerService {
     await prefs.setStringList('messages', list);
   }
 
-  Future<List<Message>> loadMessages({String? peerIp}) async {
+  Future<List<Message>> loadMessages({String? peerIp, String? groupId}) async {
     final prefs = await SharedPreferences.getInstance();
     final myIp_ = myIp;
     final all = (prefs.getStringList('messages') ?? []).map((s) {
@@ -417,14 +467,21 @@ class PeerService {
       return Message.fromJson(j, j['senderIp'] == myIp_);
     }).toList();
 
-    if (peerIp == null) {
-      return all.where((m) => m.recipientIp == null).toList();
+    if (groupId != null) {
+      // Chat de grupo: solo mensajes de ESTE grupo
+      return all.where((m) => m.groupId == groupId).toList();
+    } else if (peerIp == null) {
+      // Broadcast: EXCLUYE explícitamente mensajes de grupo y 1-a-1
+      return all
+          .where((m) => m.groupId == null && m.recipientIp == null)
+          .toList();
     } else {
+      // 1-a-1: EXCLUYE mensajes de grupo
       return all.where((m) {
-        final isDirectWithPeer =
+        final isDirect =
             (m.senderIp == peerIp && m.recipientIp == myIp_) ||
             (m.senderIp == myIp_ && m.recipientIp == peerIp);
-        return isDirectWithPeer;
+        return isDirect && m.groupId == null;
       }).toList();
     }
   }
@@ -447,10 +504,18 @@ class PeerService {
     _myHierarchy = prefs.getInt(kUserHierarchyKey) ?? 1;
 
     final groupsJson = prefs.getStringList(kGroupsKey) ?? [];
-    for (final json in groupsJson) {
-      final group = Group.fromJson(jsonDecode(json));
-      _groups[group.id] = group;
+    _groups.clear(); // ← Limpiar antes de cargar
+
+    for (final jsonStr in groupsJson) {
+      try {
+        final group = Group.fromJson(jsonDecode(jsonStr));
+        _groups[group.id] = group;
+      } catch (e) {
+        print('Error cargando grupo: $e');
+      }
     }
+
+    print('Grupos cargados: ${_groups.length}'); // ← Debug
   }
 
   // ─── Guardar grupos en persistencia ────────────────────────────────────────
@@ -458,6 +523,9 @@ class PeerService {
     final prefs = await SharedPreferences.getInstance();
     final jsonList = _groups.values.map((g) => jsonEncode(g.toJson())).toList();
     await prefs.setStringList(kGroupsKey, jsonList);
+
+    print('✅ Grupos guardados: ${_groups.length}'); // ← Debug
+    print('   IDs: ${_groups.keys.toList()}');
   }
 
   // ─── Setear jerarquía (llamar tras login) ──────────────────────────────────
@@ -474,7 +542,7 @@ class PeerService {
   }
 
   Future<void> createGroup(String name, int minHierarchy) async {
-    if (_myHierarchy < 8) return; // Solo 8,9,10 pueden crear
+    if (_myHierarchy < 8) return;
     if (minHierarchy < 1 || minHierarchy > 10) return;
 
     final group = Group.create(
@@ -485,10 +553,14 @@ class PeerService {
     );
 
     _groups[group.id] = group;
+
+    // ← ¡ESTO GUARDA EN DISCO!
     await _saveGroups();
+    // ────────────────────
+
     _controller.add(PeerEvent('group_created', group));
 
-    // Broadcast a peers para sincronizar
+    // Broadcast a peers
     for (final ip in List.from(knownPeers.keys)) {
       await _sendPacket(ip, {
         'type': 'group_create',

@@ -304,7 +304,8 @@ class _LobbyScreenState extends State<LobbyScreen>
       context,
       MaterialPageRoute(
         builder: (_) => ChatScreen(
-          peerIp: group.id, // Usamos el ID del grupo como "destinatario"
+          groupId: group.id, // ← Usar groupId en lugar de peerIp
+          peerIp: null,
           peerName: group.name,
           isGroup: true,
         ),
@@ -442,18 +443,20 @@ class _LobbyScreenState extends State<LobbyScreen>
         ),
 
         // ── [NUEVO] Botón para crear grupo (solo jerarquías 8-10) ─────────
+        // Debug temporal
         SliverToBoxAdapter(
-          child: _peer.myHierarchy >= 8
-              ? _buildActionCard(
-                  '+ Crear grupo',
-                  'Solo jerarquías 8-10',
-                  Icons.add_circle,
-                  kNeon,
-                  _showCreateGroupDialog,
-                )
-              : _buildComingSoonCard('Crear grupo', 'Requiere jerarquía 8+'),
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Text(
+              'DEBUG: Jerarquía=${_peer.myHierarchy} | Grupos=${_peer.availableGroups.length}',
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 10,
+                color: Colors.yellow,
+              ),
+            ),
+          ),
         ),
-
         // ── [NUEVO] Lista de grupos disponibles (filtrados por jerarquía) ─
         if (_peer.availableGroups.isNotEmpty) ...[
           const SliverToBoxAdapter(child: SizedBox(height: 12)),
