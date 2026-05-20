@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:open_filex/open_filex.dart';
 import '../models/message.dart';
 import '../services/peer_service.dart';
+import 'package:flutter/services.dart';
 
 const Color kNeon = Color(0xFF00FFB2);
 const Color kPink = Color(0xFFFF2D78);
@@ -134,100 +135,399 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: kDark,
-      body: SafeArea(
-        child: Column(
-          children: [
-            _buildAppBar(),
-            if (!_initialized)
-              const Expanded(
-                child: Center(child: CircularProgressIndicator(color: kNeon)),
-              )
-            else
-              Expanded(
-                child: ListView.builder(
-                  controller: _scroll,
-                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-                  itemCount: _messages.length,
-                  itemBuilder: (_, i) =>
-                      _MessageBubble(msg: _messages[i], peer: _peer),
-                ),
+  // ─── Menú de opciones para mensaje individual ───────────────────────────────
+  void _showMessageOptions(Message msg) {
+    // Siempre mostrar al menos "Eliminar"
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: kDarkPanel,
+      builder: (_) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Copiar (si es texto)
+          if (msg.type == MessageType.text)
+            ListTile(
+              leading: Icon(Icons.copy, color: kNeon, size: 18),
+              title: const Text(
+                'Copiar texto',
+                style: TextStyle(fontFamily: 'monospace', color: Colors.white),
               ),
-            _buildInputBar(),
-          ],
-        ),
+              onTap: () {
+                Navigator.pop(context);
+                Clipboard.setData(ClipboardData(text: msg.content));
+              },
+            ),
+          // Editar (solo si es texto - quitamos la condición isMe temporalmente para probar)
+          if (msg.type == MessageType.text)
+            ListTile(
+              leading: Icon(Icons.edit, color: kNeon, size: 18),
+              title: const Text(
+                'Editar mensaje',
+                style: TextStyle(fontFamily: 'monospace', color: Colors.white),
+              ),
+              onTap: () {
+                Navigator.pop(context);
+                _showEditMessageDialog(msg);
+              },
+            ),
+          // Eliminar (siempre disponible)
+          ListTile(
+            leading: Icon(Icons.delete, color: kPink, size: 18),
+            title: const Text(
+              'Eliminar (solo para mí)',
+              style: TextStyle(fontFamily: 'monospace', color: kPink),
+            ),
+            onTap: () {
+              Navigator.pop(context);
+              _showDeleteMessageConfirm(msg);
+            },
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildAppBar() {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 12, 16, 12),
-      decoration: BoxDecoration(
-        color: kDarkPanel,
-        border: Border(bottom: BorderSide(color: kNeon.withOpacity(0.2))),
+  // ─── Diálogo para editar mensaje ────────────────────────────────────────────
+  void _showEditMessageDialog(Message msg) {
+  final _ctrl = TextEditingController(text: msg.content);
+
+  showDialog(
+    context: context,
+    builder: (_) => AlertDialog(
+      backgroundColor: kDarkPanel,
+      title: const Text(
+        'EDITAR MENSAJE',
+        style: TextStyle(fontFamily: 'monospace', color: Colors.white),
       ),
-      child: Row(
-        children: [
-          GestureDetector(
-            onTap: () => Navigator.pop(context),
-            child: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                border: Border.all(color: kNeon.withOpacity(0.3)),
-                borderRadius: BorderRadius.circular(2),
-              ),
-              child: const Icon(
-                Icons.arrow_back_ios_new,
-                color: kNeon,
-                size: 14,
-              ),
+      content: TextField(
+        controller: _ctrl,
+        style: const TextStyle(fontFamily: 'monospace', color: Colors.white),
+        decoration: InputDecoration(
+          hintText: 'Nuevo contenido',
+          hintStyle: TextStyle(color: Colors.white24),
+          filled: true,
+          fillColor: Colors.white.withOpacity(0.05),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(2),
+            borderSide: BorderSide(color: kNeon.withOpacity(0.3)),
+          ),
+        ),
+        maxLines: 3,
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text(
+            'Cancelar',
+            style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
+          ),
+        ),
+        ElevatedButton(
+          // ← [CORREGIDO] Hacer async y recargar desde storage
+          onPressed: () async {
+            if (_ctrl.text.trim().isNotEmpty) {
+              // 1. Editar en almacenamiento local
+              await _peer.editMessageLocally(msg.id, _ctrl.text.trim());
+              
+              // 2. ← [CLAVE] Recargar TODOS los mensajes desde SharedPreferences
+              //    Esto asegura consistencia total con lo guardado
+              final updated = await _peer.loadMessages(
+                peerIp: widget.peerIp, 
+                groupId: widget.groupId,
+              );
+              
+              // 3. Actualizar UI con la lista fresca
+              if (mounted) {
+                setState(() {
+                  _messages = updated;
+                });
+              }
+              
+              Navigator.pop(context);
+            }
+          },
+          style: ElevatedButton.styleFrom(
+            backgroundColor: kNeon.withOpacity(0.2),
+            foregroundColor: kNeon,
+          ),
+          child: const Text(
+            'GUARDAR',
+            style: TextStyle(fontFamily: 'monospace'),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+  // ─── Confirmación para eliminar mensaje ─────────────────────────────────────
+  void _showDeleteMessageConfirm(Message msg) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: kDarkPanel,
+        title: const Text(
+          '¿ELIMINAR MENSAJE?',
+          style: TextStyle(fontFamily: 'monospace', color: kPink),
+        ),
+        content: const Text(
+          'Esto solo eliminará el mensaje de TU dispositivo.',
+          style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text(
+              'Cancelar',
+              style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
             ),
           ),
-          const SizedBox(width: 12),
-          Icon(
-            widget.isGroup ? Icons.hub : Icons.person,
-            color: kNeon.withOpacity(0.6),
-            size: 18,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  widget.peerName.toUpperCase(),
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                    letterSpacing: 2,
-                  ),
-                ),
-                Text(
-                  widget.isGroup
-                      ? (widget.groupId != null
-                            ? 'GRUPO PRIVADO'
-                            : 'CANAL GLOBAL · BROADCAST')
-                      : widget.peerIp ?? '',
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 10,
-                    color: Colors.white38,
-                    letterSpacing: 1,
-                  ),
-                ),
-              ],
+          ElevatedButton(
+            onPressed: () async {
+              await _peer.deleteMessageLocally(msg.id);
+
+              // ← [NUEVO] Recargar mensajes desde storage para asegurar consistencia
+              final updated = await _peer.loadMessages(
+                peerIp: widget.peerIp,
+                groupId: widget.groupId,
+              );
+
+              setState(() {
+                _messages = updated;
+              });
+              Navigator.pop(context);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: kPink.withOpacity(0.2),
+              foregroundColor: kPink,
+            ),
+            child: const Text(
+              'ELIMINAR',
+              style: TextStyle(fontFamily: 'monospace'),
             ),
           ),
         ],
       ),
     );
   }
+
+  // ─── Menú de opciones del chat (limpiar todo) ───────────────────────────────
+  void _showChatOptions() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: kDarkPanel,
+      builder: (_) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: Icon(Icons.delete_sweep, color: kPink, size: 18),
+            title: const Text(
+              'Limpiar chat completo',
+              style: TextStyle(fontFamily: 'monospace', color: kPink),
+            ),
+            subtitle: const Text(
+              'Eliminar todos los mensajes de este chat (solo local)',
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 10,
+                color: Colors.white38,
+              ),
+            ),
+            onTap: () {
+              Navigator.pop(context);
+              _showClearChatConfirm();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── Confirmación para limpiar todo el chat ─────────────────────────────────
+  void _showClearChatConfirm() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: kDarkPanel,
+        title: const Text(
+          '¿LIMPIAR CHAT COMPLETO?',
+          style: TextStyle(fontFamily: 'monospace', color: kPink),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Se eliminarán TODOS los mensajes de este chat.',
+              style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Chat: ${widget.peerName}',
+              style: const TextStyle(fontFamily: 'monospace', color: kNeon),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text(
+              'Cancelar',
+              style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              await _peer.deleteMessagesForChat(
+                peerIp: widget.peerIp,
+                groupId: widget.groupId,
+              );
+              // Actualizar UI localmente
+              setState(() {
+                _messages.clear();
+              });
+              Navigator.pop(context);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: kPink.withOpacity(0.2),
+              foregroundColor: kPink,
+            ),
+            child: const Text(
+              'LIMPIAR',
+              style: TextStyle(fontFamily: 'monospace'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+Widget build(BuildContext context) {
+  return Scaffold(
+    backgroundColor: kDark,
+    body: SafeArea(
+      child: Column(
+        children: [
+          _buildAppBar(),
+          if (!_initialized)
+            const Expanded(
+              child: Center(child: CircularProgressIndicator(color: kNeon)),
+            )
+          else
+            Expanded(
+              child: ListView.builder(
+                controller: _scroll,
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                itemCount: _messages.length,
+                // ← [CORREGIDO] Ahora sí pasa el callback onLongPress
+                itemBuilder: (_, i) => _MessageBubble(
+                  msg: _messages[i], 
+                  peer: _peer,
+                  onLongPress: () => _showMessageOptions(_messages[i]),
+                ),
+              ),
+            ),
+          _buildInputBar(),
+        ],
+      ),
+    ),
+  );
+}
+
+ Widget _buildAppBar() {
+  return Container(
+    padding: const EdgeInsets.fromLTRB(12, 12, 16, 12),
+    decoration: BoxDecoration(
+      color: kDarkPanel,
+      border: Border(bottom: BorderSide(color: kNeon.withOpacity(0.2))),
+    ),
+    child: Row(
+      children: [
+        GestureDetector(
+          onTap: () => Navigator.pop(context),
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              border: Border.all(color: kNeon.withOpacity(0.3)),
+              borderRadius: BorderRadius.circular(2),
+            ),
+            child: const Icon(
+              Icons.arrow_back_ios_new,
+              color: kNeon,
+              size: 14,
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Icon(
+          widget.isGroup ? Icons.hub : Icons.person,
+          color: kNeon.withOpacity(0.6),
+          size: 18,
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.peerName.toUpperCase(),
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                  letterSpacing: 2,
+                ),
+              ),
+              Text(
+                widget.isGroup
+                    ? (widget.groupId != null
+                          ? 'GRUPO PRIVADO'
+                          : 'CANAL GLOBAL · BROADCAST')
+                    : widget.peerIp ?? '',
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 10,
+                  color: Colors.white38,
+                  letterSpacing: 1,
+                ),
+              ),
+            ],
+          ),
+        ),
+        
+        // ← [TEMPORAL] Botón de debug para probar el menú sin long-press
+        IconButton(
+          icon: const Icon(Icons.bug_report, color: kPink, size: 18),
+          onPressed: () {
+            print('🐛 Botón de debug presionado');
+            if (_messages.isNotEmpty) {
+              // Abre el menú con el último mensaje para probar
+              _showMessageOptions(_messages.last);
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('No hay mensajes para probar')),
+              );
+            }
+          },
+          tooltip: 'Probar menú de opciones',
+        ),
+        
+        // Menú principal del chat (limpiar todo)
+        IconButton(
+          icon: Icon(
+            Icons.more_vert,
+            color: kNeon.withOpacity(0.7),
+            size: 18,
+          ),
+          onPressed: _showChatOptions,
+          padding: const EdgeInsets.all(8),
+          constraints: const BoxConstraints(),
+        ),
+      ],
+    ),
+  );
+}
 
   Widget _buildInputBar() {
     return Container(
@@ -297,111 +597,127 @@ class _ChatScreenState extends State<ChatScreen> {
 }
 
 // ─── Burbuja de mensaje ───────────────────────────────────────────────────────
+// ─── Burbuja de mensaje (actualizada) ───────────────────────────────────────
+// ─── Burbuja de mensaje (CORREGIDA) ───────────────────────────────────────
+// ─── Burbuja de mensaje (VERSIÓN DEBUG - A PRUEBA DE ERRORES) ─────────────
+// ─── Burbuja de mensaje (VERSIÓN FINAL FUNCIONAL) ──────────────────────────
 class _MessageBubble extends StatelessWidget {
   final Message msg;
   final PeerService peer;
-  const _MessageBubble({required this.msg, required this.peer});
+  final VoidCallback? onLongPress;
+
+  const _MessageBubble({
+    required this.msg, 
+    required this.peer,
+    this.onLongPress,
+  });
 
   @override
   Widget build(BuildContext context) {
     final isMe = msg.isMe;
-    return Align(
-      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 3),
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.78,
-        ),
-        decoration: BoxDecoration(
-          color: isMe
-              ? kNeon.withOpacity(0.12)
-              : Colors.white.withOpacity(0.05),
-          border: Border.all(
-            color: isMe ? kNeon.withOpacity(0.3) : Colors.white12,
+    
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onLongPress: () {
+        print('🔍 LONG-PRESS DETECTADO: ${msg.id}');
+        if (onLongPress != null) onLongPress!();
+      },
+      onTap: () {
+        print('👆 Tap: ${msg.id}');
+      },
+      child: Align(
+        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+        child: Container(
+          margin: const EdgeInsets.symmetric(vertical: 3),
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.78,
           ),
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(4),
-            topRight: const Radius.circular(4),
-            bottomLeft: Radius.circular(isMe ? 4 : 0),
-            bottomRight: Radius.circular(isMe ? 0 : 4),
+          decoration: BoxDecoration(
+            color: isMe ? kNeon.withOpacity(0.12) : Colors.white.withOpacity(0.05),
+            border: Border.all(color: isMe ? kNeon.withOpacity(0.3) : Colors.white12),
+            borderRadius: BorderRadius.only(
+              topLeft: const Radius.circular(4),
+              topRight: const Radius.circular(4),
+              bottomLeft: Radius.circular(isMe ? 4 : 0),
+              bottomRight: Radius.circular(isMe ? 0 : 4),
+            ),
           ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (!isMe)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Text(
-                  (peer.peerNames[msg.senderIp] ?? msg.senderIp).toUpperCase(),
-                  style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 9,
-                    color: kNeon.withOpacity(0.6),
-                    letterSpacing: 1,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (!isMe)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text(
+                    (peer.peerNames[msg.senderIp] ?? msg.senderIp).toUpperCase(),
+                    style: TextStyle(
+                      fontFamily: 'monospace', 
+                      fontSize: 9, 
+                      color: kNeon.withOpacity(0.6), 
+                      letterSpacing: 1
+                    ),
                   ),
                 ),
+              _buildContentReadOnly(context),
+              const SizedBox(height: 4),
+              Text(
+                '${msg.timestamp.hour.toString().padLeft(2, '0')}:${msg.timestamp.minute.toString().padLeft(2, '0')}',
+                style: TextStyle(
+                  fontFamily: 'monospace', 
+                  fontSize: 9, 
+                  color: isMe ? kNeon.withOpacity(0.4) : Colors.white24
+                ),
               ),
-            _buildContent(context),
-            const SizedBox(height: 4),
-            Text(
-              '${msg.timestamp.hour.toString().padLeft(2, '0')}:'
-              '${msg.timestamp.minute.toString().padLeft(2, '0')}',
-              style: TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 9,
-                color: isMe ? kNeon.withOpacity(0.4) : Colors.white24,
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildContent(BuildContext context) {
-    const textStyle = TextStyle(
-      fontFamily: 'monospace',
-      color: Colors.white,
-      fontSize: 13,
-    );
+  // ← [NUEVO] Método que SÍ debe existir para que compile
+  Widget _buildContentReadOnly(BuildContext context) {
+    const textStyle = TextStyle(fontFamily: 'monospace', color: Colors.white, fontSize: 13);
+    
     switch (msg.type) {
       case MessageType.text:
         return Text(msg.content, style: textStyle);
+        
       case MessageType.image:
-        return GestureDetector(
-          onTap: () => OpenFilex.open(msg.content),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: Image.file(
-              File(msg.content),
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: Image.file(
+            File(msg.content), 
+            height: 180, 
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => Container(
               height: 180,
-              fit: BoxFit.cover,
+              color: Colors.white10,
+              alignment: Alignment.center,
+              child: const Text('❌ Imagen no disponible', 
+                style: TextStyle(fontSize: 10, color: Colors.white38),
+              ),
             ),
           ),
         );
+        
       default:
-        return GestureDetector(
-          onTap: () => OpenFilex.open(msg.content),
-          child: Row(
-            children: [
-              Icon(Icons.attach_file, size: 16, color: kNeon.withOpacity(0.7)),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  msg.fileName ?? 'Archivo',
-                  style: TextStyle(
-                    fontFamily: 'monospace',
-                    color: kNeon.withOpacity(0.8),
-                    fontSize: 12,
-                    decoration: TextDecoration.underline,
-                    decorationColor: const Color.fromARGB(255, 0, 255, 0),
-                  ),
+        return Row(
+          children: [
+            Icon(Icons.attach_file, size: 16, color: kNeon.withOpacity(0.7)),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                msg.fileName ?? 'Archivo',
+                style: TextStyle(
+                  fontFamily: 'monospace', 
+                  color: kNeon.withOpacity(0.8), 
+                  fontSize: 12
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         );
     }
   }

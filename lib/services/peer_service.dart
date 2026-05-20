@@ -493,6 +493,68 @@ class PeerService {
     return dest.path;
   }
 
+  // ─── Gestión LOCAL de mensajes (NO se propaga a otros peers) ───────────────
+
+  /// Elimina un mensaje específico solo de TU almacenamiento local
+  Future<void> deleteMessageLocally(String messageId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final list = prefs.getStringList('messages') ?? [];
+    final filtered = list.where((s) {
+      final j = jsonDecode(s) as Map<String, dynamic>;
+      return j['id'] != messageId;
+    }).toList();
+    await prefs.setStringList('messages', filtered);
+  }
+
+  /// Edita un mensaje solo localmente (solo si es mío)
+  Future<void> editMessageLocally(String messageId, String newContent) async {
+    final prefs = await SharedPreferences.getInstance();
+    final list = prefs.getStringList('messages') ?? [];
+    final updated = <String>[];
+
+    for (final s in list) {
+      final j = jsonDecode(s) as Map<String, dynamic>;
+      if (j['id'] == messageId && j['senderIp'] == myIp) {
+        // Solo puedo editar mis propios mensajes
+        j['content'] = newContent;
+        updated.add(jsonEncode(j));
+      } else {
+        updated.add(s);
+      }
+    }
+    await prefs.setStringList('messages', updated);
+  }
+
+  /// Elimina TODOS los mensajes de un chat específico (solo local)
+  Future<void> deleteMessagesForChat({String? peerIp, String? groupId}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final myIp_ = myIp;
+    final list = prefs.getStringList('messages') ?? [];
+
+    final filtered = list.where((s) {
+      final j = jsonDecode(s) as Map<String, dynamic>;
+      final msgGroupId = j['groupId'] as String?;
+      final msgRecipientIp = j['recipientIp'] as String?;
+      final msgSenderIp = j['senderIp'] as String?;
+
+      if (groupId != null) {
+        // Chat de grupo: eliminar solo mensajes de ESTE grupo
+        return msgGroupId != groupId;
+      } else if (peerIp == null) {
+        // Broadcast: eliminar mensajes sin groupId y sin recipientIp
+        return !(msgGroupId == null && msgRecipientIp == null);
+      } else {
+        // 1-a-1: eliminar mensajes directos con este peer
+        final isDirect =
+            (msgSenderIp == peerIp && msgRecipientIp == myIp_) ||
+            (msgSenderIp == myIp_ && msgRecipientIp == peerIp);
+        return !(isDirect && msgGroupId == null);
+      }
+    }).toList();
+
+    await prefs.setStringList('messages', filtered);
+  }
+
   void dispose() {
     _server?.close();
     _controller.close();
