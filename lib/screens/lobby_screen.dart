@@ -67,16 +67,16 @@ class _LobbyScreenState extends State<LobbyScreen>
   }
 
   void _playClick() async {
-  try {
-    if (!_audioInitialized) await _initAudio();
-    
-    // Reinicia desde el inicio y reproduce
-    await _audioPlayer.stop(); // Detiene cualquier reproducción previa
-    await _audioPlayer.play(AssetSource('click.mp3'));
-  } catch (_) {
-    // Fallo silencioso: mejor sin sonido que con error
+    try {
+      if (!_audioInitialized) await _initAudio();
+
+      // Reinicia desde el inicio y reproduce
+      await _audioPlayer.stop(); // Detiene cualquier reproducción previa
+      await _audioPlayer.play(AssetSource('click.mp3'));
+    } catch (_) {
+      // Fallo silencioso: mejor sin sonido que con error
+    }
   }
-}
 
   void _openBroadcastChat() {
     Navigator.push(
@@ -97,7 +97,8 @@ class _LobbyScreenState extends State<LobbyScreen>
       MaterialPageRoute(
         builder: (_) => ChatScreen(
           peerIp: ip,
-          peerName: _peer.peerNames[ip] ?? ip,
+          // ← [CAMBIO CLAVE] Usar el nuevo método que prioriza username registrado
+          peerName: _peer.getDisplayNameForIp(ip),
           isGroup: false,
         ),
       ),
@@ -483,7 +484,7 @@ class _LobbyScreenState extends State<LobbyScreen>
             subtitle: 'Mensaje llega a todos los peers conectados',
             icon: Icons.wifi_tethering,
             onTap: () {
-              _playClick(); // ← Sonido
+              _playClick();
               _openBroadcastChat();
             },
             isGlobal: true,
@@ -523,7 +524,7 @@ class _LobbyScreenState extends State<LobbyScreen>
                     'Mín. J${group.minHierarchyToJoin} · ${isCreator ? 'Tu grupo' : 'Unido'}',
                 icon: isCreator ? Icons.lock : Icons.group,
                 onTap: () {
-                  _playClick(); // ← Sonido
+                  _playClick();
                   _openGroupChat(group);
                 },
                 isGlobal: false,
@@ -537,20 +538,53 @@ class _LobbyScreenState extends State<LobbyScreen>
 
         const SliverToBoxAdapter(child: SizedBox(height: 8)),
 
-        // ── Sección: PEERS ─────────────────────────────────────────────────
+        // ── [NUEVO] Sección: USUARIOS ACTIVOS (registrados) ─────────────────
         SliverToBoxAdapter(
-          child: _buildSectionLabel('NODOS DETECTADOS', Icons.device_hub),
+          child: _buildSectionLabel('USUARIOS ACTIVOS', Icons.people),
         ),
 
+        // Filtrar solo usuarios registrados (nombre ≠ IP)
         if (_peer.knownPeers.isEmpty)
-          SliverToBoxAdapter(child: _buildEmptyPeers()),
+          SliverToBoxAdapter(child: _buildEmptyPeers())
+        else ...[
+          SliverList(
+            delegate: SliverChildBuilderDelegate((_, i) {
+              final ip = _peer.knownPeers.keys.elementAt(i);
+              final displayName = _peer.getDisplayNameForIp(ip);
+              final isRegistered =
+                  displayName != ip; // Si es diferente, está registrado
 
-        SliverList(
-          delegate: SliverChildBuilderDelegate((_, i) {
-            final ip = _peer.knownPeers.keys.elementAt(i);
-            final name = _peer.peerNames[ip] ?? ip;
-            return _buildPeerCard(ip: ip, name: name);
-          }, childCount: _peer.knownPeers.length),
+              // Solo mostrar en "Usuarios activos" si está registrado
+              if (!isRegistered) return const SizedBox.shrink();
+
+              return _buildUserCard(
+                ip: ip,
+                name: displayName,
+                isRegistered: true,
+                onTap: () {
+                  _playClick();
+                  _openPeerChat(ip);
+                },
+              );
+            }, childCount: _peer.knownPeers.length),
+          ),
+        ],
+
+        // ── [NUEVO] Botón para ver nodos técnicos (opcional) ────────────────
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: OutlinedButton.icon(
+              onPressed: () => _showRawNodesDialog(),
+              icon: const Icon(Icons.dns, size: 16),
+              label: const Text('Ver nodos técnicos'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: kNeon.withOpacity(0.7),
+                side: BorderSide(color: kNeon.withOpacity(0.3)),
+                backgroundColor: Colors.white.withOpacity(0.02),
+              ),
+            ),
+          ),
         ),
 
         const SliverToBoxAdapter(child: SizedBox(height: 40)),
@@ -760,6 +794,123 @@ class _LobbyScreenState extends State<LobbyScreen>
     );
   }
 
+  // ─── Tarjeta de usuario (con badge de registrado) ─────────────────────────
+  Widget _buildUserCard({
+    required String ip,
+    required String name,
+    required bool isRegistered,
+    required VoidCallback onTap,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: _InteractiveCard(
+        onTap: onTap,
+        glowColor: isRegistered ? kNeon : Colors.white38,
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: kCard,
+            border: Border.all(
+              color: isRegistered ? kNeon.withOpacity(0.4) : Colors.white10,
+            ),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Row(
+            children: [
+              // Avatar
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: (isRegistered ? kNeon : Colors.white38).withOpacity(
+                    0.15,
+                  ),
+                  border: Border.all(
+                    color: (isRegistered ? kNeon : Colors.white38).withOpacity(
+                      0.5,
+                    ),
+                  ),
+                ),
+                child: Center(
+                  child: Text(
+                    name.isNotEmpty ? name[0].toUpperCase() : '?',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: isRegistered ? kNeon : Colors.white38,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          name.toUpperCase(),
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 13,
+                            color: isRegistered ? Colors.white : Colors.white38,
+                            letterSpacing: 1,
+                          ),
+                        ),
+                        if (isRegistered) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 4,
+                              vertical: 1,
+                            ),
+                            decoration: BoxDecoration(
+                              color: kNeon.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(2),
+                              border: Border.all(color: kNeon.withOpacity(0.3)),
+                            ),
+                            child: const Text(
+                              '✓',
+                              style: TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 9,
+                                color: kNeon,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      isRegistered
+                          ? 'Usuario registrado'
+                          : 'Sin registrar · $ip',
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 10,
+                        color: isRegistered ? Colors.white38 : Colors.white24,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right,
+                color: (isRegistered ? kNeon : Colors.white24).withOpacity(0.5),
+                size: 18,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildComingSoonCard(String title, String subtitle) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -925,7 +1076,113 @@ class _LobbyScreenState extends State<LobbyScreen>
       ),
     );
   }
+
+  void _showRawNodesDialog() {
+    showDialog(
+      context: context, // ← Ahora sí reconoce 'context'
+      builder: (_) => AlertDialog(
+        backgroundColor: kDarkPanel,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(4),
+          side: BorderSide(color: kNeon.withOpacity(0.3)),
+        ),
+        title: const Text(
+          'NODOS TÉCNNICOS',
+          style: TextStyle(
+            fontFamily: 'monospace',
+            color: Colors.white,
+            letterSpacing: 2,
+          ),
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView(
+            shrinkWrap: true,
+            children: _peer.knownPeers.keys.map((ip) {
+              // ← Ahora sí reconoce '_peer'
+              final hostname = _peer.peerNames[ip] ?? 'Desconocido';
+              final displayName = _peer.getDisplayNameForIp(ip);
+              final isRegistered = displayName != ip;
+
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  children: [
+                    Icon(
+                      isRegistered ? Icons.verified_user : Icons.dns,
+                      size: 14,
+                      color: isRegistered ? kNeon : Colors.white38,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            isRegistered
+                                ? displayName.toUpperCase()
+                                : hostname.toUpperCase(),
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 11,
+                              color: isRegistered ? kNeon : Colors.white38,
+                              fontWeight: isRegistered
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                          Text(
+                            ip,
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 9,
+                              color: Colors.white24,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (isRegistered)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                          vertical: 1,
+                        ),
+                        decoration: BoxDecoration(
+                          color: kNeon.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(2),
+                          border: Border.all(color: kNeon.withOpacity(0.3)),
+                        ),
+                        child: const Text(
+                          'REG',
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 8,
+                            color: kNeon,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text(
+              'CERRAR',
+              style: TextStyle(fontFamily: 'monospace', color: kNeon),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
+
+// ─── Diálogo para ver nodos técnicos (hostnames de Tailscale) ─────────────
 
 // ─── Avatar generativo ────────────────────────────────────────────────────────
 class _PeerAvatar extends StatelessWidget {

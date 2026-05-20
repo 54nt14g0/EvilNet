@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../models/message.dart';
 import '../models/group.dart';
+import '../services/auth_service.dart';
 
 const int kPort = 9000;
 const _uuid = Uuid();
@@ -47,6 +48,20 @@ class PeerService {
   int get myHierarchy => _myHierarchy;
 
   // ─── Inicio ────────────────────────────────────────────────────────────────
+
+    // ─── [NUEVO] Obtener nombre para mostrar: username registrado o fallback a hostname/IP
+  String getDisplayNameForIp(String ip) {
+    // 1. Primero intenta obtener el username registrado desde AuthService
+    final registeredName = AuthService().getUsernameForIp(ip);
+    
+    // 2. Si está registrado y es diferente a la IP, úsalo
+    if (registeredName != ip) {
+      return registeredName;
+    }
+    
+    // 3. Si no está registrado, fallback al hostname de Tailscale o la IP
+    return peerNames[ip] ?? ip;
+  }
 
   Future<void> start() async {
     final prefs = await SharedPreferences.getInstance();
@@ -157,6 +172,7 @@ class PeerService {
               knownPeers.remove(ipStr);
               peerNames.remove(ipStr);
               _controller.add(PeerEvent('peer_offline', {'ip': ipStr}));
+              AuthService().syncWithNewPeer(ipStr);
             }
           }
         }

@@ -6,7 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../models/app_user.dart';
-import '../services/peer_service.dart'; 
+import '../services/peer_service.dart';
 
 const _uuid = Uuid();
 const int kAuthPort = 9001; // Puerto exclusivo para sincronización de usuarios
@@ -38,7 +38,8 @@ class AuthService {
   AppUser? _currentUser;
   int _version = 0; // Versión del archivo; se incrementa con cada cambio
   ServerSocket? _authServer;
-
+  // ─── Mapeo IP → Username ─────────────────────────────────────────────────
+  final Map<String, String> _ipToUsername = {};
   final _authController = StreamController<String>.broadcast();
 
   /// Eventos: 'users_updated', 'logged_in', 'logged_out'
@@ -49,6 +50,42 @@ class AuthService {
   bool get isLoggedIn => _currentUser != null;
 
   // ─── Inicio ───────────────────────────────────────────────────────────────
+   String getUsernameForIp(String ip) {
+    return _ipToUsername[ip] ?? ip;
+  }
+
+  /// Registra la IP actual con el username del usuario logueado
+  void registerMyIp(String ip) {
+    if (_currentUser != null) {
+      _ipToUsername[ip] = _currentUser!.username;
+      _broadcastIpMapping(ip, _currentUser!.username);
+    }
+  }
+
+  /// Envía el mapeo IP→username a todos los peers conectados
+  Future<void> _broadcastIpMapping(String ip, String username) async {
+    final payload = jsonEncode({
+      'type': 'ip_mapping',
+      'ip': ip,
+      'username': username,
+      'userId': _currentUser?.id,
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+
+    final peerIps = PeerService().knownPeers.keys.toList();
+    for (final peerIp in peerIps) {
+      try {
+        final socket = await Socket.connect(
+          peerIp,
+          kAuthPort,
+          timeout: const Duration(seconds: 3),
+        );
+        socket.add(utf8.encode(payload));
+        await socket.flush();
+        await socket.close();
+      } catch (_) {}
+    }
+  }
 
   Future<void> start(List<String> knownPeerIps) async {
     await _loadLocalUsers();
@@ -66,17 +103,24 @@ class AuthService {
         final data = jsonDecode(raw) as Map<String, dynamic>;
         _version = data['version'] as int? ?? 0;
         final list = data['users'] as List? ?? [];
-        _users = list.map((e) => AppUser.fromJson(e as Map<String, dynamic>)).toList();
+        _users = list
+            .map((e) => AppUser.fromJson(e as Map<String, dynamic>))
+            .toList();
         _ensureSeedAdmin();
       } else {
         _users = [kSeedAdmin];
         _version = 1;
         await _saveLocalUsers();
       }
+
+      // ← [AGREGA ESTO] Cargar también el mapeo IP→username
+      await _loadIpMapping();
     } catch (_) {
       _users = [kSeedAdmin];
       _version = 1;
       await _saveLocalUsers();
+      // También intentar cargar mapeo por seguridad
+      await _loadIpMapping();
     }
   }
 
@@ -103,6 +147,26 @@ class AuthService {
     await file.writeAsString(jsonEncode(data));
   }
 
+  // ─── Mapeo IP → Username: Persistencia ────────────────────────────────────
+  Future<void> _saveIpMapping() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('ip_username_mapping', jsonEncode(_ipToUsername));
+    } catch (_) {}
+  }
+
+  Future<void> _loadIpMapping() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonStr = prefs.getString('ip_username_mapping');
+      if (jsonStr != null) {
+        final mapping = jsonDecode(jsonStr) as Map<String, dynamic>;
+        _ipToUsername.addAll(mapping.map((k, v) => MapEntry(k, v as String)));
+      }
+    } catch (_) {}
+  }
+  // ──────────────────────────────────────────────────────────────────────────
+
   Future<File> _usersFile() async {
     final dir = await getApplicationDocumentsDirectory();
     return File('${dir.path}/users.json');
@@ -117,6 +181,9 @@ class AuthService {
       final found = _users.where((u) => u.id == savedId);
       if (found.isNotEmpty) {
         _currentUser = found.first;
+        if (_currentUser != null) {
+          PeerService().setMyName(_currentUser!.username);
+        }
         PeerService().setMyHierarchy(_currentUser!.jerarquia);
         _authController.add('logged_in');
       }
@@ -129,15 +196,21 @@ class AuthService {
   Future<String?> login(String username, String password) async {
     final hash = AppUser.hashPassword(password);
     final matches = _users.where(
-      (u) => u.username.toLowerCase() == username.toLowerCase() && u.passwordMd5 == hash,
+      (u) =>
+          u.username.toLowerCase() == username.toLowerCase() &&
+          u.passwordMd5 == hash,
     );
     if (matches.isEmpty) return 'Usuario o contraseña incorrectos';
 
     _currentUser = matches.first;
+    registerMyIp(PeerService().myIp);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(kLoggedUserKey, _currentUser!.id);
     _authController.add('logged_in');
+    // Sincronizar username con PeerService
+    PeerService().setMyName(_currentUser!.username);
     PeerService().setMyHierarchy(_currentUser!.jerarquia);
+
     return null;
   }
 
@@ -160,7 +233,8 @@ class AuthService {
     required String correo,
   }) async {
     if (username.trim().isEmpty) return 'El nombre de usuario es obligatorio';
-    if (password.length < 4) return 'La contraseña debe tener al menos 4 caracteres';
+    if (password.length < 4)
+      return 'La contraseña debe tener al menos 4 caracteres';
     final exists = _users.any(
       (u) => u.username.toLowerCase() == username.toLowerCase(),
     );
@@ -184,10 +258,18 @@ class AuthService {
     await _saveLocalUsers();
     _currentUser = newUser;
 
+    registerMyIp(PeerService().myIp);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(kLoggedUserKey, newUser.id);
     _authController.add('logged_in');
+
+    PeerService().setMyName(newUser.username);
     PeerService().setMyHierarchy(newUser.jerarquia);
+    final peerIps = PeerService().knownPeers.keys.toList();
+    if (peerIps.isNotEmpty) {
+      // Ignoramos errores de red para no bloquear el registro
+      unawaited(pushUsersToPeers(peerIps));
+    }
 
     return null;
   }
@@ -236,12 +318,16 @@ class AuthService {
       return 'Sin permisos suficientes';
     }
     if (newJerarquia < 1 || newJerarquia > 10) return 'Jerarquía debe ser 1–10';
-    if (targetUserId == kSeedAdmin.id) return 'No se puede modificar al admin semilla';
+    if (targetUserId == kSeedAdmin.id)
+      return 'No se puede modificar al admin semilla';
 
     final idx = _users.indexWhere((u) => u.id == targetUserId);
     if (idx == -1) return 'Usuario no encontrado';
 
-    _users[idx] = _users[idx].copyWith(jerarquia: newJerarquia, updatedAt: DateTime.now());
+    _users[idx] = _users[idx].copyWith(
+      jerarquia: newJerarquia,
+      updatedAt: DateTime.now(),
+    );
     _version++;
     await _saveLocalUsers();
     _authController.add('users_updated');
@@ -271,6 +357,21 @@ class AuthService {
       final data = jsonDecode(raw) as Map<String, dynamic>;
       final type = data['type'] as String?;
 
+      // ─── [NUEVO] Manejo de mapeo IP → Username ─────────────────────────────
+      if (type == 'ip_mapping') {
+        final remoteIp = data['ip'] as String?;
+        final remoteUsername = data['username'] as String?;
+        if (remoteIp != null && remoteUsername != null) {
+          _ipToUsername[remoteIp] = remoteUsername;
+          // Opcional: guardar en persistencia para que sobreviva a reinicios
+          _saveIpMapping();
+          // Notificar a la UI por si necesita refrescar nombres
+          _authController.add('users_updated');
+        }
+        return; // Salir, este paquete no requiere respuesta
+      }
+      // ──────────────────────────────────────────────────────────────────────
+
       if (type == 'request_users') {
         // Un peer pide el archivo de usuarios
         final response = jsonEncode({
@@ -280,7 +381,6 @@ class AuthService {
         });
         socket.add(utf8.encode(response));
         await socket.flush();
-
       } else if (type == 'users_push') {
         // Un peer empuja su versión actualizada
         final remoteVersion = data['version'] as int? ?? 0;
@@ -289,19 +389,22 @@ class AuthService {
         }
       }
     } catch (_) {
+      // Silencio elegante en errores de red
     } finally {
       await socket.close();
     }
   }
-
   // ─── Sincronización con peers ─────────────────────────────────────────────
 
   /// Al arrancar: pide users.json a todos los peers y toma la versión más nueva.
   Future<void> _syncWithPeers(List<String> peerIps) async {
     for (final ip in peerIps) {
       try {
-        final socket = await Socket.connect(ip, kAuthPort,
-            timeout: const Duration(seconds: 5));
+        final socket = await Socket.connect(
+          ip,
+          kAuthPort,
+          timeout: const Duration(seconds: 5),
+        );
         socket.add(utf8.encode(jsonEncode({'type': 'request_users'})));
         await socket.flush();
         await socket.close();
@@ -316,8 +419,11 @@ class AuthService {
 
   Future<void> _requestUsersFrom(String ip) async {
     try {
-      final socket = await Socket.connect(ip, kAuthPort,
-          timeout: const Duration(seconds: 5));
+      final socket = await Socket.connect(
+        ip,
+        kAuthPort,
+        timeout: const Duration(seconds: 5),
+      );
 
       socket.add(utf8.encode(jsonEncode({'type': 'request_users'})));
       await socket.flush();
@@ -382,8 +488,11 @@ class AuthService {
 
     for (final ip in peerIps) {
       try {
-        final socket = await Socket.connect(ip, kAuthPort,
-            timeout: const Duration(seconds: 5));
+        final socket = await Socket.connect(
+          ip,
+          kAuthPort,
+          timeout: const Duration(seconds: 5),
+        );
         socket.add(utf8.encode(payload));
         await socket.flush();
         await socket.close();

@@ -189,76 +189,76 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // ─── Diálogo para editar mensaje ────────────────────────────────────────────
   void _showEditMessageDialog(Message msg) {
-  final _ctrl = TextEditingController(text: msg.content);
+    final _ctrl = TextEditingController(text: msg.content);
 
-  showDialog(
-    context: context,
-    builder: (_) => AlertDialog(
-      backgroundColor: kDarkPanel,
-      title: const Text(
-        'EDITAR MENSAJE',
-        style: TextStyle(fontFamily: 'monospace', color: Colors.white),
-      ),
-      content: TextField(
-        controller: _ctrl,
-        style: const TextStyle(fontFamily: 'monospace', color: Colors.white),
-        decoration: InputDecoration(
-          hintText: 'Nuevo contenido',
-          hintStyle: TextStyle(color: Colors.white24),
-          filled: true,
-          fillColor: Colors.white.withOpacity(0.05),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(2),
-            borderSide: BorderSide(color: kNeon.withOpacity(0.3)),
-          ),
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: kDarkPanel,
+        title: const Text(
+          'EDITAR MENSAJE',
+          style: TextStyle(fontFamily: 'monospace', color: Colors.white),
         ),
-        maxLines: 3,
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text(
-            'Cancelar',
-            style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
+        content: TextField(
+          controller: _ctrl,
+          style: const TextStyle(fontFamily: 'monospace', color: Colors.white),
+          decoration: InputDecoration(
+            hintText: 'Nuevo contenido',
+            hintStyle: TextStyle(color: Colors.white24),
+            filled: true,
+            fillColor: Colors.white.withOpacity(0.05),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(2),
+              borderSide: BorderSide(color: kNeon.withOpacity(0.3)),
+            ),
           ),
+          maxLines: 3,
         ),
-        ElevatedButton(
-          // ← [CORREGIDO] Hacer async y recargar desde storage
-          onPressed: () async {
-            if (_ctrl.text.trim().isNotEmpty) {
-              // 1. Editar en almacenamiento local
-              await _peer.editMessageLocally(msg.id, _ctrl.text.trim());
-              
-              // 2. ← [CLAVE] Recargar TODOS los mensajes desde SharedPreferences
-              //    Esto asegura consistencia total con lo guardado
-              final updated = await _peer.loadMessages(
-                peerIp: widget.peerIp, 
-                groupId: widget.groupId,
-              );
-              
-              // 3. Actualizar UI con la lista fresca
-              if (mounted) {
-                setState(() {
-                  _messages = updated;
-                });
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text(
+              'Cancelar',
+              style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
+            ),
+          ),
+          ElevatedButton(
+            // ← [CORREGIDO] Hacer async y recargar desde storage
+            onPressed: () async {
+              if (_ctrl.text.trim().isNotEmpty) {
+                // 1. Editar en almacenamiento local
+                await _peer.editMessageLocally(msg.id, _ctrl.text.trim());
+
+                // 2. ← [CLAVE] Recargar TODOS los mensajes desde SharedPreferences
+                //    Esto asegura consistencia total con lo guardado
+                final updated = await _peer.loadMessages(
+                  peerIp: widget.peerIp,
+                  groupId: widget.groupId,
+                );
+
+                // 3. Actualizar UI con la lista fresca
+                if (mounted) {
+                  setState(() {
+                    _messages = updated;
+                  });
+                }
+
+                Navigator.pop(context);
               }
-              
-              Navigator.pop(context);
-            }
-          },
-          style: ElevatedButton.styleFrom(
-            backgroundColor: kNeon.withOpacity(0.2),
-            foregroundColor: kNeon,
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: kNeon.withOpacity(0.2),
+              foregroundColor: kNeon,
+            ),
+            child: const Text(
+              'GUARDAR',
+              style: TextStyle(fontFamily: 'monospace'),
+            ),
           ),
-          child: const Text(
-            'GUARDAR',
-            style: TextStyle(fontFamily: 'monospace'),
-          ),
-        ),
-      ],
-    ),
-  );
-}
+        ],
+      ),
+    );
+  }
 
   // ─── Confirmación para eliminar mensaje ─────────────────────────────────────
   void _showDeleteMessageConfirm(Message msg) {
@@ -402,132 +402,132 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   @override
-Widget build(BuildContext context) {
-  return Scaffold(
-    backgroundColor: kDark,
-    body: SafeArea(
-      child: Column(
-        children: [
-          _buildAppBar(),
-          if (!_initialized)
-            const Expanded(
-              child: Center(child: CircularProgressIndicator(color: kNeon)),
-            )
-          else
-            Expanded(
-              child: ListView.builder(
-                controller: _scroll,
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-                itemCount: _messages.length,
-                // ← [CORREGIDO] Ahora sí pasa el callback onLongPress
-                itemBuilder: (_, i) => _MessageBubble(
-                  msg: _messages[i], 
-                  peer: _peer,
-                  onLongPress: () => _showMessageOptions(_messages[i]),
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: kDark,
+      body: SafeArea(
+        child: Column(
+          children: [
+            _buildAppBar(),
+            if (!_initialized)
+              const Expanded(
+                child: Center(child: CircularProgressIndicator(color: kNeon)),
+              )
+            else
+              Expanded(
+                child: ListView.builder(
+                  controller: _scroll,
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                  itemCount: _messages.length,
+                  // ← [CORREGIDO] Ahora sí pasa el callback onLongPress
+                  itemBuilder: (_, i) => _MessageBubble(
+                    msg: _messages[i],
+                    peer: _peer,
+                    onLongPress: () => _showMessageOptions(_messages[i]),
+                  ),
                 ),
               ),
-            ),
-          _buildInputBar(),
-        ],
+            _buildInputBar(),
+          ],
+        ),
       ),
-    ),
-  );
-}
+    );
+  }
 
- Widget _buildAppBar() {
-  return Container(
-    padding: const EdgeInsets.fromLTRB(12, 12, 16, 12),
-    decoration: BoxDecoration(
-      color: kDarkPanel,
-      border: Border(bottom: BorderSide(color: kNeon.withOpacity(0.2))),
-    ),
-    child: Row(
-      children: [
-        GestureDetector(
-          onTap: () => Navigator.pop(context),
-          child: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              border: Border.all(color: kNeon.withOpacity(0.3)),
-              borderRadius: BorderRadius.circular(2),
-            ),
-            child: const Icon(
-              Icons.arrow_back_ios_new,
-              color: kNeon,
-              size: 14,
+  Widget _buildAppBar() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 12, 16, 12),
+      decoration: BoxDecoration(
+        color: kDarkPanel,
+        border: Border(bottom: BorderSide(color: kNeon.withOpacity(0.2))),
+      ),
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: () => Navigator.pop(context),
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                border: Border.all(color: kNeon.withOpacity(0.3)),
+                borderRadius: BorderRadius.circular(2),
+              ),
+              child: const Icon(
+                Icons.arrow_back_ios_new,
+                color: kNeon,
+                size: 14,
+              ),
             ),
           ),
-        ),
-        const SizedBox(width: 12),
-        Icon(
-          widget.isGroup ? Icons.hub : Icons.person,
-          color: kNeon.withOpacity(0.6),
-          size: 18,
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                widget.peerName.toUpperCase(),
-                style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                  letterSpacing: 2,
-                ),
-              ),
-              Text(
-                widget.isGroup
-                    ? (widget.groupId != null
-                          ? 'GRUPO PRIVADO'
-                          : 'CANAL GLOBAL · BROADCAST')
-                    : widget.peerIp ?? '',
-                style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 10,
-                  color: Colors.white38,
-                  letterSpacing: 1,
-                ),
-              ),
-            ],
-          ),
-        ),
-        
-        // ← [TEMPORAL] Botón de debug para probar el menú sin long-press
-        IconButton(
-          icon: const Icon(Icons.bug_report, color: kPink, size: 18),
-          onPressed: () {
-            print('🐛 Botón de debug presionado');
-            if (_messages.isNotEmpty) {
-              // Abre el menú con el último mensaje para probar
-              _showMessageOptions(_messages.last);
-            } else {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('No hay mensajes para probar')),
-              );
-            }
-          },
-          tooltip: 'Probar menú de opciones',
-        ),
-        
-        // Menú principal del chat (limpiar todo)
-        IconButton(
-          icon: Icon(
-            Icons.more_vert,
-            color: kNeon.withOpacity(0.7),
+          const SizedBox(width: 12),
+          Icon(
+            widget.isGroup ? Icons.hub : Icons.person,
+            color: kNeon.withOpacity(0.6),
             size: 18,
           ),
-          onPressed: _showChatOptions,
-          padding: const EdgeInsets.all(8),
-          constraints: const BoxConstraints(),
-        ),
-      ],
-    ),
-  );
-}
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  widget.peerName.toUpperCase(),
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                    letterSpacing: 2,
+                  ),
+                ),
+                Text(
+                  widget.isGroup
+                      ? (widget.groupId != null
+                            ? 'GRUPO PRIVADO'
+                            : 'CANAL GLOBAL · BROADCAST')
+                      : widget.peerIp ?? '',
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 10,
+                    color: Colors.white38,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // ← [TEMPORAL] Botón de debug para probar el menú sin long-press
+          IconButton(
+            icon: const Icon(Icons.bug_report, color: kPink, size: 18),
+            onPressed: () {
+              print('🐛 Botón de debug presionado');
+              if (_messages.isNotEmpty) {
+                // Abre el menú con el último mensaje para probar
+                _showMessageOptions(_messages.last);
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('No hay mensajes para probar')),
+                );
+              }
+            },
+            tooltip: 'Probar menú de opciones',
+          ),
+
+          // Menú principal del chat (limpiar todo)
+          IconButton(
+            icon: Icon(
+              Icons.more_vert,
+              color: kNeon.withOpacity(0.7),
+              size: 18,
+            ),
+            onPressed: _showChatOptions,
+            padding: const EdgeInsets.all(8),
+            constraints: const BoxConstraints(),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildInputBar() {
     return Container(
@@ -607,7 +607,7 @@ class _MessageBubble extends StatelessWidget {
   final VoidCallback? onLongPress;
 
   const _MessageBubble({
-    required this.msg, 
+    required this.msg,
     required this.peer,
     this.onLongPress,
   });
@@ -615,15 +615,17 @@ class _MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isMe = msg.isMe;
-    
+
+    // ← [NUEVO] Lógica para mostrar nombre SIEMPRE (propio o ajeno)
+    final displayName = isMe
+        ? (peer.myName.isNotEmpty ? peer.myName : 'TÚ')
+        : peer.getDisplayNameForIp(msg.senderIp); // ← Usa el nuevo método
+
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onLongPress: () {
         print('🔍 LONG-PRESS DETECTADO: ${msg.id}');
         if (onLongPress != null) onLongPress!();
-      },
-      onTap: () {
-        print('👆 Tap: ${msg.id}');
       },
       child: Align(
         alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
@@ -634,8 +636,12 @@ class _MessageBubble extends StatelessWidget {
             maxWidth: MediaQuery.of(context).size.width * 0.78,
           ),
           decoration: BoxDecoration(
-            color: isMe ? kNeon.withOpacity(0.12) : Colors.white.withOpacity(0.05),
-            border: Border.all(color: isMe ? kNeon.withOpacity(0.3) : Colors.white12),
+            color: isMe
+                ? kNeon.withOpacity(0.12)
+                : Colors.white.withOpacity(0.05),
+            border: Border.all(
+              color: isMe ? kNeon.withOpacity(0.3) : Colors.white12,
+            ),
             borderRadius: BorderRadius.only(
               topLeft: const Radius.circular(4),
               topRight: const Radius.circular(4),
@@ -644,29 +650,33 @@ class _MessageBubble extends StatelessWidget {
             ),
           ),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            // ← [NUEVO] Alinear contenido según el remitente
+            crossAxisAlignment: isMe
+                ? CrossAxisAlignment.end
+                : CrossAxisAlignment.start,
             children: [
-              if (!isMe)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 4),
-                  child: Text(
-                    (peer.peerNames[msg.senderIp] ?? msg.senderIp).toUpperCase(),
-                    style: TextStyle(
-                      fontFamily: 'monospace', 
-                      fontSize: 9, 
-                      color: kNeon.withOpacity(0.6), 
-                      letterSpacing: 1
-                    ),
+              // ← [MODIFICADO] Nombre siempre visible
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  displayName.toUpperCase(),
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 9,
+                    color: isMe ? kNeon : kNeon.withOpacity(0.6),
+                    letterSpacing: 1,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
+              ),
               _buildContentReadOnly(context),
               const SizedBox(height: 4),
               Text(
                 '${msg.timestamp.hour.toString().padLeft(2, '0')}:${msg.timestamp.minute.toString().padLeft(2, '0')}',
                 style: TextStyle(
-                  fontFamily: 'monospace', 
-                  fontSize: 9, 
-                  color: isMe ? kNeon.withOpacity(0.4) : Colors.white24
+                  fontFamily: 'monospace',
+                  fontSize: 9,
+                  color: isMe ? kNeon.withOpacity(0.4) : Colors.white24,
                 ),
               ),
             ],
@@ -678,30 +688,35 @@ class _MessageBubble extends StatelessWidget {
 
   // ← [NUEVO] Método que SÍ debe existir para que compile
   Widget _buildContentReadOnly(BuildContext context) {
-    const textStyle = TextStyle(fontFamily: 'monospace', color: Colors.white, fontSize: 13);
-    
+    const textStyle = TextStyle(
+      fontFamily: 'monospace',
+      color: Colors.white,
+      fontSize: 13,
+    );
+
     switch (msg.type) {
       case MessageType.text:
         return Text(msg.content, style: textStyle);
-        
+
       case MessageType.image:
         return ClipRRect(
           borderRadius: BorderRadius.circular(4),
           child: Image.file(
-            File(msg.content), 
-            height: 180, 
+            File(msg.content),
+            height: 180,
             fit: BoxFit.cover,
             errorBuilder: (_, __, ___) => Container(
               height: 180,
               color: Colors.white10,
               alignment: Alignment.center,
-              child: const Text('❌ Imagen no disponible', 
+              child: const Text(
+                '❌ Imagen no disponible',
                 style: TextStyle(fontSize: 10, color: Colors.white38),
               ),
             ),
           ),
         );
-        
+
       default:
         return Row(
           children: [
@@ -711,9 +726,9 @@ class _MessageBubble extends StatelessWidget {
               child: Text(
                 msg.fileName ?? 'Archivo',
                 style: TextStyle(
-                  fontFamily: 'monospace', 
-                  color: kNeon.withOpacity(0.8), 
-                  fontSize: 12
+                  fontFamily: 'monospace',
+                  color: kNeon.withOpacity(0.8),
+                  fontSize: 12,
                 ),
               ),
             ),
