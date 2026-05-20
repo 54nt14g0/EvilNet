@@ -3,13 +3,18 @@ import '../models/message.dart';
 import '../services/peer_service.dart';
 import 'chat_screen.dart';
 import '../models/group.dart';
+import 'package:audioplayers/audioplayers.dart';
 
-const Color kNeon = Color(0xFF00FFB2);
-const Color kPink = Color(0xFFFF2D78);
-const Color kPurple = Color(0xFF9B00FF);
-const Color kDark = Color(0xFF020A06);
-const Color kDarkPanel = Color(0xFF050F0A);
-const Color kCard = Color(0xFF0A1A10);
+const Color kNeon = Color(0xFF00FFB2); // Cian neón (principal)
+const Color kPink = Color(0xFFFF2D78); // Rosa neón (alertas)
+const Color kPurple = Color(0xFF9B00FF); // Púrpura neón (secundario)
+const Color kDark = Color(0xFF000103); // ← Fondo casi negro
+const Color kDarkPanel = Color(0xFF010305); // ← Paneles más oscuros
+const Color kCard = Color(0xFF020608); // ← Tarjetas profundas
+const Color kTextPrimary = Color(
+  0xFFE0FFFA,
+); // ← Texto blanco-cian (alto contraste)
+const Color kTextSecondary = Color(0xFF80A095); // ← Texto secundario suave
 
 class LobbyScreen extends StatefulWidget {
   const LobbyScreen({super.key});
@@ -20,12 +25,15 @@ class LobbyScreen extends StatefulWidget {
 class _LobbyScreenState extends State<LobbyScreen>
     with TickerProviderStateMixin {
   final _peer = PeerService();
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  bool _audioInitialized = false;
   late AnimationController _pulseCtrl;
   late AnimationController _scanCtrl;
 
   @override
   void initState() {
     super.initState();
+    _initAudio();
     _pulseCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2000),
@@ -42,10 +50,33 @@ class _LobbyScreenState extends State<LobbyScreen>
 
   @override
   void dispose() {
+    _audioPlayer.dispose(); // ← Liberar recursos
     _pulseCtrl.dispose();
     _scanCtrl.dispose();
     super.dispose();
   }
+
+  Future<void> _initAudio() async {
+    if (_audioInitialized) return;
+    try {
+      // Pre-carga el sonido en memoria para replay instantáneo
+      await AudioCache.instance.load('click.mp3');
+      await _audioPlayer.setVolume(0.4);
+      _audioInitialized = true;
+    } catch (_) {}
+  }
+
+  void _playClick() async {
+  try {
+    if (!_audioInitialized) await _initAudio();
+    
+    // Reinicia desde el inicio y reproduce
+    await _audioPlayer.stop(); // Detiene cualquier reproducción previa
+    await _audioPlayer.play(AssetSource('click.mp3'));
+  } catch (_) {
+    // Fallo silencioso: mejor sin sonido que con error
+  }
+}
 
   void _openBroadcastChat() {
     Navigator.push(
@@ -347,22 +378,33 @@ class _LobbyScreenState extends State<LobbyScreen>
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
       decoration: BoxDecoration(
         color: kDarkPanel,
-        border: Border(bottom: BorderSide(color: kNeon.withOpacity(0.2))),
+        border: Border(bottom: BorderSide(color: kNeon.withOpacity(0.3))),
+        boxShadow: [
+          BoxShadow(
+            color: kNeon.withOpacity(0.05),
+            blurRadius: 10,
+            spreadRadius: 0,
+          ),
+        ],
       ),
       child: Row(
         children: [
           // Back
           GestureDetector(
-            onTap: () => Navigator.pop(context),
+            onTap: () {
+              _playClick();
+              Navigator.pop(context);
+            },
             child: Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                border: Border.all(color: kNeon.withOpacity(0.3)),
+                border: Border.all(color: kNeon.withOpacity(0.4)),
                 borderRadius: BorderRadius.circular(2),
+                color: Colors.white.withOpacity(0.03),
               ),
               child: const Icon(
                 Icons.arrow_back_ios_new,
-                color: kNeon,
+                color: Color(0xFFE0FFFA), // kTextPrimary
                 size: 14,
               ),
             ),
@@ -380,8 +422,11 @@ class _LobbyScreenState extends State<LobbyScreen>
                     fontFamily: 'monospace',
                     fontSize: 20,
                     fontWeight: FontWeight.w900,
-                    color: Colors.white,
+                    color: Color(0xFFE0FFFA), // kTextPrimary
                     letterSpacing: 6,
+                    shadows: [
+                      Shadow(color: kNeon, blurRadius: 8, offset: Offset(0, 0)),
+                    ],
                   ),
                 ),
                 AnimatedBuilder(
@@ -391,7 +436,7 @@ class _LobbyScreenState extends State<LobbyScreen>
                     style: TextStyle(
                       fontFamily: 'monospace',
                       fontSize: 10,
-                      color: kNeon.withOpacity(0.4 + _pulseCtrl.value * 0.4),
+                      color: kNeon.withOpacity(0.6 + _pulseCtrl.value * 0.4),
                       letterSpacing: 1,
                     ),
                   ),
@@ -404,16 +449,16 @@ class _LobbyScreenState extends State<LobbyScreen>
           AnimatedBuilder(
             animation: _pulseCtrl,
             builder: (_, __) => Container(
-              width: 8,
-              height: 8,
+              width: 10,
+              height: 10,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: kNeon,
                 boxShadow: [
                   BoxShadow(
-                    color: kNeon.withOpacity(_pulseCtrl.value),
-                    blurRadius: 8,
-                    spreadRadius: 2,
+                    color: kNeon.withOpacity(0.8 + _pulseCtrl.value * 0.2),
+                    blurRadius: 12,
+                    spreadRadius: 3,
                   ),
                 ],
               ),
@@ -430,34 +475,38 @@ class _LobbyScreenState extends State<LobbyScreen>
         // ── Sección: GRUPOS ────────────────────────────────────────────────
         SliverToBoxAdapter(child: _buildSectionLabel('GRUPOS', Icons.hub)),
 
-        // Grupo global "Todos los nodos" (broadcast)
+        // Grupo global "Todos los nodos"
         SliverToBoxAdapter(
           child: _buildGroupCard(
             id: 'broadcast',
             name: 'Todos los nodos',
             subtitle: 'Mensaje llega a todos los peers conectados',
             icon: Icons.wifi_tethering,
-            onTap: _openBroadcastChat,
+            onTap: () {
+              _playClick(); // ← Sonido
+              _openBroadcastChat();
+            },
             isGlobal: true,
           ),
         ),
 
-        // ── [NUEVO] Botón para crear grupo (solo jerarquías 8-10) ─────────
-        // Debug temporal
+        // Botón crear grupo (solo J8-10)
         SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: Text(
-              'DEBUG: Jerarquía=${_peer.myHierarchy} | Grupos=${_peer.availableGroups.length}',
-              style: TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 10,
-                color: Colors.yellow,
-              ),
-            ),
-          ),
+          child: _peer.myHierarchy >= 8
+              ? _buildActionCard(
+                  '+ Crear grupo',
+                  'Solo jerarquías 8-10',
+                  Icons.add_circle,
+                  kNeon,
+                  () {
+                    _playClick();
+                    _showCreateGroupDialog();
+                  },
+                )
+              : _buildComingSoonCard('Crear grupo', 'Requiere jerarquía 8+'),
         ),
-        // ── [NUEVO] Lista de grupos disponibles (filtrados por jerarquía) ─
+
+        // Lista de grupos disponibles
         if (_peer.availableGroups.isNotEmpty) ...[
           const SliverToBoxAdapter(child: SizedBox(height: 12)),
           SliverToBoxAdapter(
@@ -473,7 +522,10 @@ class _LobbyScreenState extends State<LobbyScreen>
                 subtitle:
                     'Mín. J${group.minHierarchyToJoin} · ${isCreator ? 'Tu grupo' : 'Unido'}',
                 icon: isCreator ? Icons.lock : Icons.group,
-                onTap: () => _openGroupChat(group),
+                onTap: () {
+                  _playClick(); // ← Sonido
+                  _openGroupChat(group);
+                },
                 isGlobal: false,
                 onLongPress: () => _showGroupOptions(group),
                 minHierarchy: group.minHierarchyToJoin,
@@ -515,7 +567,7 @@ class _LobbyScreenState extends State<LobbyScreen>
   ) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: _HoverCard(
+      child: _InteractiveCard(
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.all(18),
@@ -576,7 +628,11 @@ class _LobbyScreenState extends State<LobbyScreen>
       padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
       child: Row(
         children: [
-          Icon(icon, size: 14, color: kNeon.withOpacity(0.5)),
+          Icon(
+            icon,
+            size: 14,
+            color: kNeon.withOpacity(0.7),
+          ), // ← Más brillante
           const SizedBox(width: 8),
           Text(
             label,
@@ -584,11 +640,12 @@ class _LobbyScreenState extends State<LobbyScreen>
               fontFamily: 'monospace',
               fontSize: 11,
               letterSpacing: 3,
-              color: kNeon.withOpacity(0.5),
+              color: kTextPrimary, // ← Alto contraste
+              shadows: [Shadow(color: kNeon.withOpacity(0.3), blurRadius: 4)],
             ),
           ),
           const SizedBox(width: 12),
-          Expanded(child: Container(height: 1, color: kNeon.withOpacity(0.1))),
+          Expanded(child: Container(height: 1, color: kNeon.withOpacity(0.2))),
         ],
       ),
     );
@@ -607,7 +664,7 @@ class _LobbyScreenState extends State<LobbyScreen>
   }) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: _HoverCard(
+      child: _InteractiveCard(
         onTap: onTap,
         onLongPress: onLongPress, // ← Nuevo
         child: Container(
@@ -762,7 +819,7 @@ class _LobbyScreenState extends State<LobbyScreen>
   Widget _buildPeerCard({required String ip, required String name}) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: _HoverCard(
+      child: _InteractiveCard(
         onTap: () => _openPeerChat(ip),
         child: Container(
           padding: const EdgeInsets.all(16),
@@ -838,29 +895,30 @@ class _LobbyScreenState extends State<LobbyScreen>
       margin: const EdgeInsets.all(20),
       padding: const EdgeInsets.all(32),
       decoration: BoxDecoration(
-        border: Border.all(color: Colors.white10),
+        border: Border.all(color: kNeon.withOpacity(0.2)),
         borderRadius: BorderRadius.circular(4),
+        color: kCard,
       ),
       child: Column(
         children: [
-          Icon(Icons.device_hub, size: 40, color: Colors.white24),
+          Icon(Icons.device_hub, size: 40, color: kNeon.withOpacity(0.6)),
           const SizedBox(height: 12),
           const Text(
             'NINGÚN NODO DETECTADO',
             style: TextStyle(
               fontFamily: 'monospace',
               fontSize: 12,
-              color: Colors.white30,
+              color: kTextPrimary, // ← Alto contraste
               letterSpacing: 2,
             ),
           ),
           const SizedBox(height: 6),
-          const Text(
+          Text(
             'Esperando peers en la red Tailscale...',
             style: TextStyle(
               fontFamily: 'monospace',
               fontSize: 10,
-              color: Colors.white24,
+              color: kTextSecondary,
             ),
           ),
         ],
@@ -909,34 +967,60 @@ class _PeerAvatar extends StatelessWidget {
   }
 }
 
-// ─── Hover card wrapper ───────────────────────────────────────────────────────
-class _HoverCard extends StatefulWidget {
+// ─── [NUEVO] Card interactivo con glow + sonido ─────────────────────────────
+class _InteractiveCard extends StatefulWidget {
   final Widget child;
   final VoidCallback onTap;
-  final VoidCallback? onLongPress; // ← Nuevo
-  const _HoverCard({
+  final VoidCallback? onLongPress;
+  final Color? glowColor;
+
+  const _InteractiveCard({
     required this.child,
     required this.onTap,
-    this.onLongPress, // ← Nuevo
+    this.onLongPress,
+    this.glowColor,
   });
+
   @override
-  State<_HoverCard> createState() => _HoverCardState();
+  State<_InteractiveCard> createState() => _InteractiveCardState();
 }
 
-class _HoverCardState extends State<_HoverCard> {
-  bool _hovered = false;
+class _InteractiveCardState extends State<_InteractiveCard> {
+  bool _isPressed = false;
+  bool _isHovered = false;
+
   @override
   Widget build(BuildContext context) {
+    final glow = widget.glowColor ?? kNeon;
+    final glowOpacity = _isPressed ? 0.9 : (_isHovered ? 0.5 : 0.2);
+
     return MouseRegion(
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
       child: GestureDetector(
-        onTap: widget.onTap,
-        onLongPress: widget.onLongPress, // ← Nuevo
-        child: AnimatedOpacity(
-          opacity: _hovered ? 0.85 : 1.0,
-          duration: const Duration(milliseconds: 120),
-          child: widget.child,
+        onTapDown: (_) => setState(() => _isPressed = true),
+        onTapUp: (_) {
+          setState(() => _isPressed = false);
+          widget.onTap(); // ← CORREGIDO: sin _playClick()
+        },
+        onTapCancel: () => setState(() => _isPressed = false),
+        onLongPress: widget.onLongPress,
+        child: AnimatedScale(
+          scale: _isPressed ? 0.98 : 1.0,
+          duration: const Duration(milliseconds: 80),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            decoration: BoxDecoration(
+              boxShadow: [
+                BoxShadow(
+                  color: glow.withOpacity(glowOpacity),
+                  blurRadius: _isPressed ? 20 : (_isHovered ? 12 : 6),
+                  spreadRadius: _isPressed ? 2 : (_isHovered ? 1 : 0),
+                ),
+              ],
+            ),
+            child: widget.child,
+          ),
         ),
       ),
     );
