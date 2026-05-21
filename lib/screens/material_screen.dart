@@ -421,7 +421,7 @@ class _MaterialScreenState extends State<MaterialScreen>
                     Icon(Icons.arrow_upward, size: 10, color: kRedGlow),
                     SizedBox(width: 4),
                     Text(
-                      'NIVEL SUP.',
+                      'RETROCEDER',
                       style: TextStyle(
                         fontFamily: 'monospace',
                         fontSize: 9,

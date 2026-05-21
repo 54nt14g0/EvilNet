@@ -6,6 +6,7 @@ import 'screens/menu_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
   runApp(const App());
 }
 

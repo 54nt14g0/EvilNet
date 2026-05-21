@@ -116,10 +116,6 @@ void initState() {
       // Serializar el contenido del editor
       final delta = jsonEncode(_quillCtrl.document.toDelta().toJson());
 
-      // Broadcast de portada si hay una nueva
-      if (_coverImagePath != null) {
-        await _service.broadcastImage(_coverImagePath!);
-      }
 
       final now = DateTime.now();
       final existing = widget.existing;

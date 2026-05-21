@@ -11,7 +11,7 @@ import '../services/auth_service.dart';
 import '../services/material_service.dart';
 import 'study_room_service.dart';
 
-const int kPort = 9000;
+const int kPort = 45000;
 const _uuid = Uuid();
 
 /// Clave especial en SharedPreferences para la ruta del video de fondo actual.
@@ -165,9 +165,12 @@ class PeerService {
         final addresses = device['addresses'] as List? ?? [];
         final name = device['hostname'] as String? ?? 'Desconocido';
         final lastSeen = device['lastSeen'] as String?;
-        final isOnline =
-            lastSeen != null &&
-            DateTime.now().difference(DateTime.parse(lastSeen)).inMinutes < 10;
+
+        bool isOnline = false;
+        if (lastSeen != null) {
+          final diff = DateTime.now().difference(DateTime.parse(lastSeen));
+          isOnline = diff.inMinutes < 10;
+        }
 
         for (final addr in addresses) {
           final ipStr = addr.toString();
@@ -175,22 +178,17 @@ class PeerService {
           if (ipStr == myIp) continue;
 
           if (isOnline) {
-            if (!knownPeers.containsKey(ipStr)) {
-              _controller.add(
-                PeerEvent('peer_online', {'ip': ipStr, 'name': name}),
-              );
-            }
+            final isNew = !knownPeers.containsKey(ipStr);
             knownPeers[ipStr] = DateTime.now();
             peerNames[ipStr] = name;
-          } else {
-            if (!knownPeers.containsKey(ipStr)) {
+
+            if (isNew) {
               _controller.add(
                 PeerEvent('peer_online', {'ip': ipStr, 'name': name}),
               );
-              // ← AÑADIR ESTAS DOS LÍNEAS:
               AuthService().syncWithNewPeer(ipStr);
               StudyRoomService().syncWithNewPeer(ipStr);
-            }
+            } 
           }
         }
       }

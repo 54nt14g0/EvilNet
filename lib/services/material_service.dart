@@ -16,7 +16,7 @@ import 'auth_service.dart';
 // PeerService usa 9000 y consume el socket completo antes de delegar.
 // Las transferencias necesitan un socket bidireccional (request → response con bytes).
 // Por eso usamos el puerto 9002 exclusivamente para MaterialService.
-const int kMaterialPort = 9002;
+const int kMaterialPort = 45002;
 const String kMaterialFilesKey = 'material_files';
 
 class MaterialService {
@@ -57,7 +57,7 @@ class MaterialService {
   Future<void> _startServer() async {
     if (_serverStarted) return;
     try {
-      _server = await ServerSocket.bind(InternetAddress.anyIPv4, kMaterialPort);
+      _server = await ServerSocket.bind(InternetAddress.anyIPv4, kMaterialPort, shared: true,);
       _serverStarted = true;
       _server!.listen(_handleConnection);
       print('✅ [MaterialService] Server listening on port $kMaterialPort');

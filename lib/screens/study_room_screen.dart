@@ -6,18 +6,19 @@ import '../services/study_room_service.dart';
 import '../services/auth_service.dart';
 import '../services/peer_service.dart';
 import 'study_topic_detail_screen.dart';
+import 'dart:async'; //
 import 'study_topic_editor_screen.dart';
 
 // ─── Paleta Cámara de Estudios ────────────────────────────────────────────────
-const Color kSRed = Color(0xFFCC0000);       // Rojo sangre principal
-const Color kSRedGlow = Color(0xFFFF1A1A);   // Rojo brillante para glows
-const Color kSRedDim = Color(0xFF4A0000);    // Rojo oscuro para fondos
-const Color kSBg = Color(0xFF050505);        // Negro casi puro
-const Color kSPanel = Color(0xFF0A0A0A);     // Panel ligeramente más claro
-const Color kSBorder = Color(0xFF1A0000);    // Borde rojo muy oscuro
-const Color kSText = Color(0xFFCCCCCC);      // Texto principal gris claro
-const Color kSTextDim = Color(0xFF666666);   // Texto secundario apagado
-const Color kSLocked = Color(0xFF1A1A1A);    // Tile bloqueado
+const Color kSRed = Color(0xFFCC0000); // Rojo sangre principal
+const Color kSRedGlow = Color(0xFFFF1A1A); // Rojo brillante para glows
+const Color kSRedDim = Color(0xFF4A0000); // Rojo oscuro para fondos
+const Color kSBg = Color(0xFF050505); // Negro casi puro
+const Color kSPanel = Color(0xFF0A0A0A); // Panel ligeramente más claro
+const Color kSBorder = Color(0xFF1A0000); // Borde rojo muy oscuro
+const Color kSText = Color(0xFFCCCCCC); // Texto principal gris claro
+const Color kSTextDim = Color(0xFF666666); // Texto secundario apagado
+const Color kSLocked = Color(0xFF1A1A1A); // Tile bloqueado
 
 class StudyRoomScreen extends StatefulWidget {
   const StudyRoomScreen({super.key});
@@ -39,6 +40,8 @@ class _StudyRoomScreenState extends State<StudyRoomScreen>
   bool _loading = true;
   bool _reorderMode = false;
 
+  StreamSubscription? _eventSub; // ← AGREGAR como campo
+
   @override
   void initState() {
     super.initState();
@@ -53,31 +56,41 @@ class _StudyRoomScreenState extends State<StudyRoomScreen>
       duration: const Duration(milliseconds: 2000),
     )..repeat(reverse: true);
 
-    _loadData();
-
-    _service.events.listen((e) {
+    // ← Listener ANTES de cargar, guardado en variable para cancelarlo
+    _eventSub = _service.events.listen((e) {
       if (!mounted) return;
       if (e.type == 'topics_updated') {
         _refreshTopics();
       }
     });
+
+    _loadData();
   }
 
   @override
   void dispose() {
+    _eventSub?.cancel(); // ← Cancelar al salir
     _scanCtrl.dispose();
     _pulseCtrl.dispose();
     super.dispose();
   }
 
   void _loadData() async {
+    // startLocal ya fue llamado desde MenuScreen
+    // Solo sincronizar con peers y mostrar datos locales
+    if (!mounted) return;
+    setState(() {
+      _sequential = _service.sequentialTopics;
+      _free = _service.freeTopics;
+      _loading = false;
+    });
+    // Sync en background
     final peerIps = _peer.knownPeers.keys.toList();
-    await _service.start(peerIps);
-    _refreshTopics();
-    setState(() => _loading = false);
+    _service.startSync(peerIps);
   }
 
   void _refreshTopics() {
+    if (!mounted) return;
     setState(() {
       _sequential = _service.sequentialTopics;
       _free = _service.freeTopics;
@@ -89,24 +102,23 @@ class _StudyRoomScreenState extends State<StudyRoomScreen>
   bool get _canCreate => _myHierarchy >= 9;
 
   bool _canView(StudyTopic t) => _service.canViewTopic(
-        topicId: t.id,
-        userId: _myUserId,
-        userHierarchy: _myHierarchy,
-      );
+    topicId: t.id,
+    userId: _myUserId,
+    userHierarchy: _myHierarchy,
+  );
 
   String? _lockReason(StudyTopic t) => _service.lockReason(
-        topicId: t.id,
-        userId: _myUserId,
-        userHierarchy: _myHierarchy,
-      );
+    topicId: t.id,
+    userId: _myUserId,
+    userHierarchy: _myHierarchy,
+  );
 
   void _openTopic(StudyTopic topic) {
-    if (_lockReason(topic) != null) return;
+    // Admin puede abrir cualquier tema aunque esté bloqueado
+    if (_lockReason(topic) != null && !_canCreate) return;
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => StudyTopicDetailScreen(topic: topic),
-      ),
+      MaterialPageRoute(builder: (_) => StudyTopicDetailScreen(topic: topic)),
     ).then((_) => _refreshTopics());
   }
 
@@ -124,7 +136,8 @@ class _StudyRoomScreenState extends State<StudyRoomScreen>
       context: context,
       builder: (_) => _ConfirmDialog(
         title: 'ELIMINAR TEMA',
-        message: '¿Eliminar "${topic.title}"?\nEsta acción no se puede deshacer.',
+        message:
+            '¿Eliminar "${topic.title}"?\nEsta acción no se puede deshacer.',
       ),
     );
     if (confirm == true) {
@@ -152,9 +165,8 @@ class _StudyRoomScreenState extends State<StudyRoomScreen>
           Positioned.fill(
             child: AnimatedBuilder(
               animation: _scanCtrl,
-              builder: (_, __) => CustomPaint(
-                painter: _SRScanlinePainter(_scanCtrl.value),
-              ),
+              builder: (_, __) =>
+                  CustomPaint(painter: _SRScanlinePainter(_scanCtrl.value)),
             ),
           ),
           // Contenido principal
@@ -162,11 +174,7 @@ class _StudyRoomScreenState extends State<StudyRoomScreen>
             child: Column(
               children: [
                 _buildHeader(),
-                Expanded(
-                  child: _loading
-                      ? _buildLoading()
-                      : _buildContent(),
-                ),
+                Expanded(child: _loading ? _buildLoading() : _buildContent()),
               ],
             ),
           ),
@@ -278,10 +286,7 @@ class _StudyRoomScreenState extends State<StudyRoomScreen>
           SizedBox(
             width: 32,
             height: 32,
-            child: CircularProgressIndicator(
-              color: kSRed,
-              strokeWidth: 1,
-            ),
+            child: CircularProgressIndicator(color: kSRed, strokeWidth: 1),
           ),
           const SizedBox(height: 16),
           const Text(
@@ -315,9 +320,7 @@ class _StudyRoomScreenState extends State<StudyRoomScreen>
               subtitle: 'Comenta cada tema para desbloquear el siguiente',
             ),
             const SizedBox(height: 16),
-            _reorderMode
-                ? _buildReorderableGrid()
-                : _buildGrid(_sequential),
+            _reorderMode ? _buildReorderableGrid() : _buildGrid(_sequential),
             const SizedBox(height: 32),
           ],
           // ── Sección libre ───────────────────────────────────────────────
@@ -339,11 +342,7 @@ class _StudyRoomScreenState extends State<StudyRoomScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            Icons.visibility_off_outlined,
-            color: kSRedDim,
-            size: 48,
-          ),
+          Icon(Icons.visibility_off_outlined, color: kSRedDim, size: 48),
           const SizedBox(height: 16),
           const Text(
             'SIN CONTENIDO AÚN',
@@ -492,10 +491,8 @@ class _TopicTileState extends State<_TopicTile>
   bool _hovered = false;
 
   bool get _locked => widget.lockReason != null;
-  bool get _unlocked =>
-      widget.progress?.hasUnlocked(widget.topic.id) ?? false;
-  bool get _pending =>
-      widget.progress?.hasPending(widget.topic.id) ?? false;
+  bool get _unlocked => widget.progress?.hasUnlocked(widget.topic.id) ?? false;
+  bool get _pending => widget.progress?.hasPending(widget.topic.id) ?? false;
 
   @override
   void initState() {
@@ -531,17 +528,11 @@ class _TopicTileState extends State<_TopicTile>
             final hv = _hoverCtrl.value;
             return Container(
               decoration: BoxDecoration(
-                color: _locked
-                    ? kSLocked
-                    : Color.lerp(kSPanel, kSBorder, hv),
+                color: _locked ? kSLocked : Color.lerp(kSPanel, kSBorder, hv),
                 border: Border.all(
                   color: _locked
                       ? kSBorder
-                      : Color.lerp(
-                          kSRed.withOpacity(0.25),
-                          kSRedGlow,
-                          hv,
-                        )!,
+                      : Color.lerp(kSRed.withOpacity(0.25), kSRedGlow, hv)!,
                   width: _locked ? 1 : (1 + hv),
                 ),
                 borderRadius: BorderRadius.circular(3),
@@ -557,9 +548,7 @@ class _TopicTileState extends State<_TopicTile>
               ),
               child: Stack(
                 children: [
-                  // Imagen de portada o placeholder
                   _buildCover(),
-                  // Overlay oscuro
                   Positioned.fill(
                     child: DecoratedBox(
                       decoration: BoxDecoration(
@@ -578,7 +567,6 @@ class _TopicTileState extends State<_TopicTile>
                       ),
                     ),
                   ),
-                  // Número de orden (si es secuencial)
                   if (widget.topic.isSequential)
                     Positioned(
                       top: 8,
@@ -591,16 +579,12 @@ class _TopicTileState extends State<_TopicTile>
                         decoration: BoxDecoration(
                           color: Colors.black.withOpacity(0.7),
                           border: Border.all(
-                            color: _locked
-                                ? kSBorder
-                                : kSRed.withOpacity(0.5),
+                            color: _locked ? kSBorder : kSRed.withOpacity(0.5),
                           ),
                           borderRadius: BorderRadius.circular(2),
                         ),
                         child: Text(
-                          (widget.topic.order + 1)
-                              .toString()
-                              .padLeft(2, '0'),
+                          (widget.topic.order + 1).toString().padLeft(2, '0'),
                           style: TextStyle(
                             fontFamily: 'monospace',
                             fontSize: 9,
@@ -610,14 +594,12 @@ class _TopicTileState extends State<_TopicTile>
                         ),
                       ),
                     ),
-                  // Badge de estado
-                  Positioned(
-                    top: 8,
-                    right: 8,
-                    child: _buildStatusBadge(),
-                  ),
-                  // Menú edición (solo J9+, esquina sup derecha cuando hover)
-                  if (widget.canEdit && _hovered && !_locked)
+                  Positioned(top: 8, right: 8, child: _buildStatusBadge()),
+                  Positioned(bottom: 0, left: 0, right: 0, child: _buildInfo()),
+                  // ← overlay ANTES que el EditMenu para que no lo tape
+                  if (_locked) _buildLockedOverlay(),
+                  // ← EditMenu SIEMPRE al final del Stack para estar encima de todo
+                  if (widget.canEdit && _hovered)
                     Positioned(
                       top: 28,
                       right: 4,
@@ -626,15 +608,6 @@ class _TopicTileState extends State<_TopicTile>
                         onDelete: widget.onDelete,
                       ),
                     ),
-                  // Contenido inferior
-                  Positioned(
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    child: _buildInfo(),
-                  ),
-                  // Overlay candado si bloqueado
-                  if (_locked) _buildLockedOverlay(),
                 ],
               ),
             );
@@ -653,9 +626,7 @@ class _TopicTileState extends State<_TopicTile>
           child: Image.file(
             File(cover),
             fit: BoxFit.cover,
-            color: _locked
-                ? Colors.black.withOpacity(0.5)
-                : null,
+            color: _locked ? Colors.black.withOpacity(0.5) : null,
             colorBlendMode: _locked ? BlendMode.darken : null,
           ),
         ),
@@ -705,10 +676,7 @@ class _TopicTileState extends State<_TopicTile>
           border: Border.all(color: Colors.orange.withOpacity(0.4)),
           borderRadius: BorderRadius.circular(2),
         ),
-        child: const Text(
-          '⏳',
-          style: TextStyle(fontSize: 9),
-        ),
+        child: const Text('⏳', style: TextStyle(fontSize: 9)),
       );
     }
     return const SizedBox.shrink();
@@ -776,18 +744,12 @@ class _TopicTileState extends State<_TopicTile>
       child: GestureDetector(
         onTap: () => _showLockReason(context),
         child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(3),
-          ),
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(3)),
           child: Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(
-                  Icons.lock,
-                  color: kSTextDim.withOpacity(0.5),
-                  size: 28,
-                ),
+                Icon(Icons.lock, color: kSTextDim.withOpacity(0.5), size: 28),
                 const SizedBox(height: 6),
                 Text(
                   'BLOQUEADO',
@@ -962,8 +924,11 @@ class _EditMenuBtn extends StatelessWidget {
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
-  const _EditMenuBtn(
-      {required this.icon, required this.color, required this.onTap});
+  const _EditMenuBtn({
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1018,10 +983,7 @@ class _ConfirmDialog extends StatelessWidget {
           onPressed: () => Navigator.pop(context, false),
           child: const Text(
             'CANCELAR',
-            style: TextStyle(
-              fontFamily: 'monospace',
-              color: kSTextDim,
-            ),
+            style: TextStyle(fontFamily: 'monospace', color: kSTextDim),
           ),
         ),
         TextButton(
@@ -1113,10 +1075,7 @@ class _TilePlaceholderPainter extends CustomPainter {
     )..layout();
     tp.paint(
       canvas,
-      Offset(
-        (size.width - tp.width) / 2,
-        (size.height - tp.height) / 2 - 16,
-      ),
+      Offset((size.width - tp.width) / 2, (size.height - tp.height) / 2 - 16),
     );
   }
 
