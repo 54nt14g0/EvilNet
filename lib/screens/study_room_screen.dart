@@ -41,6 +41,7 @@ class _StudyRoomScreenState extends State<StudyRoomScreen>
   bool _reorderMode = false;
 
   StreamSubscription? _eventSub; // ← AGREGAR como campo
+  // REEMPLAZAR _loadData() completo Y agregar listener en initState
 
   @override
   void initState() {
@@ -56,11 +57,21 @@ class _StudyRoomScreenState extends State<StudyRoomScreen>
       duration: const Duration(milliseconds: 2000),
     )..repeat(reverse: true);
 
-    // ← Listener ANTES de cargar, guardado en variable para cancelarlo
     _eventSub = _service.events.listen((e) {
       if (!mounted) return;
       if (e.type == 'topics_updated') {
         _refreshTopics();
+      }
+    });
+
+    // ← NUEVO: escuchar cuando aparece un peer para sincronizar
+    _peer.events.listen((e) {
+      if (!mounted) return;
+      if (e.type == 'peer_online') {
+        final ip = (e.data as Map)['ip'] as String?;
+        if (ip != null) {
+          _service.syncWithNewPeer(ip).then((_) => _refreshTopics());
+        }
       }
     });
 
@@ -75,18 +86,26 @@ class _StudyRoomScreenState extends State<StudyRoomScreen>
     super.dispose();
   }
 
+  // DESPUÉS:
   void _loadData() async {
-    // startLocal ya fue llamado desde MenuScreen
-    // Solo sincronizar con peers y mostrar datos locales
     if (!mounted) return;
+
+    // Mostrar datos locales inmediatamente
     setState(() {
       _sequential = _service.sequentialTopics;
       _free = _service.freeTopics;
       _loading = false;
     });
-    // Sync en background
+
+    // Intentar sincronizar con peers ya conocidos
     final peerIps = _peer.knownPeers.keys.toList();
-    _service.startSync(peerIps);
+    if (peerIps.isNotEmpty) {
+      for (final ip in peerIps) {
+        _service.syncWithNewPeer(ip);
+      }
+    }
+    // Si knownPeers está vacío, el listener peer_online lo manejará
+    // cuando _discoverPeers() termine (unos segundos después)
   }
 
   void _refreshTopics() {

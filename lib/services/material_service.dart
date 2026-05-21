@@ -13,9 +13,9 @@ import 'peer_service.dart';
 import 'auth_service.dart';
 
 // ─── IMPORTANTE: Puerto SEPARADO para transferencias de archivos ──────────────
-// PeerService usa 9000 y consume el socket completo antes de delegar.
+// PeerService usa 45000 y consume el socket completo antes de delegar.
 // Las transferencias necesitan un socket bidireccional (request → response con bytes).
-// Por eso usamos el puerto 9002 exclusivamente para MaterialService.
+// Por eso usamos el puerto 45002 exclusivamente para MaterialService.
 const int kMaterialPort = 45002;
 const String kMaterialFilesKey = 'material_files';
 
@@ -53,20 +53,26 @@ class MaterialService {
     _syncWithPeers();
   }
 
-  // ─── SERVIDOR PROPIO (puerto 9002) ────────────────────────────────────────
+  // ─── SERVIDOR PROPIO (puerto 45002) ───────────────────────────────────────
   Future<void> _startServer() async {
     if (_serverStarted) return;
     try {
-      _server = await ServerSocket.bind(InternetAddress.anyIPv4, kMaterialPort, shared: true,);
+      _server = await ServerSocket.bind(
+        InternetAddress.anyIPv4,
+        kMaterialPort,
+        shared: true,
+      );
       _serverStarted = true;
       _server!.listen(_handleConnection);
       print('✅ [MaterialService] Server listening on port $kMaterialPort');
     } catch (e) {
       print('❌ [MaterialService] Failed to bind port $kMaterialPort: $e');
-      // Si el puerto está ocupado, intentar con un delay
       await Future.delayed(const Duration(seconds: 2));
       try {
-        _server = await ServerSocket.bind(InternetAddress.anyIPv4, kMaterialPort);
+        _server = await ServerSocket.bind(
+          InternetAddress.anyIPv4,
+          kMaterialPort,
+        );
         _serverStarted = true;
         _server!.listen(_handleConnection);
         print('✅ [MaterialService] Server started on retry');
@@ -79,20 +85,15 @@ class MaterialService {
   // ─── MANEJO DE CONEXIONES ENTRANTES ──────────────────────────────────────
   void _handleConnection(Socket socket) async {
     try {
-      // Leer todos los bytes del request
       final chunks = <int>[];
       await for (final chunk in socket) {
         chunks.addAll(chunk);
-        // Para requests de descarga, el cliente cierra escritura cuando termina
-        // pero deja el socket abierto para recibir la respuesta.
-        // Por eso necesitamos detectar el fin del request.
-        // Usamos el mismo protocolo de 4 bytes que PeerService.
         if (chunks.length >= 4) {
           final expectedLen = ByteData.view(
             Uint8List.fromList(chunks.sublist(0, 4)).buffer,
           ).getInt32(0, Endian.big);
           if (chunks.length >= 4 + expectedLen) {
-            break; // Tenemos el header completo, procesarlo
+            break;
           }
         }
       }
@@ -113,7 +114,8 @@ class MaterialService {
       }
 
       final headerBytes = chunks.sublist(4, 4 + headerLen);
-      final header = jsonDecode(utf8.decode(headerBytes)) as Map<String, dynamic>;
+      final header =
+          jsonDecode(utf8.decode(headerBytes)) as Map<String, dynamic>;
       final type = header['type'] as String?;
 
       print('[MaterialService] 📥 Received packet type: $type');
@@ -173,14 +175,14 @@ class MaterialService {
     }
   }
 
-  // ─── Recibir broadcasts desde PeerService (puerto 9000) ──────────────────
+  // ─── Recibir broadcasts desde PeerService (puerto 45000) ──────────────────
   /// Llamado por PeerService cuando llega un 'material_broadcast'
   void handleIncomingBroadcast(Map<String, dynamic> data) {
     print('[MaterialService] 📨 Incoming broadcast via PeerService');
     _handleFileBroadcast(data);
   }
 
-  // ─── MANEJO DE REQUEST_FILE (puerto 9002) ─────────────────────────────────
+  // ─── MANEJO DE REQUEST_FILE (puerto 45002) ────────────────────────────────
   Future<void> _handleFileRequest(
     Socket socket,
     Map<String, dynamic> data,
@@ -200,10 +202,11 @@ class MaterialService {
         file = _files.firstWhere((f) => f.id == fileId);
       } catch (_) {
         print('[MaterialService] ❌ File not found: $fileId');
-        // Enviar respuesta de error
-        final errorHeader = jsonEncode({'type': 'file_not_found', 'fileId': fileId});
+        final errorHeader =
+            jsonEncode({'type': 'file_not_found', 'fileId': fileId});
         final errorBytes = utf8.encode(errorHeader);
-        final lenBytes = ByteData(4)..setInt32(0, errorBytes.length, Endian.big);
+        final lenBytes = ByteData(4)
+          ..setInt32(0, errorBytes.length, Endian.big);
         socket.add(lenBytes.buffer.asUint8List());
         socket.add(errorBytes);
         await socket.flush();
@@ -212,10 +215,16 @@ class MaterialService {
       }
 
       if (!file.isDownloaded || file.filePath == null) {
-        print('[MaterialService] ⚠️ File not downloaded locally: ${file.name}');
-        final errorHeader = jsonEncode({'type': 'file_not_available', 'fileId': fileId});
+        print(
+          '[MaterialService] ⚠️ File not downloaded locally: ${file.name}',
+        );
+        final errorHeader = jsonEncode({
+          'type': 'file_not_available',
+          'fileId': fileId,
+        });
         final errorBytes = utf8.encode(errorHeader);
-        final lenBytes = ByteData(4)..setInt32(0, errorBytes.length, Endian.big);
+        final lenBytes = ByteData(4)
+          ..setInt32(0, errorBytes.length, Endian.big);
         socket.add(lenBytes.buffer.asUint8List());
         socket.add(errorBytes);
         await socket.flush();
@@ -226,14 +235,24 @@ class MaterialService {
       final fileObj = File(file.filePath!);
       if (!await fileObj.exists()) {
         print('[MaterialService] ❌ File missing on disk: ${file.filePath}');
+        // ── FIX: el archivo no existe en disco, limpiar estado local ─────────
+        final idx = _files.indexWhere((f) => f.id == fileId);
+        if (idx != -1) {
+          _files[idx] = _files[idx].copyWith(
+            isDownloaded: false,
+            filePath: null,
+          );
+          await _saveFiles();
+        }
         await socket.close();
         return;
       }
 
       final bytes = await fileObj.readAsBytes();
-      print('[MaterialService] 📦 Sending ${file.name} (${bytes.length} bytes)...');
+      print(
+        '[MaterialService] 📦 Sending ${file.name} (${bytes.length} bytes)...',
+      );
 
-      // Respuesta con protocolo de 4 bytes
       final responseHeader = jsonEncode({
         'type': 'file_response',
         'fileId': fileId,
@@ -242,11 +261,12 @@ class MaterialService {
       });
 
       final headerBytes = utf8.encode(responseHeader);
-      final lenBytes = ByteData(4)..setInt32(0, headerBytes.length, Endian.big);
+      final lenBytes = ByteData(4)
+        ..setInt32(0, headerBytes.length, Endian.big);
 
-      socket.add(lenBytes.buffer.asUint8List()); // 4 bytes longitud
-      socket.add(headerBytes);                   // JSON header
-      socket.add(bytes);                         // Contenido del archivo
+      socket.add(lenBytes.buffer.asUint8List());
+      socket.add(headerBytes);
+      socket.add(bytes);
       await socket.flush();
       await socket.close();
 
@@ -260,24 +280,41 @@ class MaterialService {
     }
   }
 
-  // ─── MANEJO DE SYNC_REQUEST (puerto 9002) ────────────────────────────────
+  // ─── MANEJO DE SYNC_REQUEST (puerto 45002) ────────────────────────────────
+  // ── FIX: enriquecer respuesta con myIp en archivos que tenemos descargados ─
   Future<void> _handleSyncRequest(Socket socket) async {
     try {
       print('[MaterialService] 🔄 Handling sync request');
+
+      // Incluir myIp en availableInPeers de cada archivo que tenemos en disco
+      final enrichedFiles = _files.map((f) {
+        if (f.isDownloaded &&
+            f.filePath != null &&
+            !f.availableInPeers.contains(_peer.myIp)) {
+          return f.copyWith(
+            availableInPeers: [...f.availableInPeers, _peer.myIp],
+          );
+        }
+        return f;
+      }).toList();
+
       final responseData = {
         'type': 'sync_response',
-        'files': _files.map((f) => f.toJson()).toList(),
+        'files': enrichedFiles.map((f) => f.toJson()).toList(),
       };
 
       final responseBytes = utf8.encode(jsonEncode(responseData));
-      final lenBytes = ByteData(4)..setInt32(0, responseBytes.length, Endian.big);
+      final lenBytes = ByteData(4)
+        ..setInt32(0, responseBytes.length, Endian.big);
 
       socket.add(lenBytes.buffer.asUint8List());
       socket.add(responseBytes);
       await socket.flush();
       await socket.close();
 
-      print('[MaterialService] ✅ Sync response sent (${_files.length} files)');
+      print(
+        '[MaterialService] ✅ Sync response sent (${enrichedFiles.length} files)',
+      );
     } catch (e) {
       print('[MaterialService] ❌ Error handling sync request: $e');
       try {
@@ -296,20 +333,29 @@ class MaterialService {
       }
 
       final newFile = MaterialFile.fromJson(fileJson);
-      print('[MaterialService] 📄 Broadcast received: ${newFile.name} '
-          '(available in: ${newFile.availableInPeers})');
+      print(
+        '[MaterialService] 📄 Broadcast received: ${newFile.name} '
+        '(available in: ${newFile.availableInPeers})',
+      );
 
-      // Verificar que haya peers de donde descargar
       if (newFile.type != MaterialFileType.folder &&
           newFile.availableInPeers.isEmpty) {
-        print('[MaterialService] ⚠️ No peers available for: ${newFile.name}');
+        print(
+          '[MaterialService] ⚠️ No peers available for: ${newFile.name}',
+        );
         return;
       }
 
       final existingIndex = _files.indexWhere((f) => f.id == newFile.id);
       if (existingIndex != -1) {
-        // Actualizar metadata pero preservar estado de descarga local
         final existing = _files[existingIndex];
+
+        // ── FIX: fusionar availableInPeers en lugar de reemplazar ─────────────
+        final mergedPeers = {
+          ...existing.availableInPeers,
+          ...newFile.availableInPeers,
+        }.toList();
+
         _files[existingIndex] = MaterialFile(
           id: newFile.id,
           name: newFile.name,
@@ -321,40 +367,47 @@ class MaterialService {
           fileSize: newFile.fileSize,
           filePath: existing.filePath,
           isDownloaded: existing.isDownloaded,
-          availableInPeers: newFile.availableInPeers,
+          availableInPeers: mergedPeers, // ← fusionado
         );
         print('[MaterialService] 🔄 Updated existing file: ${newFile.name}');
       } else {
-        // Archivo nuevo: agregar como no descargado
-        _files.add(MaterialFile(
-          id: newFile.id,
-          name: newFile.name,
-          type: newFile.type,
-          parentId: newFile.parentId,
-          uploadedBy: newFile.uploadedBy,
-          uploadedByName: newFile.uploadedByName,
-          uploadedAt: newFile.uploadedAt,
-          fileSize: newFile.fileSize,
-          filePath: null,
-          isDownloaded: false,
-          availableInPeers: newFile.availableInPeers,
-        ));
+        _files.add(
+          MaterialFile(
+            id: newFile.id,
+            name: newFile.name,
+            type: newFile.type,
+            parentId: newFile.parentId,
+            uploadedBy: newFile.uploadedBy,
+            uploadedByName: newFile.uploadedByName,
+            uploadedAt: newFile.uploadedAt,
+            fileSize: newFile.fileSize,
+            filePath: null,
+            isDownloaded: false,
+            availableInPeers: newFile.availableInPeers,
+          ),
+        );
         print('[MaterialService] ➕ Added new file: ${newFile.name}');
       }
 
       await _saveFiles();
       if (!_disposed) _controller.add('files_updated');
 
-      // Auto-descarga: solo para archivos (no carpetas)
+      // Auto-descarga: solo para archivos no descargados (no carpetas)
       if (newFile.type != MaterialFileType.folder) {
-        print('[MaterialService] ⏳ Scheduling auto-download for: ${newFile.name}');
-        // Delay para que el servidor del admin esté listo para servir
-        Future.delayed(const Duration(seconds: 1), () async {
-          if (!_disposed) {
-            print('[MaterialService] 🚀 Auto-downloading: ${newFile.name}');
-            await downloadFile(newFile.id);
-          }
-        });
+        final idx = _files.indexWhere((f) => f.id == newFile.id);
+        if (idx != -1 && !_files[idx].isDownloaded) {
+          print(
+            '[MaterialService] ⏳ Scheduling auto-download for: ${newFile.name}',
+          );
+          Future.delayed(const Duration(seconds: 1), () async {
+            if (!_disposed) {
+              print(
+                '[MaterialService] 🚀 Auto-downloading: ${newFile.name}',
+              );
+              await downloadFile(newFile.id);
+            }
+          });
+        }
       }
     } catch (e, stack) {
       print('[MaterialService] ❌ Error handling broadcast: $e');
@@ -380,14 +433,12 @@ class MaterialService {
         timeout: const Duration(seconds: 8),
       );
 
-      // Enviar sync_request con protocolo de 4 bytes
       final reqBytes = utf8.encode(jsonEncode({'type': 'sync_request'}));
       final lenBytes = ByteData(4)..setInt32(0, reqBytes.length, Endian.big);
       socket.add(lenBytes.buffer.asUint8List());
       socket.add(reqBytes);
       await socket.flush();
 
-      // Leer respuesta
       final allChunks = <int>[];
       await for (final chunk in socket) {
         allChunks.addAll(chunk);
@@ -403,35 +454,60 @@ class MaterialService {
       if (allChunks.length < 4 + headerLen) return;
 
       final headerBytes = allChunks.sublist(4, 4 + headerLen);
-      final data = jsonDecode(utf8.decode(headerBytes)) as Map<String, dynamic>;
+      final data =
+          jsonDecode(utf8.decode(headerBytes)) as Map<String, dynamic>;
 
       if (data['type'] != 'sync_response') return;
 
-      final remoteFiles = (data['files'] as List? ?? [])
-          .map((j) => MaterialFile.fromJson(j as Map<String, dynamic>))
-          .toList();
+      final remoteFiles =
+          (data['files'] as List? ?? [])
+              .map(
+                (j) => MaterialFile.fromJson(j as Map<String, dynamic>),
+              )
+              .toList();
 
       print('[MaterialService] 📋 Got ${remoteFiles.length} files from $ip');
 
       bool changed = false;
       for (final remoteFile in remoteFiles) {
-        final existing = _files.where((f) => f.id == remoteFile.id).toList();
-        if (existing.isEmpty) {
-          _files.add(MaterialFile(
-            id: remoteFile.id,
-            name: remoteFile.name,
-            type: remoteFile.type,
-            parentId: remoteFile.parentId,
-            uploadedBy: remoteFile.uploadedBy,
-            uploadedByName: remoteFile.uploadedByName,
-            uploadedAt: remoteFile.uploadedAt,
-            fileSize: remoteFile.fileSize,
-            filePath: null,
-            isDownloaded: false,
-            availableInPeers: remoteFile.availableInPeers,
-          ));
+        final existingList =
+            _files.where((f) => f.id == remoteFile.id).toList();
+
+        if (existingList.isEmpty) {
+          // Archivo nuevo: agregar con los peers que lo tienen
+          _files.add(
+            MaterialFile(
+              id: remoteFile.id,
+              name: remoteFile.name,
+              type: remoteFile.type,
+              parentId: remoteFile.parentId,
+              uploadedBy: remoteFile.uploadedBy,
+              uploadedByName: remoteFile.uploadedByName,
+              uploadedAt: remoteFile.uploadedAt,
+              fileSize: remoteFile.fileSize,
+              filePath: null,
+              isDownloaded: false,
+              availableInPeers: remoteFile.availableInPeers,
+            ),
+          );
           changed = true;
           print('[MaterialService] ➕ Synced new file: ${remoteFile.name}');
+        } else {
+          // ── FIX: archivo existente → fusionar availableInPeers ───────────────
+          final existing = existingList.first;
+          final idx = _files.indexWhere((f) => f.id == remoteFile.id);
+          final mergedPeers = {
+            ...existing.availableInPeers,
+            ...remoteFile.availableInPeers,
+          }.toList();
+
+          if (mergedPeers.length != existing.availableInPeers.length) {
+            _files[idx] = existing.copyWith(availableInPeers: mergedPeers);
+            changed = true;
+            print(
+              '[MaterialService] 🔗 Merged peers for: ${remoteFile.name} → $mergedPeers',
+            );
+          }
         }
       }
 
@@ -439,9 +515,10 @@ class MaterialService {
         await _saveFiles();
         if (!_disposed) _controller.add('files_updated');
 
-        // Auto-descargar archivos nuevos encontrados en sync
-        for (final f in _files.where((f) =>
-            !f.isDownloaded && f.type != MaterialFileType.folder)) {
+        // Auto-descargar archivos no descargados encontrados en sync
+        for (final f in _files.where(
+          (f) => !f.isDownloaded && f.type != MaterialFileType.folder,
+        )) {
           Future.delayed(const Duration(seconds: 1), () {
             if (!_disposed) downloadFile(f.id);
           });
@@ -487,10 +564,12 @@ class MaterialService {
     // Manejar nombres duplicados
     String finalName = fileName;
     int counter = 1;
-    while (_files.any((f) =>
-        f.parentId == (parentId.isEmpty ? null : parentId) &&
-        f.name == finalName &&
-        f.type != MaterialFileType.folder)) {
+    while (_files.any(
+      (f) =>
+          f.parentId == (parentId.isEmpty ? null : parentId) &&
+          f.name == finalName &&
+          f.type != MaterialFileType.folder,
+    )) {
       final lastDot = fileName.lastIndexOf('.');
       final String nameBase, ext;
       if (lastDot > 0 && lastDot < fileName.length - 1) {
@@ -504,8 +583,9 @@ class MaterialService {
       counter++;
     }
 
-    // Guardar localmente
-    final dir = await _getMaterialDirectory(parentId.isEmpty ? null : parentId);
+    final dir = await _getMaterialDirectory(
+      parentId.isEmpty ? null : parentId,
+    );
     final destPath = '${dir.path}/$finalName';
     await fileObj.copy(destPath);
 
@@ -520,7 +600,7 @@ class MaterialService {
       fileSize: fileSize,
       filePath: destPath,
       isDownloaded: true,
-      availableInPeers: [_peer.myIp], // ← IP del admin que sube
+      availableInPeers: [_peer.myIp],
     );
 
     _files.add(newFile);
@@ -528,7 +608,6 @@ class MaterialService {
 
     print('[MaterialService] ✅ File saved locally: $finalName');
 
-    // Broadcast metadata a todos los peers (vía PeerService puerto 9000)
     await _broadcastFile(newFile);
 
     if (!_disposed) _controller.add('files_updated');
@@ -544,10 +623,12 @@ class MaterialService {
 
     String finalName = folderName;
     int counter = 1;
-    while (_files.any((f) =>
-        f.parentId == (parentId.isEmpty ? null : parentId) &&
-        f.name == finalName &&
-        f.type == MaterialFileType.folder)) {
+    while (_files.any(
+      (f) =>
+          f.parentId == (parentId.isEmpty ? null : parentId) &&
+          f.name == finalName &&
+          f.type == MaterialFileType.folder,
+    )) {
       finalName = '${folderName}_$counter';
       counter++;
     }
@@ -572,15 +653,14 @@ class MaterialService {
     print('[MaterialService] ✅ Folder created: $finalName');
   }
 
-  // ─── BROADCAST DE METADATA (vía PeerService, puerto 9000) ─────────────────
+  // ─── BROADCAST DE METADATA (vía PeerService, puerto 45000) ────────────────
   Future<void> _broadcastFile(MaterialFile file) async {
-    final payload = {
-      'type': 'material_broadcast',
-      'file': file.toJson(),
-    };
+    final payload = {'type': 'material_broadcast', 'file': file.toJson()};
 
     final peers = _peer.knownPeers.keys.toList();
-    print('[MaterialService] 📡 Broadcasting ${file.name} to ${peers.length} peers');
+    print(
+      '[MaterialService] 📡 Broadcasting ${file.name} to ${peers.length} peers',
+    );
 
     for (final ip in peers) {
       if (ip == _peer.myIp) continue;
@@ -593,7 +673,8 @@ class MaterialService {
     }
   }
 
-  // ─── DOWNLOAD (se conecta al puerto 9002 del admin) ───────────────────────
+  // ─── DOWNLOAD ────────────────────────────────────────────────────────────
+  // ── FIX PRINCIPAL: fallback a knownPeers + registrar myIp al completar ────
   Future<void> downloadFile(String fileId) async {
     print('[Download] Starting download for fileId: $fileId');
 
@@ -605,13 +686,18 @@ class MaterialService {
 
     final file = _files[fileIndex];
 
+    // Verificar si ya está descargado y el archivo existe en disco
     if (file.isDownloaded && file.filePath != null) {
       if (await File(file.filePath!).exists()) {
         print('[Download] ✅ Already downloaded: ${file.name}');
         return;
       }
-      // El archivo fue eliminado del disco, resetear estado
+      // El archivo fue eliminado del disco — resetear estado antes de reintentar
+      print(
+        '[Download] ⚠️ File was deleted from disk, resetting state: ${file.name}',
+      );
       _files[fileIndex] = file.copyWith(isDownloaded: false, filePath: null);
+      await _saveFiles();
     }
 
     if (file.type == MaterialFileType.folder) {
@@ -619,13 +705,27 @@ class MaterialService {
       return;
     }
 
-    // Filtrar peers que NO somos nosotros
-    final peersWithFile = file.availableInPeers
+    // ── FIX: construir lista de peers candidatos con fallback ─────────────────
+    // 1. Primero intentar con los peers declarados en availableInPeers
+    List<String> peersWithFile = file.availableInPeers
         .where((ip) => ip != _peer.myIp)
         .toList();
 
+    // 2. Si está vacío o todos son yo mismo, usar TODOS los peers conocidos
+    //    como fallback — cualquier peer pudo haberlo descargado ya
     if (peersWithFile.isEmpty) {
-      print('[Download] ❌ No peers available. availableInPeers: ${file.availableInPeers}, myIp: ${_peer.myIp}');
+      peersWithFile = _peer.knownPeers.keys
+          .where((ip) => ip != _peer.myIp)
+          .toList();
+      print(
+        '[Download] ⚠️ availableInPeers vacío, usando knownPeers como fallback: $peersWithFile',
+      );
+    }
+
+    if (peersWithFile.isEmpty) {
+      print(
+        '[Download] ❌ No hay peers disponibles en la red para: ${file.name}',
+      );
       return;
     }
 
@@ -643,20 +743,19 @@ class MaterialService {
 
         print('[Download] ✅ Connected to $ip');
 
-        // Enviar request con protocolo de 4 bytes
         final requestJson = jsonEncode({
           'type': 'request_file',
           'fileId': fileId,
         });
         final requestBytes = utf8.encode(requestJson);
-        final lenBytes = ByteData(4)..setInt32(0, requestBytes.length, Endian.big);
+        final lenBytes = ByteData(4)
+          ..setInt32(0, requestBytes.length, Endian.big);
         socket.add(lenBytes.buffer.asUint8List());
         socket.add(requestBytes);
         await socket.flush();
 
         print('[Download] 📤 Request sent, waiting for response...');
 
-        // Leer TODA la respuesta
         final allChunks = <int>[];
         await for (final chunk in socket) {
           allChunks.addAll(chunk);
@@ -666,7 +765,7 @@ class MaterialService {
         print('[Download] 📥 Received ${allChunks.length} total bytes');
 
         if (allChunks.length < 4) {
-          print('[Download] ❌ Response too short');
+          print('[Download] ❌ Response too short from $ip, trying next peer');
           continue;
         }
 
@@ -675,27 +774,44 @@ class MaterialService {
         ).getInt32(0, Endian.big);
 
         if (allChunks.length < 4 + headerLen) {
-          print('[Download] ❌ Incomplete header (need ${4 + headerLen}, got ${allChunks.length})');
+          print(
+            '[Download] ❌ Incomplete header from $ip (need ${4 + headerLen}, got ${allChunks.length})',
+          );
           continue;
         }
 
         final headerBytes = allChunks.sublist(4, 4 + headerLen);
-        final header = jsonDecode(utf8.decode(headerBytes)) as Map<String, dynamic>;
+        final header =
+            jsonDecode(utf8.decode(headerBytes)) as Map<String, dynamic>;
 
         final responseType = header['type'] as String?;
-        if (responseType != 'file_response') {
-          print('[Download] ❌ Unexpected response: $responseType');
+
+        // El peer nos dijo que no tiene el archivo — continuar con el siguiente
+        if (responseType == 'file_not_found' ||
+            responseType == 'file_not_available') {
+          print(
+            '[Download] ⚠️ Peer $ip respondió $responseType, trying next',
+          );
           continue;
         }
 
-        final fileBytes = Uint8List.fromList(allChunks.sublist(4 + headerLen));
+        if (responseType != 'file_response') {
+          print('[Download] ❌ Unexpected response from $ip: $responseType');
+          continue;
+        }
+
+        final fileBytes = Uint8List.fromList(
+          allChunks.sublist(4 + headerLen),
+        );
         final fileName = header['fileName'] as String;
         final expectedSize = header['fileSize'] as int? ?? fileBytes.length;
 
-        print('[Download] 📦 File: $fileName, received: ${fileBytes.length} bytes, expected: $expectedSize');
+        print(
+          '[Download] 📦 File: $fileName, received: ${fileBytes.length} bytes, expected: $expectedSize',
+        );
 
         if (fileBytes.isEmpty) {
-          print('[Download] ❌ Received empty file');
+          print('[Download] ❌ Received empty file from $ip');
           continue;
         }
 
@@ -706,7 +822,13 @@ class MaterialService {
 
         print('[Download] 💾 Saved to: $destPath');
 
-        // Actualizar estado
+        // ── FIX: agregar myIp a availableInPeers al descargarlo exitosamente ──
+        final updatedPeers = {
+          ...file.availableInPeers,
+          ip, // confirmar que este peer SÍ lo tenía
+          _peer.myIp, // ahora yo también lo tengo
+        }.toList();
+
         _files[fileIndex] = MaterialFile(
           id: file.id,
           name: file.name,
@@ -718,14 +840,18 @@ class MaterialService {
           fileSize: fileBytes.length,
           filePath: destPath,
           isDownloaded: true,
-          availableInPeers: file.availableInPeers,
+          availableInPeers: updatedPeers, // ← lista enriquecida
         );
 
         await _saveFiles();
         if (!_disposed) _controller.add('files_updated');
 
-        print('[Download] 🎉 SUCCESS: ${file.name}');
-        return; // ← Descarga exitosa, salir
+        // ── FIX: propagar a la red que ahora yo también tengo el archivo ───────
+        // Esto actualiza availableInPeers en todos los peers
+        _broadcastFile(_files[fileIndex]);
+
+        print('[Download] 🎉 SUCCESS: ${file.name} from $ip');
+        return; // Descarga exitosa
 
       } catch (e, stack) {
         print('[Download] ❌ Failed from $ip: $e');
@@ -748,7 +874,6 @@ class MaterialService {
     _files[idx] = _files[idx].copyWith(name: newName);
     await _saveFiles();
 
-    // Broadcast la actualización
     await _broadcastFile(_files[idx]);
 
     if (!_disposed) _controller.add('files_updated');
@@ -758,13 +883,10 @@ class MaterialService {
   Future<void> deleteFile(String fileId, DeleteMode mode) async {
     final user = _auth.currentUser;
     if (mode == DeleteMode.forEveryone) {
-      // Solo jerarquía >= 7 puede eliminar para todos
       if (user == null || user.jerarquia < 7) return;
     }
-    // DeleteMode.onlyForMe: cualquier usuario puede
 
     if (mode == DeleteMode.forEveryone) {
-      // Notificar a todos los peers que eliminen el archivo
       final payload = {
         'type': 'material_delete',
         'fileId': fileId,
@@ -777,7 +899,6 @@ class MaterialService {
       }
     }
 
-    // Eliminar localmente
     final idx = _files.indexWhere((f) => f.id == fileId);
     if (idx == -1) return;
 
@@ -791,7 +912,9 @@ class MaterialService {
       }
       _files.removeAt(idx);
     } else {
-      // Solo yo: marcar como no descargado pero mantener metadata
+      // ── FIX: borrado local — solo eliminar archivo del disco y marcar
+      // isDownloaded=false, pero CONSERVAR availableInPeers intacto
+      // para que el peer pueda re-descargarlo en cualquier momento.
       final file = _files[idx];
       if (file.filePath != null) {
         try {
@@ -799,7 +922,16 @@ class MaterialService {
           if (await fileObj.exists()) await fileObj.delete();
         } catch (_) {}
       }
-      _files[idx] = _files[idx].copyWith(isDownloaded: false, filePath: null);
+      // copyWith sin tocar availableInPeers → se preserva automáticamente
+      _files[idx] = _files[idx].copyWith(
+        isDownloaded: false,
+        filePath: null,
+        // availableInPeers NO se modifica — queda disponible para re-descarga
+      );
+
+      print(
+        '[Delete] 🗑️ Local delete: ${file.name}, availableInPeers preserved: ${_files[idx].availableInPeers}',
+      );
     }
 
     await _saveFiles();
@@ -807,7 +939,6 @@ class MaterialService {
   }
 
   // ─── Manejar eliminación recibida desde un peer ───────────────────────────
-  /// Llamado por PeerService cuando llega un 'material_delete'
   Future<void> handleIncomingDelete(Map<String, dynamic> data) async {
     final fileId = data['fileId'] as String?;
     if (fileId == null) return;
@@ -850,7 +981,6 @@ class MaterialService {
       }
       return folderDir;
     } catch (_) {
-      // Si no encontramos la carpeta padre, usar el directorio base
       return materialDir;
     }
   }
@@ -859,14 +989,11 @@ class MaterialService {
     return _files.where((f) => f.parentId == parentId).toList();
   }
 
-  /// Llamar esto solo cuando la app ENTERA cierra (ej: desde main.dart en dispose).
-  /// NUNCA llamarlo desde una pantalla individual — MaterialService es un singleton.
+  /// Llamar esto solo cuando la app ENTERA cierra.
+  /// NUNCA llamarlo desde una pantalla individual.
   void disposeCompletely() {
     _disposed = true;
     _server?.close();
     _controller.close();
   }
-
-  // dispose() intencionalmente NO existe aquí para evitar que una
-  // pantalla destruya el singleton accidentalmente.
 }

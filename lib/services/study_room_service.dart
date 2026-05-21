@@ -96,32 +96,42 @@ class StudyRoomService {
     _emit();
   }
 
-  // DESPUÉS — dos métodos separados
   Future<void> startLocal() async {
-    debugPrint('🔴🔴🔴 [StudyRoom] startLocal called, _started=$_started');
+    print('🟡 [StudyRoom] startLocal called, _started=$_started');
     if (_started) {
+      print('🟡 [StudyRoom] startLocal: already started, skipping');
       _emit();
       return;
     }
     _started = true;
     await _loadLocal();
+    print(
+      '🟡 [StudyRoom] After _loadLocal: ${_topics.length} topics in memory',
+    );
     await _startServer();
-    debugPrint('🔴🔴🔴 [StudyRoom] startLocal COMPLETE');
+    print('🟡 [StudyRoom] startLocal COMPLETE');
     _emit();
   }
 
   // Agregar como campo en StudyRoomService
   Timer? _syncTimer;
-
+  // REEMPLAZAR startSync completo:
   Future<void> startSync(List<String> knownPeerIps) async {
-    // Esperar 5 segundos para que el peer tenga tiempo de iniciar su servidor
-    await Future.delayed(const Duration(seconds: 5));
-    await _syncWithPeers(knownPeerIps);
+    print('🟡 [StudyRoom] startSync called with peers: $knownPeerIps');
+    if (knownPeerIps.isNotEmpty) {
+      await _syncWithPeers(knownPeerIps);
+    } else {
+      print('🔴 [StudyRoom] startSync: NO PEERS to sync with');
+    }
 
-    if (_syncTimer != null) return;
+    if (_syncTimer != null) {
+      print('🟡 [StudyRoom] startSync: timer already running');
+      return;
+    }
 
     _syncTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
       final peers = List<String>.from(PeerService().knownPeers.keys);
+      print('🟡 [StudyRoom] periodic sync with ${peers.length} peers');
       if (peers.isNotEmpty) await _syncWithPeers(peers);
     });
   }
@@ -205,6 +215,7 @@ class StudyRoomService {
 
   /// Llama esto cuando un peer nuevo se conecta o para re-sincronizar.
   Future<void> syncWithNewPeer(String ip) async {
+    print('🟡 [StudyRoom] syncWithNewPeer($ip) called');
     await _requestDataFrom(ip);
   }
 
@@ -447,34 +458,41 @@ class StudyRoomService {
   }
 
   Future<void> _requestDataFrom(String ip) async {
-    try {
-      print('[StudyRoom] Requesting data from $ip:$kStudyPort...');
-      final socket = await Socket.connect(
-        ip,
-        kStudyPort,
-        timeout: const Duration(seconds: 5),
-      );
-      socket.add(utf8.encode(jsonEncode({'type': 'request_data'})));
-      await socket.flush();
+  print('🔵 [StudyRoom] _requestDataFrom($ip) START');
+  try {
+    final socket = await Socket.connect(
+      ip,
+      kStudyPort,
+      timeout: const Duration(seconds: 5),
+    );
+    print('🔵 [StudyRoom] Connected to $ip:$kStudyPort');
 
-      final chunks = <int>[];
-      await for (final chunk in socket) {
-        chunks.addAll(chunk);
-      }
-      if (chunks.isEmpty) {
-        print('[StudyRoom] Empty response from $ip');
-        return;
-      }
+    socket.add(utf8.encode(jsonEncode({'type': 'request_data'})));
+    await socket.flush();
+    await socket.close(); // ← ESTE ES EL FIX: cerrar escritura para que peer A sepa que terminamos
 
-      final data = jsonDecode(utf8.decode(chunks)) as Map<String, dynamic>;
-      print(
-        '[StudyRoom] Got ${(data['topics'] as List?)?.length ?? 0} topics from $ip',
-      );
-      await _mergeFullPayload(data);
-    } catch (e) {
-      print('[StudyRoom] Failed to request from $ip: $e');
+    print('🔵 [StudyRoom] Sent request_data to $ip');
+
+    final chunks = <int>[];
+    await for (final chunk in socket) {
+      chunks.addAll(chunk);
     }
+    print('🔵 [StudyRoom] Received ${chunks.length} bytes from $ip');
+
+    if (chunks.isEmpty) {
+      print('🔴 [StudyRoom] EMPTY response from $ip');
+      return;
+    }
+
+    final data = jsonDecode(utf8.decode(chunks)) as Map<String, dynamic>;
+    final topicCount = (data['topics'] as List?)?.length ?? 0;
+    print('🔵 [StudyRoom] Parsed response: $topicCount topics from $ip');
+    await _mergeFullPayload(data);
+    print('🔵 [StudyRoom] Merge complete. Total topics now: ${_topics.length}');
+  } catch (e) {
+    print('🔴 [StudyRoom] _requestDataFrom($ip) FAILED: $e');
   }
+}
 
   Map<String, dynamic> _buildFullPayload() => {
     'type': 'full_push',
@@ -486,6 +504,10 @@ class StudyRoomService {
 
   Future<void> _mergeFullPayload(Map<String, dynamic> data) async {
     bool changed = false;
+    final incomingTopics = (data['topics'] as List? ?? []);
+    print(
+      '🔵 [StudyRoom] _mergeFullPayload: ${incomingTopics.length} topics incoming, currently have ${_topics.length}',
+    );
 
     // Al hacer merge de temas, si coverImagePath viene de otro peer
     // y no existe localmente, limpiarla para evitar broken images.
@@ -494,6 +516,10 @@ class StudyRoomService {
     for (final t in (data['topics'] as List? ?? [])) {
       final remote = StudyTopic.fromJson(t as Map<String, dynamic>);
       final local = _topics[remote.id];
+      print(
+        '🔵 [StudyRoom]   topic "${remote.title}": local=${local?.updatedAt}, remote=${remote.updatedAt}, willUpdate=${local == null || remote.updatedAt.isAfter(local.updatedAt)}',
+      );
+      //
       if (local == null || remote.updatedAt.isAfter(local.updatedAt)) {
         // Si la ruta de portada no existe localmente, limpiarla
         String? validCoverPath = remote.coverImagePath;
@@ -523,16 +549,6 @@ class StudyRoomService {
           createdAt: remote.createdAt,
           updatedAt: remote.updatedAt,
         );
-        changed = true;
-      }
-    }
-
-    // Merge temas
-    for (final t in (data['topics'] as List? ?? [])) {
-      final remote = StudyTopic.fromJson(t as Map<String, dynamic>);
-      final local = _topics[remote.id];
-      if (local == null || remote.updatedAt.isAfter(local.updatedAt)) {
-        _topics[remote.id] = remote;
         changed = true;
       }
     }
