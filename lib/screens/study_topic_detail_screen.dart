@@ -610,24 +610,25 @@ class _StudyTopicDetailScreenState extends State<StudyTopicDetailScreen>
   }
 
   Widget? _buildCommentFab() {
-    if (_hasCommented && !widget.topic.requiresApproval) return null;
-    if (_hasPending) return null;
+  // Solo ocultar si tiene comentario pendiente de aprobación
+  // (no tiene sentido enviar otro mientras espera)
+  if (_hasPending) return null;
 
-    return FloatingActionButton.extended(
-      onPressed: () => setState(() => _showCommentForm = true),
-      backgroundColor: kSRedDim,
-      label: const Text(
-        'COMENTAR',
-        style: TextStyle(
-          fontFamily: 'monospace',
-          fontSize: 11,
-          color: kSRedGlow,
-          letterSpacing: 2,
-        ),
+  return FloatingActionButton.extended(
+    onPressed: () => setState(() => _showCommentForm = true),
+    backgroundColor: kSRedDim,
+    label: const Text(
+      'COMENTAR',
+      style: TextStyle(
+        fontFamily: 'monospace',
+        fontSize: 11,
+        color: kSRedGlow,
+        letterSpacing: 2,
       ),
-      icon: const Icon(Icons.edit_outlined, color: kSRedGlow, size: 16),
-    );
-  }
+    ),
+    icon: const Icon(Icons.edit_outlined, color: kSRedGlow, size: 16),
+  );
+}
 
   Widget _buildCommentForm() {
     return Container(

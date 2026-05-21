@@ -848,42 +848,61 @@ class StudyRoomService {
 
   // FIX 2: Eliminar comentario propio (broadcast a todos)
   Future<void> deleteComment({
-    required String commentId,
-    required String requestingUserId,
-    required int requestingUserHierarchy,
-  }) async {
-    final comment = _comments[commentId];
-    if (comment == null) return;
+  required String commentId,
+  required String requestingUserId,
+  required int requestingUserHierarchy,
+}) async {
+  final comment = _comments[commentId];
+  if (comment == null) return;
 
-    // Solo el autor puede eliminar su comentario, o un admin (J9+)
-    final isAuthor = comment.userId == requestingUserId;
-    final isAdmin = requestingUserHierarchy >= 9;
-    if (!isAuthor && !isAdmin) return;
+  final isAuthor = comment.userId == requestingUserId;
+  final isAdmin = requestingUserHierarchy >= 9;
+  if (!isAuthor && !isAdmin) return;
 
-    await _deleteCommentLocal(commentId);
-    await _broadcastPacket({
-      'type': 'comment_delete',
-      'commentId': commentId,
-    });
+  final topicId = comment.topicId;
+  final userId = comment.userId;
+  final username = comment.username;
+
+  await _deleteCommentLocal(commentId);
+  await _broadcastPacket({
+    'type': 'comment_delete',
+    'commentId': commentId,
+  });
+
+  // Verificar si el usuario todavía tiene algún comentario válido en ese tema
+  // (aprobado, o enviado si el tema no requiere aprobación)
+  final topic = _topics[topicId];
+  final remainingComments = _comments.values.where((c) {
+    if (c.topicId != topicId || c.userId != userId) return false;
+    if (topic?.requiresApproval == true) {
+      return c.status == CommentStatus.approved;
+    }
+    return true; // si no requiere aprobación, cualquier comentario cuenta
+  }).toList();
+
+  if (remainingComments.isEmpty) {
+    // Ya no tiene comentarios válidos → revertir progreso
+    await _unmarkTopicCommented(userId, username, topicId);
   }
+}
 
-  Future<void> approveComment(String commentId) async {
-    final comment = _comments[commentId];
-    if (comment == null) return;
+Future<void> approveComment(String commentId) async {
+  final comment = _comments[commentId];
+  if (comment == null) return;
 
-    final approved = comment.copyWith(status: CommentStatus.approved);
-    await _upsertCommentLocal(approved);
-    await _broadcastPacket({
-      'type': 'comment_upsert',
-      'comment': approved.toJson(),
-    });
+  final approved = comment.copyWith(status: CommentStatus.approved);
+  await _upsertCommentLocal(approved);
+  await _broadcastPacket({
+    'type': 'comment_upsert',
+    'comment': approved.toJson(),
+  });
 
-    await _markTopicCommented(
-      comment.userId,
-      comment.username,
-      comment.topicId,
-    );
-  }
+  await _markTopicCommented(
+    comment.userId,
+    comment.username,
+    comment.topicId,
+  );
+}
 
   // ─── Progreso ─────────────────────────────────────────────────────────────
 
@@ -946,6 +965,32 @@ class StudyRoomService {
       'progress': updated.toJson(),
     });
   }
+
+  Future<void> _unmarkTopicCommented(
+  String userId,
+  String username,
+  String topicId,
+) async {
+  final current = _progress[userId];
+  if (current == null) return;
+
+  // Solo revertir si efectivamente estaba desbloqueado o pendiente
+  if (!current.hasUnlocked(topicId) && !current.hasPending(topicId)) return;
+
+  final newUnlocked = {...current.unlockedTopicIds}..remove(topicId);
+  final newPending = {...current.pendingTopicIds}..remove(topicId);
+
+  final updated = current.copyWith(
+    unlockedTopicIds: newUnlocked,
+    pendingTopicIds: newPending,
+    updatedAt: DateTime.now(),
+  );
+  await _upsertProgressLocal(updated);
+  await _broadcastPacket({
+    'type': 'progress_update',
+    'progress': updated.toJson(),
+  });
+}
 
   // ─── Lógica de acceso ─────────────────────────────────────────────────────
 
