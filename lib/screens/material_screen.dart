@@ -216,7 +216,7 @@ class _MaterialScreenState extends State<MaterialScreen>
             ),
             child: const Center(
               child: Text(
-                'U',
+                '§',
                 style: TextStyle(
                   color: kCold,
                   fontSize: 16,

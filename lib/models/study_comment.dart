@@ -17,6 +17,9 @@ class StudyComment {
   final CommentStatus status;
   final DateTime timestamp;
 
+  // FIX 2: indica si el comentario fue editado después de enviarse
+  final bool isEdited;
+
   const StudyComment({
     required this.id,
     required this.topicId,
@@ -26,17 +29,23 @@ class StudyComment {
     required this.imagePaths,
     required this.status,
     required this.timestamp,
+    this.isEdited = false,
   });
 
-  StudyComment copyWith({CommentStatus? status}) => StudyComment(
+  StudyComment copyWith({
+    CommentStatus? status,
+    String? content,
+    bool? isEdited,
+  }) => StudyComment(
         id: id,
         topicId: topicId,
         userId: userId,
         username: username,
-        content: content,
+        content: content ?? this.content,
         imagePaths: imagePaths,
         status: status ?? this.status,
         timestamp: timestamp,
+        isEdited: isEdited ?? this.isEdited,
       );
 
   bool get isPending => status == CommentStatus.pending;
@@ -51,6 +60,7 @@ class StudyComment {
         'imagePaths': imagePaths,
         'status': status.name,
         'timestamp': timestamp.toIso8601String(),
+        'isEdited': isEdited,
       };
 
   factory StudyComment.fromJson(Map<String, dynamic> j) => StudyComment(
@@ -64,5 +74,6 @@ class StudyComment {
           j['status'] as String? ?? 'pending',
         ),
         timestamp: DateTime.parse(j['timestamp'] as String),
+        isEdited: j['isEdited'] as bool? ?? false,
       );
 }

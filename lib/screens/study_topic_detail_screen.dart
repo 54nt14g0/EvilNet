@@ -45,6 +45,10 @@ class _StudyTopicDetailScreenState extends State<StudyTopicDetailScreen>
   bool _showCommentForm = false;
   bool _sendingComment = false;
 
+  // FIX 2: estado de edición
+  String? _editingCommentId;
+  final _editCtrl = TextEditingController();
+
   final _commentCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
   List<String> _attachedImages = [];
@@ -61,48 +65,47 @@ class _StudyTopicDetailScreenState extends State<StudyTopicDetailScreen>
       _service.progressForUser(_myUserId)?.hasPending(widget.topic.id) ?? false;
 
   @override
-void initState() {
-  super.initState();
+  void initState() {
+    super.initState();
 
-  _scanCtrl = AnimationController(
-    vsync: this,
-    duration: const Duration(seconds: 5),
-  )..repeat();
+    _scanCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 5),
+    )..repeat();
 
-  // Inicializar el editor Quill con el contenido del tema
-  try {
-    final delta = widget.topic.contentDelta;
-    if (delta.isNotEmpty && delta != '[]') {
-      final doc = quill.Document.fromJson(jsonDecode(delta) as List<dynamic>);
-      _quillCtrl = quill.QuillController(
-        document: doc,
-        selection: const TextSelection.collapsed(offset: 0),
-      );
-    } else {
+    try {
+      final delta = widget.topic.contentDelta;
+      if (delta.isNotEmpty && delta != '[]') {
+        final doc = quill.Document.fromJson(jsonDecode(delta) as List<dynamic>);
+        _quillCtrl = quill.QuillController(
+          document: doc,
+          selection: const TextSelection.collapsed(offset: 0),
+        );
+      } else {
+        _quillCtrl = quill.QuillController.basic();
+      }
+    } catch (_) {
       _quillCtrl = quill.QuillController.basic();
     }
-  } catch (_) {
-    _quillCtrl = quill.QuillController.basic();
+
+    _quillCtrl.readOnly = true;
+
+    _loadComments();
+
+    _service.events.listen((e) {
+      if (!mounted) return;
+      if (e.type == 'comments_updated') {
+        _loadComments();
+      }
+    });
   }
-
-  // Poner en modo solo lectura después de construir el controller
-  _quillCtrl.readOnly = true;
-
-  _loadComments();
-
-  _service.events.listen((e) {
-    if (!mounted) return;
-    if (e.type == 'comments_updated') {
-      _loadComments();
-    }
-  });
-}
 
   @override
   void dispose() {
     _scanCtrl.dispose();
     _quillCtrl.dispose();
     _commentCtrl.dispose();
+    _editCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
   }
@@ -138,7 +141,6 @@ void initState() {
         _sendingComment = false;
       });
 
-      // Si requiere aprobación, mostrar aviso
       if (widget.topic.requiresApproval) {
         _showSnack('Tu comentario está pendiente de aprobación');
       } else {
@@ -148,6 +150,92 @@ void initState() {
       setState(() => _sendingComment = false);
       _showSnack('Error al enviar comentario');
     }
+  }
+
+  // FIX 2: Confirmar y ejecutar eliminación de comentario
+  Future<void> _confirmDeleteComment(StudyComment comment) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: kSPanel,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(3),
+          side: BorderSide(color: kSRed.withOpacity(0.3)),
+        ),
+        title: const Text(
+          'ELIMINAR COMENTARIO',
+          style: TextStyle(
+            fontFamily: 'monospace',
+            fontSize: 12,
+            color: kSRedGlow,
+            letterSpacing: 2,
+          ),
+        ),
+        content: const Text(
+          'Esta acción se propagará a todos los peers.\n¿Continuar?',
+          style: TextStyle(
+            fontFamily: 'monospace',
+            fontSize: 12,
+            color: kSText,
+            height: 1.5,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text(
+              'CANCELAR',
+              style: TextStyle(fontFamily: 'monospace', color: kSTextDim),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              'ELIMINAR',
+              style: TextStyle(
+                fontFamily: 'monospace',
+                color: kSRedGlow,
+                letterSpacing: 1,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      await _service.deleteComment(
+        commentId: comment.id,
+        requestingUserId: _myUserId,
+        requestingUserHierarchy: _myHierarchy,
+      );
+      _showSnack('Comentario eliminado');
+    }
+  }
+
+  // FIX 2: Iniciar modo edición de un comentario
+  void _startEditComment(StudyComment comment) {
+    setState(() {
+      _editingCommentId = comment.id;
+      _editCtrl.text = comment.content;
+      _showCommentForm = false;
+    });
+  }
+
+  // FIX 2: Guardar edición del comentario
+  Future<void> _saveEditComment() async {
+    final newContent = _editCtrl.text.trim();
+    if (newContent.isEmpty || _editingCommentId == null) return;
+
+    await _service.editComment(
+      commentId: _editingCommentId!,
+      newContent: newContent,
+      requestingUserId: _myUserId,
+    );
+
+    setState(() => _editingCommentId = null);
+    _editCtrl.clear();
+    _showSnack('Comentario actualizado');
   }
 
   // ─── Aprobar comentario (J9+) ─────────────────────────────────────────────
@@ -227,14 +315,20 @@ void initState() {
                     ),
                   ),
                 ),
-                // Barra de comentario fija abajo
-                if (_showCommentForm) _buildCommentForm(),
+                // FIX 2: formulario de edición o de nuevo comentario
+                if (_editingCommentId != null)
+                  _buildEditCommentForm()
+                else if (_showCommentForm)
+                  _buildCommentForm(),
               ],
             ),
           ),
         ],
       ),
-      floatingActionButton: !_showCommentForm ? _buildCommentFab() : null,
+      floatingActionButton:
+          (_showCommentForm || _editingCommentId != null)
+              ? null
+              : _buildCommentFab(),
     );
   }
 
@@ -277,7 +371,6 @@ void initState() {
               ),
             ),
           ),
-          // Badge comentado
           if (_hasCommented)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
@@ -373,25 +466,26 @@ void initState() {
     );
   }
 
- Widget _buildContent() {
-  return Container(
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
-      color: kSPanel,
-      border: Border.all(color: kSBorder),
-      borderRadius: BorderRadius.circular(3),
-    ),
-    child: quill.QuillEditor.basic(
-      controller: _quillCtrl,
-      config: const quill.QuillEditorConfig(
-        showCursor: false,
-        autoFocus: false,
-        expands: false,
-        padding: EdgeInsets.zero,
+  Widget _buildContent() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: kSPanel,
+        border: Border.all(color: kSBorder),
+        borderRadius: BorderRadius.circular(3),
       ),
-    ),
-  );
-}
+      child: quill.QuillEditor.basic(
+        controller: _quillCtrl,
+        config: const quill.QuillEditorConfig(
+          showCursor: false,
+          autoFocus: false,
+          expands: false,
+          padding: EdgeInsets.zero,
+        ),
+      ),
+    );
+  }
+
   Widget _buildCommentsSection() {
     final visibleComments = _canApprove
         ? _comments
@@ -407,7 +501,6 @@ void initState() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Header
         Row(
           children: [
             const Text(
@@ -490,24 +583,34 @@ void initState() {
             ),
           )
         else
+          // FIX 2: pasar callbacks de edición/eliminación
           ...visibleComments.map(
             (c) => _CommentCard(
               comment: c,
               isMe: c.userId == _myUserId,
               canApprove: _canApprove && c.isPending,
+              // Solo el autor puede editar/eliminar el suyo;
+              // admin (J9+) también puede eliminar cualquiera
+              canEdit: c.userId == _myUserId,
+              canDelete: c.userId == _myUserId || _canApprove,
+              isBeingEdited: _editingCommentId == c.id,
               onApprove: _canApprove ? () => _approveComment(c) : null,
+              onEdit: c.userId == _myUserId
+                  ? () => _startEditComment(c)
+                  : null,
+              onDelete: (c.userId == _myUserId || _canApprove)
+                  ? () => _confirmDeleteComment(c)
+                  : null,
             ),
           ),
 
-        const SizedBox(height: 80), // Espacio para el FAB
+        const SizedBox(height: 80),
       ],
     );
   }
 
   Widget? _buildCommentFab() {
-    // No mostrar si ya comentó y no requiere aprobación
     if (_hasCommented && !widget.topic.requiresApproval) return null;
-    // No mostrar si tiene pendiente
     if (_hasPending) return null;
 
     return FloatingActionButton.extended(
@@ -541,7 +644,6 @@ void initState() {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Header
           Row(
             children: [
               const Text(
@@ -565,7 +667,6 @@ void initState() {
             ],
           ),
           const SizedBox(height: 10),
-          // Imágenes adjuntas
           if (_attachedImages.isNotEmpty) ...[
             SizedBox(
               height: 60,
@@ -610,7 +711,6 @@ void initState() {
             ),
             const SizedBox(height: 8),
           ],
-          // Campo de texto
           Container(
             decoration: BoxDecoration(
               color: kSBg,
@@ -640,7 +740,6 @@ void initState() {
           const SizedBox(height: 10),
           Row(
             children: [
-              // Adjuntar imagen
               GestureDetector(
                 onTap: _pickImage,
                 child: Container(
@@ -657,7 +756,6 @@ void initState() {
                 ),
               ),
               const Spacer(),
-              // Enviar
               GestureDetector(
                 onTap: _sendingComment ? null : _submitComment,
                 child: Container(
@@ -688,6 +786,135 @@ void initState() {
                             letterSpacing: 2,
                           ),
                         ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // FIX 2: formulario de edición de comentario
+  Widget _buildEditCommentForm() {
+    return Container(
+      padding: EdgeInsets.only(
+        left: 16,
+        right: 16,
+        top: 12,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 12,
+      ),
+      decoration: BoxDecoration(
+        color: kSPanel,
+        border: Border(
+          top: BorderSide(color: Colors.orange.withOpacity(0.5)),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.edit_outlined, color: Colors.orange, size: 13),
+              const SizedBox(width: 6),
+              const Text(
+                'EDITANDO COMENTARIO',
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 10,
+                  color: Colors.orange,
+                  letterSpacing: 2,
+                ),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => setState(() {
+                  _editingCommentId = null;
+                  _editCtrl.clear();
+                }),
+                child: const Icon(Icons.close, color: kSTextDim, size: 16),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Container(
+            decoration: BoxDecoration(
+              color: kSBg,
+              border: Border.all(color: Colors.orange.withOpacity(0.3)),
+              borderRadius: BorderRadius.circular(2),
+            ),
+            child: TextField(
+              controller: _editCtrl,
+              maxLines: 3,
+              autofocus: true,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 12,
+                color: kSText,
+              ),
+              decoration: const InputDecoration(
+                hintText: '// edita tu comentario...',
+                hintStyle: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  color: kSTextDim,
+                ),
+                contentPadding: EdgeInsets.all(12),
+                border: InputBorder.none,
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              GestureDetector(
+                onTap: () => setState(() {
+                  _editingCommentId = null;
+                  _editCtrl.clear();
+                }),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: kSBorder),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                  child: const Text(
+                    'CANCELAR',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      color: kSTextDim,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              GestureDetector(
+                onTap: _saveEditComment,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.15),
+                    border: Border.all(color: Colors.orange.withOpacity(0.5)),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                  child: const Text(
+                    'GUARDAR',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      color: Colors.orange,
+                      letterSpacing: 2,
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -743,13 +970,24 @@ class _CommentCard extends StatelessWidget {
   final StudyComment comment;
   final bool isMe;
   final bool canApprove;
+  // FIX 2: nuevos flags y callbacks
+  final bool canEdit;
+  final bool canDelete;
+  final bool isBeingEdited;
   final VoidCallback? onApprove;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
 
   const _CommentCard({
     required this.comment,
     required this.isMe,
     required this.canApprove,
+    required this.canEdit,
+    required this.canDelete,
+    required this.isBeingEdited,
     this.onApprove,
+    this.onEdit,
+    this.onDelete,
   });
 
   @override
@@ -760,17 +998,21 @@ class _CommentCard extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: isPending
-            ? Colors.orange.withOpacity(0.04)
-            : isMe
-            ? kSRedDim.withOpacity(0.3)
-            : kSPanel,
+        color: isBeingEdited
+            ? Colors.orange.withOpacity(0.05)
+            : isPending
+                ? Colors.orange.withOpacity(0.04)
+                : isMe
+                    ? kSRedDim.withOpacity(0.3)
+                    : kSPanel,
         border: Border.all(
-          color: isPending
-              ? Colors.orange.withOpacity(0.25)
-              : isMe
-              ? kSRed.withOpacity(0.25)
-              : kSBorder,
+          color: isBeingEdited
+              ? Colors.orange.withOpacity(0.5)
+              : isPending
+                  ? Colors.orange.withOpacity(0.25)
+                  : isMe
+                      ? kSRed.withOpacity(0.25)
+                      : kSBorder,
         ),
         borderRadius: BorderRadius.circular(2),
       ),
@@ -799,7 +1041,42 @@ class _CommentCard extends StatelessWidget {
                   color: kSTextDim,
                 ),
               ),
+              // FIX 2: badge "editado"
+              if (comment.isEdited) ...[
+                const SizedBox(width: 6),
+                const Text(
+                  '(editado)',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 8,
+                    color: kSTextDim,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ],
               const Spacer(),
+              // FIX 2: botones editar/eliminar para el autor
+              if (canEdit || canDelete)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (canEdit)
+                      _ActionIconBtn(
+                        icon: Icons.edit_outlined,
+                        color: Colors.orange,
+                        onTap: onEdit,
+                      ),
+                    if (canDelete) ...[
+                      const SizedBox(width: 4),
+                      _ActionIconBtn(
+                        icon: Icons.delete_outline,
+                        color: kSRedGlow,
+                        onTap: onDelete,
+                      ),
+                    ],
+                    const SizedBox(width: 4),
+                  ],
+                ),
               if (isPending)
                 Container(
                   padding: const EdgeInsets.symmetric(
@@ -913,6 +1190,34 @@ class _CommentCard extends StatelessWidget {
         '${dt.year}  '
         '${dt.hour.toString().padLeft(2, '0')}:'
         '${dt.minute.toString().padLeft(2, '0')}';
+  }
+}
+
+// FIX 2: botón de icono compacto para acciones de comentario
+class _ActionIconBtn extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final VoidCallback? onTap;
+
+  const _ActionIconBtn({
+    required this.icon,
+    required this.color,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          border: Border.all(color: color.withOpacity(0.4)),
+          borderRadius: BorderRadius.circular(2),
+        ),
+        child: Icon(icon, color: color, size: 12),
+      ),
+    );
   }
 }
 

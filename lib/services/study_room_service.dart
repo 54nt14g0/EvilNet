@@ -15,7 +15,6 @@ import 'peer_service.dart';
 const int kStudyPort = 45001;
 const _uuid = Uuid();
 
-/// Tipos de eventos que emite StudyRoomService.
 class StudyRoomEvent {
   final String type;
   final dynamic data;
@@ -23,16 +22,6 @@ class StudyRoomEvent {
 }
 
 /// Servicio P2P para la Cámara de Estudios.
-///
-/// Responsabilidades:
-///   - Persistir temas, comentarios y progreso localmente.
-///   - Sincronizar con peers al arrancar y en tiempo real.
-///   - Emitir eventos para que la UI reaccione.
-///
-/// Eventos emitidos:
-///   'topics_updated'   → data: List<StudyTopic>
-///   'comments_updated' → data: List<StudyComment> (todos los comentarios)
-///   'progress_updated' → data: Map<String, UserProgress>
 class StudyRoomService {
   static final StudyRoomService _i = StudyRoomService._();
   factory StudyRoomService() => _i;
@@ -42,8 +31,6 @@ class StudyRoomService {
 
   final Map<String, StudyTopic> _topics = {};
   final Map<String, StudyComment> _comments = {};
-
-  /// userId -> UserProgress
   final Map<String, UserProgress> _progress = {};
 
   int _version = 0;
@@ -71,9 +58,9 @@ class StudyRoomService {
         ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
   List<StudyComment> approvedCommentsForTopic(String topicId) =>
-      commentsForTopic(
-        topicId,
-      ).where((c) => c.status == CommentStatus.approved).toList();
+      commentsForTopic(topicId)
+          .where((c) => c.status == CommentStatus.approved)
+          .toList();
 
   Map<String, UserProgress> get allProgress => Map.unmodifiable(_progress);
 
@@ -81,7 +68,7 @@ class StudyRoomService {
 
   // ─── Inicio ───────────────────────────────────────────────────────────────
 
-  bool _started = false; // ← AGREGAR como campo
+  bool _started = false;
 
   Future<void> start(List<String> knownPeerIps) async {
     if (_started) {
@@ -105,17 +92,14 @@ class StudyRoomService {
     }
     _started = true;
     await _loadLocal();
-    print(
-      '🟡 [StudyRoom] After _loadLocal: ${_topics.length} topics in memory',
-    );
+    print('🟡 [StudyRoom] After _loadLocal: ${_topics.length} topics in memory');
     await _startServer();
     print('🟡 [StudyRoom] startLocal COMPLETE');
     _emit();
   }
 
-  // Agregar como campo en StudyRoomService
   Timer? _syncTimer;
-  // REEMPLAZAR startSync completo:
+
   Future<void> startSync(List<String> knownPeerIps) async {
     print('🟡 [StudyRoom] startSync called with peers: $knownPeerIps');
     if (knownPeerIps.isNotEmpty) {
@@ -171,12 +155,78 @@ class StudyRoomService {
         final prog = UserProgress.fromJson(p as Map<String, dynamic>);
         _progress[prog.userId] = prog;
       }
+
+      // FIX 1: Al cargar, reparar rutas de portada rotas y solicitar
+      // imágenes faltantes a peers cuando conecten.
+      await _repairBrokenCoverPaths();
     } catch (e) {
-      // Archivo corrupto → empezar limpio
       _topics.clear();
       _comments.clear();
       _progress.clear();
       _version = 0;
+    }
+  }
+
+  /// Recorre todos los temas y limpia rutas de portada que no existen
+  /// en disco. Las imágenes se pedirán a peers cuando se conecten.
+  Future<void> _repairBrokenCoverPaths() async {
+    bool changed = false;
+    final dir = await getApplicationDocumentsDirectory();
+
+    for (final entry in _topics.entries) {
+      final topic = entry.value;
+      if (topic.coverImagePath == null) continue;
+
+      final file = File(topic.coverImagePath!);
+      if (await file.exists()) continue;
+
+      // Intentar localizar el archivo solo por su nombre en el dir local
+      final fileName = topic.coverImagePath!.split(Platform.pathSeparator).last;
+      final localPath = '${dir.path}/$fileName';
+
+      if (await File(localPath).exists()) {
+        // Encontrado con ruta distinta (ej: cambio de usuario/dispositivo)
+        _topics[entry.key] = StudyTopic(
+          id: topic.id,
+          title: topic.title,
+          contentDelta: topic.contentDelta,
+          coverImagePath: localPath,
+          minHierarchy: topic.minHierarchy,
+          isSequential: topic.isSequential,
+          requiredTopicIds: topic.requiredTopicIds,
+          unlocksTopicIds: topic.unlocksTopicIds,
+          requiresApproval: topic.requiresApproval,
+          order: topic.order,
+          creatorId: topic.creatorId,
+          createdAt: topic.createdAt,
+          updatedAt: topic.updatedAt,
+        );
+        print('[StudyRoom] Repaired cover path for "${topic.title}": $localPath');
+        changed = true;
+      } else {
+        // No tenemos la imagen — guardar el fileName para pedirla luego
+        // pero NO limpiar coverImagePath todavía (lo usaremos para matchear)
+        print('[StudyRoom] Cover missing for "${topic.title}", will request from peers');
+      }
+    }
+
+    if (changed) await _saveLocal();
+  }
+
+  /// Solicita imágenes de portada faltantes al peer que acaba de conectar.
+  Future<void> _requestMissingImagesFrom(String ip) async {
+    final dir = await getApplicationDocumentsDirectory();
+    for (final topic in _topics.values) {
+      if (topic.coverImagePath == null) continue;
+      final file = File(topic.coverImagePath!);
+      if (await file.exists()) continue;
+
+      // Pedir la imagen incrustada haciendo un request_data al peer
+      // y re-sincronizando el tema. La imagen llegará con el payload.
+      print('[StudyRoom] Requesting missing image for "${topic.title}" from $ip');
+      // Pedimos sync completo para que el topic_upsert con base64 llegue
+      await _requestDataFrom(ip);
+      break; // Un request_data trae todo, no necesitamos hacer uno por imagen
     }
   }
 
@@ -213,10 +263,11 @@ class StudyRoomService {
     print('🔴 [StudyRoom] CRITICAL: Could not bind any port');
   }
 
-  /// Llama esto cuando un peer nuevo se conecta o para re-sincronizar.
   Future<void> syncWithNewPeer(String ip) async {
     print('🟡 [StudyRoom] syncWithNewPeer($ip) called');
     await _requestDataFrom(ip);
+    // FIX 1: también pedir imágenes faltantes cuando llega un peer nuevo
+    await _requestMissingImagesFrom(ip);
   }
 
   void _handleConnection(Socket socket) async {
@@ -227,18 +278,14 @@ class StudyRoomService {
       }
       if (chunks.isEmpty) return;
 
-      // Detectar si es transferencia de imagen (empieza con 4 bytes de longitud)
-      // vs paquete JSON puro
       String? type;
       Map<String, dynamic>? packet;
 
       try {
-        // Intentar parsear como JSON puro primero
         final raw = utf8.decode(chunks);
         packet = jsonDecode(raw) as Map<String, dynamic>;
         type = packet['type'] as String?;
       } catch (_) {
-        // Si falla, puede ser protocolo de 4 bytes (imagen)
         if (chunks.length >= 4) {
           final headerLen = ByteData.view(
             Uint8List.fromList(chunks.sublist(0, 4)).buffer,
@@ -260,16 +307,15 @@ class StudyRoomService {
           socket.add(utf8.encode(jsonEncode(response)));
           await socket.flush();
           break;
+
         case 'full_push':
           await _mergeFullPayload(packet);
           break;
-        // REEMPLAZAR el case 'topic_upsert' dentro del switch:
 
         case 'topic_upsert':
           final topic = StudyTopic.fromJson(
             packet['topic'] as Map<String, dynamic>,
           );
-          // Si viene con imagen incrustada, guardarla primero
           final imageBase64 = packet['imageBase64'] as String?;
           final imageFileName = packet['imageFileName'] as String?;
           if (imageBase64 != null && imageFileName != null) {
@@ -278,7 +324,6 @@ class StudyRoomService {
               final destPath = '${dir.path}/$imageFileName';
               final imgBytes = base64Decode(imageBase64);
               await File(destPath).writeAsBytes(imgBytes);
-              // Upsert con la ruta local correcta
               final topicWithLocalCover = StudyTopic(
                 id: topic.id,
                 title: topic.title,
@@ -303,22 +348,32 @@ class StudyRoomService {
             await _upsertTopicLocal(topic);
           }
           break;
+
         case 'topic_delete':
           final id = packet['topicId'] as String;
           await _deleteTopicLocal(id);
           break;
+
         case 'comment_upsert':
           final comment = StudyComment.fromJson(
             packet['comment'] as Map<String, dynamic>,
           );
           await _upsertCommentLocal(comment);
           break;
+
+        // FIX 2: nuevo case para eliminar comentario
+        case 'comment_delete':
+          final commentId = packet['commentId'] as String;
+          await _deleteCommentLocal(commentId);
+          break;
+
         case 'progress_update':
           final prog = UserProgress.fromJson(
             packet['progress'] as Map<String, dynamic>,
           );
           await _upsertProgressLocal(prog);
           break;
+
         case 'image_transfer':
           await _receiveImageTransfer(socket, packet, chunks);
           break;
@@ -329,9 +384,9 @@ class StudyRoomService {
       await socket.close();
     }
   }
+
   // ─── Transferencia de imágenes ────────────────────────────────────────────
 
-  /// Envía una imagen binaria a un peer.
   Future<void> _sendImage(String ip, String fileName, Uint8List bytes) async {
     try {
       final socket = await Socket.connect(
@@ -346,12 +401,11 @@ class StudyRoomService {
         'size': bytes.length,
       });
       final headerBytes = utf8.encode(header);
-      // ← 4 bytes de longitud del header (mismo protocolo que MaterialService)
       final lenBytes = ByteData(4)..setInt32(0, headerBytes.length, Endian.big);
 
-      socket.add(lenBytes.buffer.asUint8List()); // 4 bytes longitud
-      socket.add(headerBytes); // JSON header
-      socket.add(bytes); // imagen
+      socket.add(lenBytes.buffer.asUint8List());
+      socket.add(headerBytes);
+      socket.add(bytes);
       await socket.flush();
       await socket.close();
       await socket.done;
@@ -371,8 +425,6 @@ class StudyRoomService {
     final dest = File('${dir.path}/$fileName');
 
     try {
-      // El protocolo es: 4 bytes longitud header + header JSON + bytes imagen
-      // allChunks ya tiene todo el stream completo
       if (allChunks.length < 4) return;
 
       final headerLen = ByteData.view(
@@ -394,12 +446,10 @@ class StudyRoomService {
     }
   }
 
-  // ← NUEVO método
   void _updateTopicCoverPath(String fileName, String localPath) {
     bool changed = false;
     for (final entry in _topics.entries) {
       final topic = entry.value;
-      // Si el coverImagePath del topic termina con el mismo fileName
       if (topic.coverImagePath != null &&
           topic.coverImagePath!.split(Platform.pathSeparator).last ==
               fileName) {
@@ -407,7 +457,7 @@ class StudyRoomService {
           id: topic.id,
           title: topic.title,
           contentDelta: topic.contentDelta,
-          coverImagePath: localPath, // ← ruta local del peer receptor
+          coverImagePath: localPath,
           minHierarchy: topic.minHierarchy,
           isSequential: topic.isSequential,
           requiredTopicIds: topic.requiredTopicIds,
@@ -428,27 +478,6 @@ class StudyRoomService {
     }
   }
 
-  int _findJsonEnd(List<int> bytes) {
-    int depth = 0;
-    bool inString = false;
-    for (int i = 0; i < bytes.length; i++) {
-      final c = bytes[i];
-      if (inString) {
-        if (c == 0x22 && (i == 0 || bytes[i - 1] != 0x5C)) inString = false;
-      } else {
-        if (c == 0x22)
-          inString = true;
-        else if (c == 0x7B)
-          depth++;
-        else if (c == 0x7D) {
-          depth--;
-          if (depth == 0) return i + 1;
-        }
-      }
-    }
-    return -1;
-  }
-
   // ─── Sincronización ───────────────────────────────────────────────────────
 
   Future<void> _syncWithPeers(List<String> peerIps) async {
@@ -458,49 +487,71 @@ class StudyRoomService {
   }
 
   Future<void> _requestDataFrom(String ip) async {
-  print('🔵 [StudyRoom] _requestDataFrom($ip) START');
-  try {
-    final socket = await Socket.connect(
-      ip,
-      kStudyPort,
-      timeout: const Duration(seconds: 5),
-    );
-    print('🔵 [StudyRoom] Connected to $ip:$kStudyPort');
+    print('🔵 [StudyRoom] _requestDataFrom($ip) START');
+    try {
+      final socket = await Socket.connect(
+        ip,
+        kStudyPort,
+        timeout: const Duration(seconds: 5),
+      );
+      print('🔵 [StudyRoom] Connected to $ip:$kStudyPort');
 
-    socket.add(utf8.encode(jsonEncode({'type': 'request_data'})));
-    await socket.flush();
-    await socket.close(); // ← ESTE ES EL FIX: cerrar escritura para que peer A sepa que terminamos
+      socket.add(utf8.encode(jsonEncode({'type': 'request_data'})));
+      await socket.flush();
+      await socket.close();
 
-    print('🔵 [StudyRoom] Sent request_data to $ip');
+      print('🔵 [StudyRoom] Sent request_data to $ip');
 
-    final chunks = <int>[];
-    await for (final chunk in socket) {
-      chunks.addAll(chunk);
+      final chunks = <int>[];
+      await for (final chunk in socket) {
+        chunks.addAll(chunk);
+      }
+      print('🔵 [StudyRoom] Received ${chunks.length} bytes from $ip');
+
+      if (chunks.isEmpty) {
+        print('🔴 [StudyRoom] EMPTY response from $ip');
+        return;
+      }
+
+      final data = jsonDecode(utf8.decode(chunks)) as Map<String, dynamic>;
+      final topicCount = (data['topics'] as List?)?.length ?? 0;
+      print('🔵 [StudyRoom] Parsed response: $topicCount topics from $ip');
+      await _mergeFullPayload(data);
+      print('🔵 [StudyRoom] Merge complete. Total topics now: ${_topics.length}');
+    } catch (e) {
+      print('🔴 [StudyRoom] _requestDataFrom($ip) FAILED: $e');
     }
-    print('🔵 [StudyRoom] Received ${chunks.length} bytes from $ip');
-
-    if (chunks.isEmpty) {
-      print('🔴 [StudyRoom] EMPTY response from $ip');
-      return;
-    }
-
-    final data = jsonDecode(utf8.decode(chunks)) as Map<String, dynamic>;
-    final topicCount = (data['topics'] as List?)?.length ?? 0;
-    print('🔵 [StudyRoom] Parsed response: $topicCount topics from $ip');
-    await _mergeFullPayload(data);
-    print('🔵 [StudyRoom] Merge complete. Total topics now: ${_topics.length}');
-  } catch (e) {
-    print('🔴 [StudyRoom] _requestDataFrom($ip) FAILED: $e');
   }
-}
 
-  Map<String, dynamic> _buildFullPayload() => {
-    'type': 'full_push',
-    'version': _version,
-    'topics': _topics.values.map((t) => t.toJson()).toList(),
-    'comments': _comments.values.map((c) => c.toJson()).toList(),
-    'progress': _progress.values.map((p) => p.toJson()).toList(),
-  };
+  // FIX 1: El payload completo ahora incluye las imágenes en base64
+  // para que un peer que se reconecta las reciba sin pasos extra.
+  Map<String, dynamic> _buildFullPayload() {
+    final topicsJson = <Map<String, dynamic>>[];
+    for (final t in _topics.values) {
+      final tj = t.toJson();
+      // Incrustar imagen si existe localmente
+      if (t.coverImagePath != null) {
+        final f = File(t.coverImagePath!);
+        if (f.existsSync()) {
+          try {
+            final bytes = f.readAsBytesSync();
+            final fileName = t.coverImagePath!.split(Platform.pathSeparator).last;
+            tj['imageBase64'] = base64Encode(bytes);
+            tj['imageFileName'] = fileName;
+          } catch (_) {}
+        }
+      }
+      topicsJson.add(tj);
+    }
+
+    return {
+      'type': 'full_push',
+      'version': _version,
+      'topics': topicsJson,
+      'comments': _comments.values.map((c) => c.toJson()).toList(),
+      'progress': _progress.values.map((p) => p.toJson()).toList(),
+    };
+  }
 
   Future<void> _mergeFullPayload(Map<String, dynamic> data) async {
     bool changed = false;
@@ -509,31 +560,44 @@ class StudyRoomService {
       '🔵 [StudyRoom] _mergeFullPayload: ${incomingTopics.length} topics incoming, currently have ${_topics.length}',
     );
 
-    // Al hacer merge de temas, si coverImagePath viene de otro peer
-    // y no existe localmente, limpiarla para evitar broken images.
-    // REEMPLAZAR el bloque "Merge temas" dentro de _mergeFullPayload:
-
     for (final t in (data['topics'] as List? ?? [])) {
-      final remote = StudyTopic.fromJson(t as Map<String, dynamic>);
+      final tMap = t as Map<String, dynamic>;
+      final remote = StudyTopic.fromJson(tMap);
       final local = _topics[remote.id];
       print(
         '🔵 [StudyRoom]   topic "${remote.title}": local=${local?.updatedAt}, remote=${remote.updatedAt}, willUpdate=${local == null || remote.updatedAt.isAfter(local.updatedAt)}',
       );
-      //
+
       if (local == null || remote.updatedAt.isAfter(local.updatedAt)) {
-        // Si la ruta de portada no existe localmente, limpiarla
+        // FIX 1: si el payload trae imagen en base64, guardarla primero
+        final imageBase64 = tMap['imageBase64'] as String?;
+        final imageFileName = tMap['imageFileName'] as String?;
         String? validCoverPath = remote.coverImagePath;
-        if (validCoverPath != null && !await File(validCoverPath).exists()) {
-          // Intentar con solo el nombre de archivo en el directorio local
+
+        if (imageBase64 != null && imageFileName != null) {
+          try {
+            final dir = await getApplicationDocumentsDirectory();
+            final destPath = '${dir.path}/$imageFileName';
+            final imgBytes = base64Decode(imageBase64);
+            await File(destPath).writeAsBytes(imgBytes);
+            validCoverPath = destPath;
+            print('[StudyRoom] Image saved from full_push payload: $destPath');
+          } catch (e) {
+            print('[StudyRoom] Error saving image from payload: $e');
+          }
+        } else if (validCoverPath != null &&
+            !await File(validCoverPath).exists()) {
+          // No hay base64 y no existe localmente → buscar por nombre
           final dir = await getApplicationDocumentsDirectory();
           final fileName = validCoverPath.split(Platform.pathSeparator).last;
           final localPath = '${dir.path}/$fileName';
           if (await File(localPath).exists()) {
             validCoverPath = localPath;
           } else {
-            validCoverPath = null; // No tenemos la imagen, mostrar sin portada
+            validCoverPath = null;
           }
         }
+
         _topics[remote.id] = StudyTopic(
           id: remote.id,
           title: remote.title,
@@ -560,10 +624,11 @@ class StudyRoomService {
         _comments[remote.id] = remote;
         changed = true;
       } else {
-        // Si el estado cambió (ej: aprobado remotamente), actualizar
         final local = _comments[remote.id]!;
+        // FIX 2: respetar ediciones remotas (content puede haber cambiado)
         if (remote.status == CommentStatus.approved &&
-            local.status == CommentStatus.pending) {
+                local.status == CommentStatus.pending ||
+            remote.content != local.content) {
           _comments[remote.id] = remote;
           changed = true;
         }
@@ -622,13 +687,13 @@ class StudyRoomService {
     }
   }
 
-  // ─── Operaciones locales (sin broadcast) ─────────────────────────────────
+  // ─── Operaciones locales ──────────────────────────────────────────────────
 
   Future<void> _upsertTopicLocal(StudyTopic topic) async {
     _topics[topic.id] = topic;
     _version++;
     await _saveLocal();
-    _emit(); // ← Cambiar de _controller.add(...) a _emit() para consistencia
+    _emit();
   }
 
   Future<void> _deleteTopicLocal(String id) async {
@@ -636,27 +701,32 @@ class StudyRoomService {
     _comments.removeWhere((_, c) => c.topicId == id);
     _version++;
     await _saveLocal();
-    _emit(); // ← ídem
+    _emit();
   }
 
   Future<void> _upsertCommentLocal(StudyComment comment) async {
     _comments[comment.id] = comment;
     _version++;
     await _saveLocal();
-    _emit(); // ← ídem
+    _emit();
+  }
+
+  // FIX 2: nuevo método local para eliminar comentario
+  Future<void> _deleteCommentLocal(String commentId) async {
+    _comments.remove(commentId);
+    _version++;
+    await _saveLocal();
+    _emit();
   }
 
   Future<void> _upsertProgressLocal(UserProgress prog) async {
     _progress[prog.userId] = prog;
     _version++;
     await _saveLocal();
-    _emit(); // ← ídem
+    _emit();
   }
 
   // ─── API pública ─────────────────────────────────────────────────────────
-
-  /// Crea o actualiza un tema. Solo J9+.
-  // REEMPLAZAR el método upsertTopic completo:
 
   Future<void> upsertTopic(StudyTopic topic) async {
     await _upsertTopicLocal(topic);
@@ -669,9 +739,8 @@ class StudyRoomService {
       if (await file.exists()) {
         final bytes = await file.readAsBytes();
         imageBase64 = base64Encode(bytes);
-        imageFileName = topic.coverImagePath!
-            .split(Platform.pathSeparator)
-            .last;
+        imageFileName =
+            topic.coverImagePath!.split(Platform.pathSeparator).last;
       }
     }
 
@@ -683,14 +752,11 @@ class StudyRoomService {
     });
   }
 
-  /// Elimina un tema. Solo J9+.
   Future<void> deleteTopic(String topicId) async {
     await _deleteTopicLocal(topicId);
     await _broadcastPacket({'type': 'topic_delete', 'topicId': topicId});
   }
 
-  /// Reordena los temas de la secuencia.
-  /// [orderedIds] es la lista de IDs en el nuevo orden deseado.
   Future<void> reorderSequentialTopics(List<String> orderedIds) async {
     for (int i = 0; i < orderedIds.length; i++) {
       final id = orderedIds[i];
@@ -703,7 +769,6 @@ class StudyRoomService {
     await _saveLocal();
     _controller.add(StudyRoomEvent('topics_updated', topics));
 
-    // Broadcast cada tema actualizado
     for (final id in orderedIds) {
       final t = _topics[id];
       if (t != null) {
@@ -712,7 +777,6 @@ class StudyRoomService {
     }
   }
 
-  /// Envía un comentario a un tema.
   Future<void> addComment({
     required String topicId,
     required String userId,
@@ -723,7 +787,6 @@ class StudyRoomService {
     final topic = _topics[topicId];
     if (topic == null) return;
 
-    // Si no requiere aprobación, se aprueba directamente y cuenta como desbloqueado
     final status = topic.requiresApproval
         ? CommentStatus.pending
         : CommentStatus.approved;
@@ -745,16 +808,65 @@ class StudyRoomService {
       'comment': comment.toJson(),
     });
 
-    // Si no requiere aprobación → actualizar progreso inmediatamente
     if (!topic.requiresApproval) {
       await _markTopicCommented(userId, username, topicId);
     } else {
-      // Marcar como pendiente en el progreso
       await _markTopicPending(userId, username, topicId);
     }
   }
 
-  /// El admin aprueba un comentario. Solo J9+.
+  // FIX 2: Editar comentario propio (broadcast a todos)
+  Future<void> editComment({
+    required String commentId,
+    required String newContent,
+    required String requestingUserId,
+  }) async {
+    final comment = _comments[commentId];
+    if (comment == null) return;
+
+    // Solo el autor puede editar su propio comentario
+    if (comment.userId != requestingUserId) return;
+
+    final edited = StudyComment(
+      id: comment.id,
+      topicId: comment.topicId,
+      userId: comment.userId,
+      username: comment.username,
+      content: newContent,
+      imagePaths: comment.imagePaths,
+      status: comment.status,
+      timestamp: comment.timestamp,
+      isEdited: true,
+    );
+
+    await _upsertCommentLocal(edited);
+    await _broadcastPacket({
+      'type': 'comment_upsert',
+      'comment': edited.toJson(),
+    });
+  }
+
+  // FIX 2: Eliminar comentario propio (broadcast a todos)
+  Future<void> deleteComment({
+    required String commentId,
+    required String requestingUserId,
+    required int requestingUserHierarchy,
+  }) async {
+    final comment = _comments[commentId];
+    if (comment == null) return;
+
+    // Solo el autor puede eliminar su comentario, o un admin (J9+)
+    final isAuthor = comment.userId == requestingUserId;
+    final isAdmin = requestingUserHierarchy >= 9;
+    if (!isAuthor && !isAdmin) return;
+
+    await _deleteCommentLocal(commentId);
+    await _broadcastPacket({
+      'type': 'comment_delete',
+      'commentId': commentId,
+    });
+  }
+
   Future<void> approveComment(String commentId) async {
     final comment = _comments[commentId];
     if (comment == null) return;
@@ -766,7 +878,6 @@ class StudyRoomService {
       'comment': approved.toJson(),
     });
 
-    // Actualizar progreso del usuario
     await _markTopicCommented(
       comment.userId,
       comment.username,
@@ -819,7 +930,7 @@ class StudyRoomService {
           updatedAt: DateTime.now(),
         );
 
-    if (current.hasUnlocked(topicId)) return; // Ya estaba
+    if (current.hasUnlocked(topicId)) return;
 
     final newUnlocked = {...current.unlockedTopicIds, topicId};
     final newPending = {...current.pendingTopicIds}..remove(topicId);
@@ -838,7 +949,6 @@ class StudyRoomService {
 
   // ─── Lógica de acceso ─────────────────────────────────────────────────────
 
-  /// Determina si un usuario puede VER un tema.
   bool canViewTopic({
     required String topicId,
     required String userId,
@@ -846,21 +956,13 @@ class StudyRoomService {
   }) {
     final topic = _topics[topicId];
     if (topic == null) return false;
-
-    // Jerarquía mínima
     if (userHierarchy < topic.minHierarchy) return false;
-
-    // Si no es secuencial, basta con tener la jerarquía
     if (!topic.isSequential || topic.requiredTopicIds.isEmpty) return true;
-
-    // Verificar que todos los requisitos estén desbloqueados
     final prog = _progress[userId];
     if (prog == null) return false;
     return topic.requiredTopicIds.every((id) => prog.hasUnlocked(id));
   }
 
-  /// Razón por la que un topic está bloqueado (para mostrar en el candado).
-  /// Devuelve null si está desbloqueado/accesible.
   String? lockReason({
     required String topicId,
     required String userId,
@@ -888,12 +990,11 @@ class StudyRoomService {
       }
     }
 
-    return null; // Accesible
+    return null;
   }
 
   // ─── Transferencia de imágenes de portada ─────────────────────────────────
 
-  /// Difunde una imagen de portada a todos los peers.
   Future<void> broadcastImage(String filePath) async {
     final file = File(filePath);
     if (!await file.exists()) return;
@@ -911,3 +1012,4 @@ class StudyRoomService {
     _controller.close();
   }
 }
+
