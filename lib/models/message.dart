@@ -27,6 +27,9 @@ class Message {
   /// Indica si este mensaje es el video de fondo del menú (enviado por ADMIN)
   final bool isBackgroundVideo;
 
+  /// [NUEVO] Indica si el mensaje fue editado después de ser enviado
+  final bool isEdited;
+
   Message({
     required this.id,
     required this.senderId,
@@ -39,35 +42,38 @@ class Message {
     required this.isMe,
     this.recipientIp,
     this.isBackgroundVideo = false,
-    this.groupId, // ← Nuevo campo
+    this.groupId,
+    this.isEdited = false,
   });
 
   Map<String, dynamic> toJson() => {
-    'id': id,
-    'senderId': senderId,
-    'senderIp': senderIp,
-    'type': type.name,
-    'content': content,
-    'fileName': fileName,
-    'fileSize': fileSize,
-    'timestamp': timestamp.toIso8601String(),
-    'recipientIp': recipientIp,
-    'isBackgroundVideo': isBackgroundVideo,
-    'groupId': groupId, // ← Nuevo campo
-  };
+        'id': id,
+        'senderId': senderId,
+        'senderIp': senderIp,
+        'type': type.name,
+        'content': content,
+        'fileName': fileName,
+        'fileSize': fileSize,
+        'timestamp': timestamp.toIso8601String(),
+        'recipientIp': recipientIp,
+        'isBackgroundVideo': isBackgroundVideo,
+        'groupId': groupId,
+        'isEdited': isEdited,
+      };
 
   factory Message.fromJson(Map<String, dynamic> j, bool isMe) => Message(
-    id: j['id'],
-    senderId: j['senderId'],
-    senderIp: j['senderIp'],
-    type: MessageType.values.byName(j['type']),
-    content: j['content'],
-    fileName: j['fileName'],
-    fileSize: j['fileSize'],
-    timestamp: DateTime.parse(j['timestamp']),
-    isMe: isMe,
-    recipientIp: j['recipientIp'],
-    isBackgroundVideo: j['isBackgroundVideo'] ?? false,
-    groupId: j['groupId'], // ← Nuevo campo
-  );
+        id: j['id'],
+        senderId: j['senderId'],
+        senderIp: j['senderIp'],
+        type: MessageType.values.byName(j['type']),
+        content: j['content'],
+        fileName: j['fileName'],
+        fileSize: j['fileSize'],
+        timestamp: DateTime.parse(j['timestamp']),
+        isMe: isMe,
+        recipientIp: j['recipientIp'],
+        isBackgroundVideo: j['isBackgroundVideo'] ?? false,
+        groupId: j['groupId'],
+        isEdited: j['isEdited'] ?? false,
+      );
 }

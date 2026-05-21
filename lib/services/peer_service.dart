@@ -112,25 +112,20 @@ class PeerService {
       content: content,
       timestamp: DateTime.now(),
       isMe: true,
-      recipientIp: null, // No es 1-a-1
-      groupId: groupId, // ← Identificador de grupo
+      recipientIp: null,
+      groupId: groupId,
     );
 
     await _saveMessage(msg);
     _controller.add(PeerEvent('message', msg));
 
-    // Enviar solo a miembros del grupo (incluyéndome si estoy en la lista)
     final targets = group.memberIps.isEmpty
-        ? knownPeers
-              .keys // Si no hay miembros explícitos, broadcast dentro del grupo
+        ? knownPeers.keys
         : group.memberIps.where((ip) => ip != myIp);
 
     for (final ip in targets) {
       if (type == MessageType.text) {
         await _sendPacket(ip, msg.toJson(), null);
-      } else {
-        // Para archivos: necesitarías leer el archivo desde content
-        // Opcional: pasar bytes como parámetro adicional
       }
     }
   }
@@ -188,7 +183,7 @@ class PeerService {
               );
               AuthService().syncWithNewPeer(ipStr);
               StudyRoomService().syncWithNewPeer(ipStr);
-            } 
+            }
           }
         }
       }
@@ -212,7 +207,6 @@ class PeerService {
 
       socket.add(lenBytes.buffer.asUint8List());
       socket.add(headerBytes);
-      // Solo metadata, no bytes de archivo aquí
       await socket.flush();
       await socket.close();
     } catch (e) {
@@ -270,17 +264,41 @@ class PeerService {
     final headerBytes = allBytes.sublist(4, 4 + headerLen);
     final header = jsonDecode(utf8.decode(headerBytes)) as Map<String, dynamic>;
 
-    // ─── [NUEVO] Manejo de paquetes de grupo ─────────────────────────────────
+    // ─── Manejo de paquetes de grupo ─────────────────────────────────────────
     final packetType = header['type'] as String?;
     if (packetType != null &&
         ['group_create', 'group_delete', 'group_update'].contains(packetType)) {
       _handleGroupPacket(header);
-      return; // Los paquetes de grupo no son mensajes de chat, salir aquí
+      return;
     }
+
+    // ─── [NUEVO] Eliminar mensaje para todos ──────────────────────────────────
+    if (packetType == 'message_delete') {
+      final messageId = header['messageId'] as String?;
+      if (messageId != null) {
+        await deleteMessageLocally(messageId);
+        _controller.add(PeerEvent('message_deleted', messageId));
+      }
+      return;
+    }
+
+    // ─── [NUEVO] Editar mensaje para todos ────────────────────────────────────
+    if (packetType == 'message_edit') {
+      final messageId = header['messageId'] as String?;
+      final newContent = header['newContent'] as String?;
+      if (messageId != null && newContent != null) {
+        await _editMessageFromPeer(messageId, newContent);
+        _controller.add(PeerEvent('message_edited', {
+          'messageId': messageId,
+          'newContent': newContent,
+        }));
+      }
+      return;
+    }
+
     final msgGroupId = header['groupId'] as String?;
     if (msgGroupId != null) {
       final group = _groups[msgGroupId];
-      // Si el grupo no existe o no soy miembro (y no soy el creador), ignorar
       if (group == null ||
           (group.memberIps.isNotEmpty &&
               !group.memberIps.contains(myIp) &&
@@ -288,9 +306,8 @@ class PeerService {
         return;
       }
     }
-    // ────────────────────────────────────────────────────────────────────────
 
-    // ¿Es para mí? (si tiene recipientIp y no soy yo, ignorar)
+    // ¿Es para mí?
     final recipientIp = header['recipientIp'] as String?;
     if (recipientIp != null &&
         recipientIp != myIp &&
@@ -302,24 +319,19 @@ class PeerService {
     // ── Cancelar video de fondo ───────────────────────────────────────────
     if (header['isClearBackgroundVideo'] == true) {
       print('🚫 [ReceiveClear] Received clear background video command');
-
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(kBgVideoKey);
-
       _controller.add(PeerEvent('background_video_cleared', null));
-      print('✅ [ReceiveClear] Local video cleared and event sent');
       return;
     }
+
     final type = header['type'] as String?;
     if (type == 'material_broadcast') {
-      print('[PeerService] Forwarding material_broadcast to MaterialService');
       MaterialService().handleIncomingBroadcast(header);
       return;
     }
 
-    // Eliminación remota de archivo
     if (type == 'material_delete') {
-      print('[PeerService] Forwarding material_delete to MaterialService');
       MaterialService().handleIncomingDelete(header);
       return;
     }
@@ -332,33 +344,18 @@ class PeerService {
       final fileBytes = allBytes.sublist(4 + headerLen);
       final path = await _saveFile(header['fileName'] as String, fileBytes);
 
-      // Si es video de fondo, guardamos la ruta
       if (header['isBackgroundVideo'] == true) {
         print('🎬 [ReceiveVideo] Received background video header');
-
-        final fileBytes = allBytes.sublist(4 + headerLen);
         final fileName =
             header['fileName'] as String? ?? 'background_video.mp4';
-
         try {
           final dir = await getApplicationDocumentsDirectory();
           final destPath = '${dir.path}/$fileName';
           final destFile = File(destPath);
-
-          print('💾 [ReceiveVideo] Saving to: $destPath');
           await destFile.writeAsBytes(fileBytes);
-          print(
-            '✅ [ReceiveVideo] File saved, size: ${await destFile.length()}',
-          );
-
-          // Guardar ruta en prefs
           final prefs = await SharedPreferences.getInstance();
           await prefs.setString(kBgVideoKey, destPath);
-          print('✅ [ReceiveVideo] Preferences updated');
-
-          // Notificar a la UI
           _controller.add(PeerEvent('background_video_updated', destPath));
-          print('✅ [ReceiveVideo] Event sent to UI');
         } catch (e, stack) {
           print('❌ [ReceiveVideo] Error saving video: $e');
           print('Stack: $stack');
@@ -466,8 +463,6 @@ class PeerService {
 
   // ─── ADMIN: enviar video de fondo ─────────────────────────────────────────
 
-  /// Solo el ADMIN llama esto. Envía el video a todos los peers.
-  /// Solo el ADMIN llama esto. Envía el video a todos los peers.
   Future<void> broadcastBackgroundVideo(String filePath) async {
     print('🎬 [BroadcastVideo] Starting broadcast of: $filePath');
 
@@ -480,13 +475,9 @@ class PeerService {
     final bytes = await file.readAsBytes();
     final fileName = filePath.split(Platform.pathSeparator).last;
 
-    print('📦 [BroadcastVideo] File size: ${bytes.length} bytes');
-
-    // Guardar localmente primero
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(kBgVideoKey, filePath);
     _controller.add(PeerEvent('background_video_updated', filePath));
-    print('✅ [BroadcastVideo] Local state updated');
 
     final header = {
       'id': _uuid.v4(),
@@ -501,55 +492,34 @@ class PeerService {
       'isBackgroundVideo': true,
     };
 
-    print('📤 [BroadcastVideo] Sending to ${knownPeers.length} peers...');
-
     for (final ip in List.from(knownPeers.keys)) {
-      if (ip == myIp) {
-        print('⚠️ [BroadcastVideo] Skipping self: $ip');
-        continue;
-      }
-
+      if (ip == myIp) continue;
       try {
-        print('📤 [BroadcastVideo] Connecting to $ip:$kPort...');
         final socket = await Socket.connect(
           ip,
           kPort,
           timeout: const Duration(seconds: 10),
         );
-
         final headerBytes = utf8.encode(jsonEncode(header));
         final lenBytes = ByteData(4)
           ..setInt32(0, headerBytes.length, Endian.big);
-
         socket.add(lenBytes.buffer.asUint8List());
         socket.add(headerBytes);
         socket.add(bytes);
-
         await socket.flush();
         await socket.close();
-
-        print('✅ [BroadcastVideo] Sent to $ip successfully');
       } catch (e) {
         print('❌ [BroadcastVideo] Failed to send to $ip: $e');
       }
     }
-
-    print('🏁 [BroadcastVideo] Broadcast complete');
   }
 
   // ─── ADMIN: cancelar video de fondo ──────────────────────────────────────
 
-  /// El admin cancela el video: borra la preferencia local y avisa a los peers.
-  /// Los peers recibirán un paquete 'isClearBackgroundVideo' y limpiarán su estado.
   Future<void> clearBackgroundVideo() async {
-    print('🚫 [ClearVideo] Clearing background video');
-
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(kBgVideoKey);
-
-    // Notificar localmente
     _controller.add(PeerEvent('background_video_cleared', null));
-    print('✅ [ClearVideo] Local state cleared');
 
     final header = {
       'id': _uuid.v4(),
@@ -559,29 +529,122 @@ class PeerService {
       'timestamp': DateTime.now().toIso8601String(),
     };
 
-    print(
-      '📤 [ClearVideo] Broadcasting clear to ${knownPeers.length} peers...',
-    );
-
     for (final ip in List.from(knownPeers.keys)) {
       if (ip == myIp) continue;
-
       try {
         await _sendPacket(ip, header, null);
-        print('✅ [ClearVideo] Sent clear to $ip');
       } catch (e) {
         print('❌ [ClearVideo] Failed to send to $ip: $e');
       }
     }
   }
 
-  /// Retorna la ruta local del video de fondo guardado (null si no hay ninguno).
   Future<String?> getBackgroundVideoPath() async {
     final prefs = await SharedPreferences.getInstance();
     final path = prefs.getString(kBgVideoKey);
     if (path == null) return null;
     if (!await File(path).exists()) return null;
     return path;
+  }
+
+  // ─── [NUEVO] Eliminar mensaje para TODOS ─────────────────────────────────
+  ///
+  /// Envía el paquete de eliminación a los peers relevantes según el contexto
+  /// del chat (broadcast, 1-a-1 o grupo).
+  ///
+  /// Retorna true si se envió correctamente.
+  Future<void> deleteMessageForEveryone({
+    required String messageId,
+    String? peerIp,         // null = broadcast global
+    String? groupId,        // si es chat de grupo
+  }) async {
+    // Eliminar localmente primero
+    await deleteMessageLocally(messageId);
+    _controller.add(PeerEvent('message_deleted', messageId));
+
+    final packet = {
+      'type': 'message_delete',
+      'messageId': messageId,
+      'timestamp': DateTime.now().toIso8601String(),
+    };
+
+    if (groupId != null) {
+      // Chat de grupo: enviar a todos los miembros (o knownPeers si no hay lista)
+      final group = _groups[groupId];
+      final targets = (group != null && group.memberIps.isNotEmpty)
+          ? group.memberIps.where((ip) => ip != myIp)
+          : knownPeers.keys;
+      for (final ip in List.from(targets)) {
+        await _sendPacket(ip, packet, null);
+      }
+    } else if (peerIp != null) {
+      // Chat 1-a-1: solo al peer
+      await _sendPacket(peerIp, packet, null);
+    } else {
+      // Broadcast global: a todos los peers conocidos
+      for (final ip in List.from(knownPeers.keys)) {
+        await _sendPacket(ip, packet, null);
+      }
+    }
+  }
+
+  // ─── [NUEVO] Editar mensaje para TODOS ───────────────────────────────────
+  ///
+  /// Edita el mensaje localmente y propaga la edición a los peers relevantes.
+  Future<void> editMessageForEveryone({
+    required String messageId,
+    required String newContent,
+    String? peerIp,
+    String? groupId,
+  }) async {
+    // Editar localmente
+    await editMessageLocally(messageId, newContent);
+    _controller.add(PeerEvent('message_edited', {
+      'messageId': messageId,
+      'newContent': newContent,
+    }));
+
+    final packet = {
+      'type': 'message_edit',
+      'messageId': messageId,
+      'newContent': newContent,
+      'timestamp': DateTime.now().toIso8601String(),
+    };
+
+    if (groupId != null) {
+      final group = _groups[groupId];
+      final targets = (group != null && group.memberIps.isNotEmpty)
+          ? group.memberIps.where((ip) => ip != myIp)
+          : knownPeers.keys;
+      for (final ip in List.from(targets)) {
+        await _sendPacket(ip, packet, null);
+      }
+    } else if (peerIp != null) {
+      await _sendPacket(peerIp, packet, null);
+    } else {
+      for (final ip in List.from(knownPeers.keys)) {
+        await _sendPacket(ip, packet, null);
+      }
+    }
+  }
+
+  // ─── [NUEVO] Editar mensaje recibido de un peer (sin restricción de sender) ─
+  Future<void> _editMessageFromPeer(String messageId, String newContent) async {
+    final prefs = await SharedPreferences.getInstance();
+    final list = prefs.getStringList('messages') ?? [];
+    final updated = <String>[];
+
+    for (final s in list) {
+      final j = jsonDecode(s) as Map<String, dynamic>;
+      if (j['id'] == messageId) {
+        j['content'] = newContent;
+        j['isEdited'] = true;
+        updated.add(jsonEncode(j));
+      } else {
+        updated.add(s);
+      }
+    }
+    await prefs.setStringList('messages', updated);
   }
 
   // ─── Persistencia ─────────────────────────────────────────────────────────
@@ -627,15 +690,12 @@ class PeerService {
     }).toList();
 
     if (groupId != null) {
-      // Chat de grupo: solo mensajes de ESTE grupo
       return all.where((m) => m.groupId == groupId).toList();
     } else if (peerIp == null) {
-      // Broadcast: EXCLUYE explícitamente mensajes de grupo y 1-a-1
       return all
           .where((m) => m.groupId == null && m.recipientIp == null)
           .toList();
     } else {
-      // 1-a-1: EXCLUYE mensajes de grupo
       return all.where((m) {
         final isDirect =
             (m.senderIp == peerIp && m.recipientIp == myIp_) ||
@@ -652,7 +712,7 @@ class PeerService {
     return dest.path;
   }
 
-  // ─── Gestión LOCAL de mensajes (NO se propaga a otros peers) ───────────────
+  // ─── Gestión LOCAL de mensajes ─────────────────────────────────────────────
 
   /// Elimina un mensaje específico solo de TU almacenamiento local
   Future<void> deleteMessageLocally(String messageId) async {
@@ -674,8 +734,8 @@ class PeerService {
     for (final s in list) {
       final j = jsonDecode(s) as Map<String, dynamic>;
       if (j['id'] == messageId && j['senderIp'] == myIp) {
-        // Solo puedo editar mis propios mensajes
         j['content'] = newContent;
+        j['isEdited'] = true;
         updated.add(jsonEncode(j));
       } else {
         updated.add(s);
@@ -697,13 +757,10 @@ class PeerService {
       final msgSenderIp = j['senderIp'] as String?;
 
       if (groupId != null) {
-        // Chat de grupo: eliminar solo mensajes de ESTE grupo
         return msgGroupId != groupId;
       } else if (peerIp == null) {
-        // Broadcast: eliminar mensajes sin groupId y sin recipientIp
         return !(msgGroupId == null && msgRecipientIp == null);
       } else {
-        // 1-a-1: eliminar mensajes directos con este peer
         final isDirect =
             (msgSenderIp == peerIp && msgRecipientIp == myIp_) ||
             (msgSenderIp == myIp_ && msgRecipientIp == peerIp);
@@ -725,7 +782,7 @@ class PeerService {
     _myHierarchy = prefs.getInt(kUserHierarchyKey) ?? 1;
 
     final groupsJson = prefs.getStringList(kGroupsKey) ?? [];
-    _groups.clear(); // ← Limpiar antes de cargar
+    _groups.clear();
 
     for (final jsonStr in groupsJson) {
       try {
@@ -735,8 +792,6 @@ class PeerService {
         print('Error cargando grupo: $e');
       }
     }
-
-    print('Grupos cargados: ${_groups.length}'); // ← Debug
   }
 
   // ─── Guardar grupos en persistencia ────────────────────────────────────────
@@ -744,9 +799,6 @@ class PeerService {
     final prefs = await SharedPreferences.getInstance();
     final jsonList = _groups.values.map((g) => jsonEncode(g.toJson())).toList();
     await prefs.setStringList(kGroupsKey, jsonList);
-
-    print('✅ Grupos guardados: ${_groups.length}'); // ← Debug
-    print('   IDs: ${_groups.keys.toList()}');
   }
 
   // ─── Setear jerarquía (llamar tras login) ──────────────────────────────────
@@ -774,14 +826,9 @@ class PeerService {
     );
 
     _groups[group.id] = group;
-
-    // ← ¡ESTO GUARDA EN DISCO!
     await _saveGroups();
-    // ────────────────────
-
     _controller.add(PeerEvent('group_created', group));
 
-    // Broadcast a peers
     for (final ip in List.from(knownPeers.keys)) {
       await _sendPacket(ip, {
         'type': 'group_create',
@@ -794,7 +841,6 @@ class PeerService {
   Future<void> deleteGroup(String groupId) async {
     final group = _groups[groupId];
     if (group == null) return;
-    // Solo el creador o jerarquía >=8 puede eliminar
     if (group.creatorId != myId && _myHierarchy < 8) return;
 
     _groups.remove(groupId);

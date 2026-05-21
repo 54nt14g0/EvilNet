@@ -4,7 +4,6 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:video_player/video_player.dart';
 import '../models/material_file.dart';
 import '../services/material_service.dart';
 import 'package:open_filex/open_filex.dart';
@@ -110,11 +109,8 @@ class _MaterialScreenState extends State<MaterialScreen>
         backgroundColor: kBg,
         body: Stack(
           children: [
-            // ── Fondo con imagen + overlay multi-capa ──
             Positioned.fill(child: _buildBackground()),
-            // ── Scanlines animadas ──
             Positioned.fill(child: _buildScanlines()),
-            // ── Contenido principal ──
             SafeArea(
               child: Column(
                 children: [
@@ -127,7 +123,6 @@ class _MaterialScreenState extends State<MaterialScreen>
                 ],
               ),
             ),
-            // ── FAB expandible (solo gestores) ──
             if (_canManage)
               Positioned(
                 bottom: 24,
@@ -146,7 +141,6 @@ class _MaterialScreenState extends State<MaterialScreen>
       fit: StackFit.expand,
       children: [
         Image.asset('assets/material.jpg', fit: BoxFit.cover),
-        // Gradiente oscurecedor por capas
         Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
@@ -160,7 +154,6 @@ class _MaterialScreenState extends State<MaterialScreen>
             ),
           ),
         ),
-        // Viñeta lateral
         Container(
           decoration: BoxDecoration(
             gradient: RadialGradient(
@@ -209,13 +202,11 @@ class _MaterialScreenState extends State<MaterialScreen>
       ),
       child: Row(
         children: [
-          // Botón atrás
           _HeaderButton(
             icon: Icons.arrow_back_ios_new,
             onTap: () => Navigator.pop(context),
           ),
           const SizedBox(width: 12),
-          // Logo U
           Container(
             width: 32, height: 32,
             decoration: BoxDecoration(
@@ -263,7 +254,6 @@ class _MaterialScreenState extends State<MaterialScreen>
               ],
             ),
           ),
-          // Botón búsqueda
           _HeaderButton(
             icon: _showSearch ? Icons.search_off : Icons.search,
             color: _showSearch ? kGreenScan : kSteel,
@@ -278,7 +268,6 @@ class _MaterialScreenState extends State<MaterialScreen>
             },
           ),
           const SizedBox(width: 6),
-          // Clasificación del usuario
           _ClearanceChip(level: _auth.currentUser?.jerarquia ?? 0),
         ],
       ),
@@ -329,7 +318,6 @@ class _MaterialScreenState extends State<MaterialScreen>
             ),
           ),
           const SizedBox(width: 8),
-          // Total de archivos
           Text(
             '${_material.files.where((f) => f.type != MaterialFileType.folder).length} ARCHIVOS',
             style: const TextStyle(
@@ -362,7 +350,6 @@ class _MaterialScreenState extends State<MaterialScreen>
       ),
       child: Row(
         children: [
-          // Indicador de ruta
           Text(
             '//',
             style: TextStyle(
@@ -515,7 +502,6 @@ class _MaterialScreenState extends State<MaterialScreen>
       ),
       child: Row(
         children: [
-          // Contador de resultados
           Text(
             '${_getFilteredFiles().length} RESULTADO${_getFilteredFiles().length != 1 ? "S" : ""}',
             style: const TextStyle(
@@ -526,7 +512,6 @@ class _MaterialScreenState extends State<MaterialScreen>
             ),
           ),
           const Spacer(),
-          // Filtro por tipo
           _ToolbarButton(
             icon: Icons.filter_list,
             label: 'TIPO',
@@ -534,7 +519,6 @@ class _MaterialScreenState extends State<MaterialScreen>
             onTap: () => _showFilterMenu(context),
           ),
           const SizedBox(width: 4),
-          // Orden
           _ToolbarButton(
             icon: _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
             label: _sortBy.toUpperCase(),
@@ -614,15 +598,12 @@ class _MaterialScreenState extends State<MaterialScreen>
 
   Widget _buildFileList(bool mobile) {
     final files = _getFilteredFiles();
-
     if (files.isEmpty) return _buildEmptyState();
-
     return ListView.builder(
       padding: EdgeInsets.fromLTRB(
         mobile ? 8 : 16,
         8,
         mobile ? 8 : 16,
-        // Espacio extra abajo para el FAB
         _canManage ? 100 : 20,
       ),
       itemCount: files.length,
@@ -706,7 +687,6 @@ class _MaterialScreenState extends State<MaterialScreen>
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            // Botón: crear carpeta
             if (v > 0.1)
               Opacity(
                 opacity: v,
@@ -725,7 +705,6 @@ class _MaterialScreenState extends State<MaterialScreen>
                   ),
                 ),
               ),
-            // Botón: subir archivo
             if (v > 0.1)
               Opacity(
                 opacity: v,
@@ -744,7 +723,6 @@ class _MaterialScreenState extends State<MaterialScreen>
                   ),
                 ),
               ),
-            // Botón principal
             GestureDetector(
               onTap: _toggleFab,
               child: AnimatedContainer(
@@ -769,11 +747,7 @@ class _MaterialScreenState extends State<MaterialScreen>
                 child: AnimatedRotation(
                   turns: _fabOpen ? 0.125 : 0,
                   duration: const Duration(milliseconds: 220),
-                  child: const Icon(
-                    Icons.add,
-                    color: kCold,
-                    size: 24,
-                  ),
+                  child: const Icon(Icons.add, color: kCold, size: 24),
                 ),
               ),
             ),
@@ -793,12 +767,18 @@ class _MaterialScreenState extends State<MaterialScreen>
   }
 
   // ── ACCIONES ──────────────────────────────────────────────────────────────
+
+  /// Abre carpetas navegando, archivos descargados con la app del sistema,
+  /// archivos no descargados los descarga primero.
   void _handleFileTap(MaterialFile file) {
+    // Carpeta → navegar dentro
     if (file.type == MaterialFileType.folder) {
       setState(() => _currentFolderId = file.id);
       return;
     }
-    if (!file.isDownloaded) {
+
+    // No descargado → iniciar descarga y avisar
+    if (!file.isDownloaded || file.filePath == null) {
       _material.downloadFile(file.id);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -830,19 +810,32 @@ class _MaterialScreenState extends State<MaterialScreen>
       );
       return;
     }
-    final path = file.filePath;
-    if (path == null) return;
-    switch (file.type) {
-      case MaterialFileType.image:
-        _showImageViewer(path);
-        break;
-      case MaterialFileType.video:
-        Navigator.push(context,
-          MaterialPageRoute(builder: (_) => _VideoViewerScreen(filePath: path)));
-        break;
-      default:
-        OpenFilex.open(path);
+
+    // Verificar que el archivo exista físicamente en disco
+    final path = file.filePath!;
+    if (!File(path).existsSync()) {
+      // Archivo perdido del disco → resetear y re-descargar
+      _material.downloadFile(file.id);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'ARCHIVO NO ENCONTRADO — RE-DESCARGANDO...',
+            style: TextStyle(fontFamily: 'monospace', fontSize: 11, color: kCold),
+          ),
+          backgroundColor: const Color(0xFF0A0505),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(2),
+            side: BorderSide(color: kRed.withOpacity(0.4)),
+          ),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return;
     }
+
+    // ── Abrir con la app del sistema, sin importar el tipo ─────────────────
+    OpenFilex.open(path);
   }
 
   void _handleFileAction(MaterialFile file, String action) {
@@ -851,28 +844,6 @@ class _MaterialScreenState extends State<MaterialScreen>
       case 'delete_all': _showDeleteDialog(file, DeleteMode.forEveryone); break;
       case 'delete_me':  _showDeleteDialog(file, DeleteMode.onlyForMe); break;
     }
-  }
-
-  void _showImageViewer(String path) {
-    showDialog(
-      context: context,
-      builder: (_) => Dialog(
-        backgroundColor: Colors.black,
-        insetPadding: const EdgeInsets.all(8),
-        child: Stack(
-          children: [
-            Center(child: InteractiveViewer(child: Image.file(File(path)))),
-            Positioned(
-              top: 8, right: 8,
-              child: IconButton(
-                icon: const Icon(Icons.close, color: kCold),
-                onPressed: () => Navigator.pop(context),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   void _showRenameDialog(MaterialFile file) {
@@ -1133,8 +1104,10 @@ class _FileCardState extends State<_FileCard>
                       border: Border.all(color: _typeAccent.withOpacity(0.25)),
                       borderRadius: BorderRadius.circular(3),
                     ),
+                    // Para imágenes descargadas: miniatura real
                     child: file.type == MaterialFileType.image &&
-                        file.isDownloaded && file.filePath != null
+                        file.isDownloaded && file.filePath != null &&
+                        File(file.filePath!).existsSync()
                         ? ClipRRect(
                             borderRadius: BorderRadius.circular(2),
                             child: Image.file(
@@ -1153,7 +1126,6 @@ class _FileCardState extends State<_FileCard>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        // Nombre
                         Text(
                           file.name,
                           style: TextStyle(
@@ -1167,7 +1139,6 @@ class _FileCardState extends State<_FileCard>
                           overflow: TextOverflow.ellipsis,
                         ),
                         const SizedBox(height: 3),
-                        // Meta línea
                         Row(
                           children: [
                             Text(
@@ -1201,7 +1172,6 @@ class _FileCardState extends State<_FileCard>
                           ],
                         ),
                         const SizedBox(height: 4),
-                        // Badges de estado
                         Row(
                           children: [
                             _StatusBadge(
@@ -1211,7 +1181,8 @@ class _FileCardState extends State<_FileCard>
                             const SizedBox(width: 4),
                             if (isFolder)
                               _StatusBadge(label: 'SECTOR', color: kAmber)
-                            else if (file.isDownloaded)
+                            else if (file.isDownloaded && file.filePath != null &&
+                                File(file.filePath!).existsSync())
                               _StatusBadge(label: 'LOCAL', color: kGreenScan)
                             else
                               _StatusBadge(label: '⬇ PENDIENTE', color: kRedGlow, pulse: true),
@@ -1221,7 +1192,6 @@ class _FileCardState extends State<_FileCard>
                     ),
                   ),
                   const SizedBox(width: 8),
-                  // ── Menú acciones ──
                   _buildActionMenu(file),
                 ],
               ),
@@ -1296,9 +1266,7 @@ class _StatusBadgeState extends State<_StatusBadge>
 
   @override
   Widget build(BuildContext context) {
-    if (!widget.pulse) {
-      return _badge(1.0);
-    }
+    if (!widget.pulse) return _badge(1.0);
     return AnimatedBuilder(
       animation: _ctrl,
       builder: (_, __) => _badge(0.4 + _ctrl.value * 0.6),
@@ -1363,7 +1331,6 @@ class _ClearanceChip extends StatelessWidget {
 
   String get _label {
     if (level >= 9) return 'Ω';
-    if (level >= 7) return 'J$level';
     return 'J$level';
   }
 
@@ -1575,7 +1542,6 @@ class _CorpDialog extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Header del dialog
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
@@ -1869,12 +1835,10 @@ class _ScanlinePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Líneas horizontales finas
     final linePaint = Paint()..color = Colors.black.withOpacity(0.12);
     for (double y = 0; y < size.height; y += 3) {
       canvas.drawRect(Rect.fromLTWH(0, y, size.width, 1), linePaint);
     }
-    // Línea de escaneo roja que recorre la pantalla
     final scanY = (t * size.height * 1.2) % (size.height + 60) - 30;
     final scanPaint = Paint()
       ..shader = LinearGradient(
@@ -1893,105 +1857,4 @@ class _ScanlinePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_ScanlinePainter old) => old.t != t;
-}
-
-// ─── VIDEO VIEWER ─────────────────────────────────────────────────────────────
-class _VideoViewerScreen extends StatefulWidget {
-  final String filePath;
-  const _VideoViewerScreen({required this.filePath});
-
-  @override
-  State<_VideoViewerScreen> createState() => _VideoViewerScreenState();
-}
-
-class _VideoViewerScreenState extends State<_VideoViewerScreen> {
-  late VideoPlayerController _ctrl;
-  bool _initialized = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = VideoPlayerController.file(File(widget.filePath))
-      ..initialize().then((_) {
-        if (mounted) {
-          setState(() => _initialized = true);
-          _ctrl.play();
-        }
-      });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          Center(
-            child: _initialized
-                ? AspectRatio(
-                    aspectRatio: _ctrl.value.aspectRatio,
-                    child: VideoPlayer(_ctrl),
-                  )
-                : const CircularProgressIndicator(color: kRed),
-          ),
-          Positioned(
-            top: 0, left: 0, right: 0,
-            child: SafeArea(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                color: Colors.black54,
-                child: Row(
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.arrow_back_ios_new, color: kCold, size: 18),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                    const Text(
-                      'REPRODUCCIÓN',
-                      style: TextStyle(
-                        fontFamily: 'monospace', fontSize: 11,
-                        color: kSteel, letterSpacing: 2,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          if (_initialized)
-            Positioned(
-              bottom: 32, left: 0, right: 0,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  GestureDetector(
-                    onTap: () => setState(() {
-                      _ctrl.value.isPlaying ? _ctrl.pause() : _ctrl.play();
-                    }),
-                    child: Container(
-                      width: 56, height: 56,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: kPanel,
-                        border: Border.all(color: kRed.withOpacity(0.5)),
-                      ),
-                      child: Icon(
-                        _ctrl.value.isPlaying ? Icons.pause : Icons.play_arrow,
-                        color: kCold, size: 28,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
 }

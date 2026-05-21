@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:open_filex/open_filex.dart';
 import '../models/message.dart';
 import '../services/peer_service.dart';
+import '../services/auth_service.dart';
 import 'package:flutter/services.dart';
 
 const Color kNeon = Color(0xFF00FFB2);
@@ -12,7 +13,6 @@ const Color kDark = Color(0xFF020A06);
 const Color kDarkPanel = Color(0xFF050F0A);
 
 class ChatScreen extends StatefulWidget {
-  /// null = broadcast (grupo "Todos"), valor = chat 1 a 1 con ese peer
   final String? peerIp;
   final String? groupId;
   final String peerName;
@@ -32,6 +32,7 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final _peer = PeerService();
+  final _auth = AuthService();
   final _ctrl = TextEditingController();
   final _scroll = ScrollController();
   List<Message> _messages = [];
@@ -44,7 +45,6 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _init() async {
-    // ← AGREGA groupId aquí
     _messages = await _peer.loadMessages(
       peerIp: widget.peerIp,
       groupId: widget.groupId,
@@ -53,6 +53,8 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom();
 
     _peer.events.listen((event) {
+      if (!mounted) return;
+
       if (event.type == 'message') {
         final msg = event.data as Message;
         bool show = false;
@@ -60,10 +62,8 @@ class _ChatScreenState extends State<ChatScreen> {
         if (widget.groupId != null) {
           show = msg.groupId == widget.groupId;
         } else if (widget.peerIp == null) {
-          // Broadcast: solo si NO es grupo y NO es 1-a-1
           show = msg.groupId == null && msg.recipientIp == null;
         } else {
-          // 1-a-1: solo si es directo y NO es grupo
           show =
               msg.groupId == null &&
               ((msg.senderIp == widget.peerIp &&
@@ -76,6 +76,42 @@ class _ChatScreenState extends State<ChatScreen> {
           setState(() => _messages.add(msg));
           _scrollToBottom();
         }
+      }
+
+      // ─── [NUEVO] Eliminar mensaje en tiempo real ─────────────────────────
+      else if (event.type == 'message_deleted') {
+        final messageId = event.data as String;
+        setState(() {
+          _messages.removeWhere((m) => m.id == messageId);
+        });
+      }
+
+      // ─── [NUEVO] Editar mensaje en tiempo real ───────────────────────────
+      else if (event.type == 'message_edited') {
+        final data = event.data as Map<String, dynamic>;
+        final messageId = data['messageId'] as String;
+        final newContent = data['newContent'] as String;
+        setState(() {
+          final idx = _messages.indexWhere((m) => m.id == messageId);
+          if (idx != -1) {
+            final old = _messages[idx];
+            _messages[idx] = Message(
+              id: old.id,
+              senderId: old.senderId,
+              senderIp: old.senderIp,
+              type: old.type,
+              content: newContent,
+              fileName: old.fileName,
+              fileSize: old.fileSize,
+              timestamp: old.timestamp,
+              isMe: old.isMe,
+              recipientIp: old.recipientIp,
+              isBackgroundVideo: old.isBackgroundVideo,
+              groupId: old.groupId,
+              isEdited: true,
+            );
+          }
+        });
       }
     });
   }
@@ -98,13 +134,10 @@ class _ChatScreenState extends State<ChatScreen> {
     _ctrl.clear();
 
     if (widget.groupId != null) {
-      // ← Modo grupo
       await _peer.sendToGroup(widget.groupId!, text, MessageType.text);
     } else if (widget.peerIp == null) {
-      // Modo broadcast
       await _peer.broadcastText(text);
     } else {
-      // Modo 1-a-1
       await _peer.sendTextTo(widget.peerIp!, text);
     }
   }
@@ -126,7 +159,6 @@ class _ChatScreenState extends State<ChatScreen> {
       type = MessageType.audio;
 
     if (widget.groupId != null) {
-      // ← Modo grupo (solo texto por ahora; para archivos requiere extensión)
       await _peer.sendToGroup(widget.groupId!, path, type);
     } else if (widget.peerIp == null) {
       await _peer.broadcastFile(path, type);
@@ -135,124 +167,284 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  // ─── Menú de opciones para mensaje individual ───────────────────────────────
+  void _openFile(Message msg) {
+    if (msg.type == MessageType.text) return;
+    final path = msg.content;
+    if (path.isEmpty) return;
+    final file = File(path);
+    if (!file.existsSync()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'ARCHIVO NO DISPONIBLE LOCALMENTE',
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 11,
+              color: Colors.white,
+            ),
+          ),
+          backgroundColor: kDarkPanel,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            side: BorderSide(color: kPink.withOpacity(0.4)),
+            borderRadius: BorderRadius.circular(2),
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    OpenFilex.open(path);
+  }
+
+  // ─── Permisos ─────────────────────────────────────────────────────────────
+
+  /// Si el mensaje es mío o tengo jerarquía ≥ 8.
+  bool _canDeleteForEveryone(Message msg) {
+    return msg.isMe || (_auth.currentUser?.jerarquia ?? 0) >= 8;
+  }
+
+  /// Solo puedo editar mis propios mensajes de texto.
+  bool _canEdit(Message msg) {
+    return msg.isMe && msg.type == MessageType.text;
+  }
+
+  // ─── Menú de opciones para mensaje ───────────────────────────────────────
+
   void _showMessageOptions(Message msg) {
-    // Siempre mostrar al menos "Eliminar"
     showModalBottomSheet(
       context: context,
       backgroundColor: kDarkPanel,
-      builder: (_) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Copiar (si es texto)
-          if (msg.type == MessageType.text)
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
+        side: BorderSide(color: Color(0xFF00FFB2), width: 0),
+      ),
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // ── Copiar texto (solo texto) ──────────────────────────────────
+            if (msg.type == MessageType.text)
+              ListTile(
+                leading: Icon(Icons.copy, color: kNeon, size: 18),
+                title: const Text(
+                  'Copiar texto',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    color: Colors.white,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  Clipboard.setData(ClipboardData(text: msg.content));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'COPIADO',
+                        style: TextStyle(fontFamily: 'monospace'),
+                      ),
+                      duration: Duration(seconds: 1),
+                      backgroundColor: kDarkPanel,
+                    ),
+                  );
+                },
+              ),
+
+            // ── Editar (solo mensajes propios de texto) ───────────────────
+            if (_canEdit(msg))
+              ListTile(
+                leading: Icon(Icons.edit, color: kNeon, size: 18),
+                title: const Text(
+                  'Editar mensaje',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    color: Colors.white,
+                  ),
+                ),
+                subtitle: const Text(
+                  'Actualiza el mensaje para todos',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 10,
+                    color: Colors.white38,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showEditMessageDialog(msg);
+                },
+              ),
+
+            // ── Abrir archivo (no texto) ───────────────────────────────────
+            if (msg.type != MessageType.text)
+              ListTile(
+                leading: Icon(Icons.open_in_new, color: kNeon, size: 18),
+                title: const Text(
+                  'Abrir archivo',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    color: Colors.white,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  _openFile(msg);
+                },
+              ),
+
+            // ── Eliminar solo para mí ──────────────────────────────────────
             ListTile(
-              leading: Icon(Icons.copy, color: kNeon, size: 18),
+              leading: const Icon(Icons.delete_outline, color: Colors.white38, size: 18),
               title: const Text(
-                'Copiar texto',
-                style: TextStyle(fontFamily: 'monospace', color: Colors.white),
+                'Eliminar para mí',
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  color: Colors.white60,
+                ),
+              ),
+              subtitle: const Text(
+                'Solo de tu dispositivo',
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 10,
+                  color: Colors.white24,
+                ),
               ),
               onTap: () {
                 Navigator.pop(context);
-                Clipboard.setData(ClipboardData(text: msg.content));
+                _showDeleteForMeConfirm(msg);
               },
             ),
-          // Editar (solo si es texto - quitamos la condición isMe temporalmente para probar)
-          if (msg.type == MessageType.text)
-            ListTile(
-              leading: Icon(Icons.edit, color: kNeon, size: 18),
-              title: const Text(
-                'Editar mensaje',
-                style: TextStyle(fontFamily: 'monospace', color: Colors.white),
+
+            // ── Eliminar para todos (propio o jerarquía ≥8) ───────────────
+            if (_canDeleteForEveryone(msg))
+              ListTile(
+                leading: const Icon(Icons.delete_forever, color: kPink, size: 18),
+                title: const Text(
+                  'Eliminar para todos',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    color: kPink,
+                  ),
+                ),
+                subtitle: Text(
+                  msg.isMe
+                      ? 'Borra el mensaje de todos los dispositivos'
+                      : 'Admin: eliminar mensaje ajeno para todos',
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 10,
+                    color: Colors.white38,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showDeleteForEveryoneConfirm(msg);
+                },
               ),
-              onTap: () {
-                Navigator.pop(context);
-                _showEditMessageDialog(msg);
-              },
-            ),
-          // Eliminar (siempre disponible)
-          ListTile(
-            leading: Icon(Icons.delete, color: kPink, size: 18),
-            title: const Text(
-              'Eliminar (solo para mí)',
-              style: TextStyle(fontFamily: 'monospace', color: kPink),
-            ),
-            onTap: () {
-              Navigator.pop(context);
-              _showDeleteMessageConfirm(msg);
-            },
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  // ─── Diálogo para editar mensaje ────────────────────────────────────────────
+  // ─── Editar para todos ────────────────────────────────────────────────────
+
   void _showEditMessageDialog(Message msg) {
-    final _ctrl = TextEditingController(text: msg.content);
+    final ctrl = TextEditingController(text: msg.content);
 
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: kDarkPanel,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(4),
+          side: BorderSide(color: kNeon.withOpacity(0.3)),
+        ),
         title: const Text(
           'EDITAR MENSAJE',
           style: TextStyle(fontFamily: 'monospace', color: Colors.white),
         ),
-        content: TextField(
-          controller: _ctrl,
-          style: const TextStyle(fontFamily: 'monospace', color: Colors.white),
-          decoration: InputDecoration(
-            hintText: 'Nuevo contenido',
-            hintStyle: TextStyle(color: Colors.white24),
-            filled: true,
-            fillColor: Colors.white.withOpacity(0.05),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(2),
-              borderSide: BorderSide(color: kNeon.withOpacity(0.3)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: ctrl,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                color: Colors.white,
+              ),
+              decoration: InputDecoration(
+                hintText: 'Nuevo contenido',
+                hintStyle: const TextStyle(color: Colors.white24),
+                filled: true,
+                fillColor: Colors.white.withOpacity(0.05),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(2),
+                  borderSide: BorderSide(color: kNeon.withOpacity(0.3)),
+                ),
+              ),
+              maxLines: 4,
+              autofocus: true,
             ),
-          ),
-          maxLines: 3,
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(Icons.info_outline, size: 12, color: kNeon.withOpacity(0.5)),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'La edición se aplicará para todos los participantes',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 10,
+                      color: kNeon.withOpacity(0.5),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text(
               'Cancelar',
-              style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
+              style: TextStyle(
+                fontFamily: 'monospace',
+                color: Colors.white38,
+              ),
             ),
           ),
           ElevatedButton(
-            // ← [CORREGIDO] Hacer async y recargar desde storage
             onPressed: () async {
-              if (_ctrl.text.trim().isNotEmpty) {
-                // 1. Editar en almacenamiento local
-                await _peer.editMessageLocally(msg.id, _ctrl.text.trim());
-
-                // 2. ← [CLAVE] Recargar TODOS los mensajes desde SharedPreferences
-                //    Esto asegura consistencia total con lo guardado
-                final updated = await _peer.loadMessages(
-                  peerIp: widget.peerIp,
-                  groupId: widget.groupId,
-                );
-
-                // 3. Actualizar UI con la lista fresca
-                if (mounted) {
-                  setState(() {
-                    _messages = updated;
-                  });
-                }
-
+              final newContent = ctrl.text.trim();
+              if (newContent.isEmpty || newContent == msg.content) {
                 Navigator.pop(context);
+                return;
               }
+              Navigator.pop(context);
+
+              // Editar para todos via red
+              await _peer.editMessageForEveryone(
+                messageId: msg.id,
+                newContent: newContent,
+                peerIp: widget.peerIp,
+                groupId: widget.groupId,
+              );
             },
             style: ElevatedButton.styleFrom(
-              backgroundColor: kNeon.withOpacity(0.2),
+              backgroundColor: kNeon.withOpacity(0.15),
               foregroundColor: kNeon,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(2),
+                side: BorderSide(color: kNeon.withOpacity(0.4)),
+              ),
             ),
             child: const Text(
-              'GUARDAR',
-              style: TextStyle(fontFamily: 'monospace'),
+              'GUARDAR PARA TODOS',
+              style: TextStyle(fontFamily: 'monospace', fontSize: 12),
             ),
           ),
         ],
@@ -260,46 +452,52 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  // ─── Confirmación para eliminar mensaje ─────────────────────────────────────
-  void _showDeleteMessageConfirm(Message msg) {
+  // ─── Eliminar solo para mí ────────────────────────────────────────────────
+
+  void _showDeleteForMeConfirm(Message msg) {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: kDarkPanel,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(4),
+          side: BorderSide(color: Colors.white12),
+        ),
         title: const Text(
-          '¿ELIMINAR MENSAJE?',
-          style: TextStyle(fontFamily: 'monospace', color: kPink),
+          '¿ELIMINAR PARA TI?',
+          style: TextStyle(fontFamily: 'monospace', color: Colors.white60),
         ),
         content: const Text(
-          'Esto solo eliminará el mensaje de TU dispositivo.',
-          style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
+          'El mensaje se eliminará solo de tu dispositivo. Los demás participantes podrán verlo.',
+          style: TextStyle(
+            fontFamily: 'monospace',
+            color: Colors.white38,
+            fontSize: 13,
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text(
               'Cancelar',
-              style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
+              style: TextStyle(
+                fontFamily: 'monospace',
+                color: Colors.white38,
+              ),
             ),
           ),
           ElevatedButton(
             onPressed: () async {
-              await _peer.deleteMessageLocally(msg.id);
-
-              // ← [NUEVO] Recargar mensajes desde storage para asegurar consistencia
-              final updated = await _peer.loadMessages(
-                peerIp: widget.peerIp,
-                groupId: widget.groupId,
-              );
-
-              setState(() {
-                _messages = updated;
-              });
               Navigator.pop(context);
+              await _peer.deleteMessageLocally(msg.id);
+              setState(() => _messages.removeWhere((m) => m.id == msg.id));
             },
             style: ElevatedButton.styleFrom(
-              backgroundColor: kPink.withOpacity(0.2),
-              foregroundColor: kPink,
+              backgroundColor: Colors.white.withOpacity(0.08),
+              foregroundColor: Colors.white60,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
             child: const Text(
               'ELIMINAR',
@@ -311,7 +509,106 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  // ─── Menú de opciones del chat (limpiar todo) ───────────────────────────────
+  // ─── Eliminar para todos ──────────────────────────────────────────────────
+
+  void _showDeleteForEveryoneConfirm(Message msg) {
+    final isAdmin = !msg.isMe && (_auth.currentUser?.jerarquia ?? 0) >= 8;
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: kDarkPanel,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(4),
+          side: BorderSide(color: kPink.withOpacity(0.3)),
+        ),
+        title: const Text(
+          '¿ELIMINAR PARA TODOS?',
+          style: TextStyle(fontFamily: 'monospace', color: kPink),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              isAdmin
+                  ? 'Usarás tus permisos de administrador para eliminar un mensaje ajeno. Esta acción no se puede deshacer.'
+                  : 'El mensaje se eliminará para todos los participantes del chat. Esta acción no se puede deshacer.',
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                color: Colors.white38,
+                fontSize: 13,
+              ),
+            ),
+            if (isAdmin) ...[
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: kPink.withOpacity(0.08),
+                  border: Border.all(color: kPink.withOpacity(0.3)),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.admin_panel_settings, color: kPink, size: 14),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'Acción de administrador',
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 11,
+                        color: kPink,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text(
+              'Cancelar',
+              style: TextStyle(
+                fontFamily: 'monospace',
+                color: Colors.white38,
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await _peer.deleteMessageForEveryone(
+                messageId: msg.id,
+                peerIp: widget.peerIp,
+                groupId: widget.groupId,
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: kPink.withOpacity(0.15),
+              foregroundColor: kPink,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(2),
+                side: BorderSide(color: kPink.withOpacity(0.4)),
+              ),
+            ),
+            child: const Text(
+              'ELIMINAR PARA TODOS',
+              style: TextStyle(fontFamily: 'monospace', fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── Opciones generales del chat ──────────────────────────────────────────
+
   void _showChatOptions() {
     showModalBottomSheet(
       context: context,
@@ -343,7 +640,6 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  // ─── Confirmación para limpiar todo el chat ─────────────────────────────────
   void _showClearChatConfirm() {
     showDialog(
       context: context,
@@ -358,7 +654,10 @@ class _ChatScreenState extends State<ChatScreen> {
           children: [
             const Text(
               'Se eliminarán TODOS los mensajes de este chat.',
-              style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
+              style: TextStyle(
+                fontFamily: 'monospace',
+                color: Colors.white38,
+              ),
             ),
             const SizedBox(height: 8),
             Text(
@@ -372,7 +671,10 @@ class _ChatScreenState extends State<ChatScreen> {
             onPressed: () => Navigator.pop(context),
             child: const Text(
               'Cancelar',
-              style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
+              style: TextStyle(
+                fontFamily: 'monospace',
+                color: Colors.white38,
+              ),
             ),
           ),
           ElevatedButton(
@@ -381,10 +683,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 peerIp: widget.peerIp,
                 groupId: widget.groupId,
               );
-              // Actualizar UI localmente
-              setState(() {
-                _messages.clear();
-              });
+              setState(() => _messages.clear());
               Navigator.pop(context);
             },
             style: ElevatedButton.styleFrom(
@@ -401,6 +700,8 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  // ─── Build ────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -411,7 +712,9 @@ class _ChatScreenState extends State<ChatScreen> {
             _buildAppBar(),
             if (!_initialized)
               const Expanded(
-                child: Center(child: CircularProgressIndicator(color: kNeon)),
+                child: Center(
+                  child: CircularProgressIndicator(color: kNeon),
+                ),
               )
             else
               Expanded(
@@ -419,11 +722,11 @@ class _ChatScreenState extends State<ChatScreen> {
                   controller: _scroll,
                   padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
                   itemCount: _messages.length,
-                  // ← [CORREGIDO] Ahora sí pasa el callback onLongPress
                   itemBuilder: (_, i) => _MessageBubble(
                     msg: _messages[i],
                     peer: _peer,
                     onLongPress: () => _showMessageOptions(_messages[i]),
+                    onTapFile: () => _openFile(_messages[i]),
                   ),
                 ),
               ),
@@ -482,8 +785,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 Text(
                   widget.isGroup
                       ? (widget.groupId != null
-                            ? 'GRUPO PRIVADO'
-                            : 'CANAL GLOBAL · BROADCAST')
+                          ? 'GRUPO PRIVADO'
+                          : 'CANAL GLOBAL · BROADCAST')
                       : widget.peerIp ?? '',
                   style: const TextStyle(
                     fontFamily: 'monospace',
@@ -495,25 +798,6 @@ class _ChatScreenState extends State<ChatScreen> {
               ],
             ),
           ),
-
-          // ← [TEMPORAL] Botón de debug para probar el menú sin long-press
-          IconButton(
-            icon: const Icon(Icons.bug_report, color: kPink, size: 18),
-            onPressed: () {
-              print('🐛 Botón de debug presionado');
-              if (_messages.isNotEmpty) {
-                // Abre el menú con el último mensaje para probar
-                _showMessageOptions(_messages.last);
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('No hay mensajes para probar')),
-                );
-              }
-            },
-            tooltip: 'Probar menú de opciones',
-          ),
-
-          // Menú principal del chat (limpiar todo)
           IconButton(
             icon: Icon(
               Icons.more_vert,
@@ -552,7 +836,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
               decoration: InputDecoration(
                 hintText: '> escribir mensaje...',
-                hintStyle: TextStyle(
+                hintStyle: const TextStyle(
                   fontFamily: 'monospace',
                   color: Colors.white24,
                   fontSize: 13,
@@ -594,37 +878,39 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     );
   }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
 }
 
 // ─── Burbuja de mensaje ───────────────────────────────────────────────────────
-// ─── Burbuja de mensaje (actualizada) ───────────────────────────────────────
-// ─── Burbuja de mensaje (CORREGIDA) ───────────────────────────────────────
-// ─── Burbuja de mensaje (VERSIÓN DEBUG - A PRUEBA DE ERRORES) ─────────────
-// ─── Burbuja de mensaje (VERSIÓN FINAL FUNCIONAL) ──────────────────────────
 class _MessageBubble extends StatelessWidget {
   final Message msg;
   final PeerService peer;
   final VoidCallback? onLongPress;
+  final VoidCallback? onTapFile;
 
   const _MessageBubble({
     required this.msg,
     required this.peer,
     this.onLongPress,
+    this.onTapFile,
   });
 
   @override
   Widget build(BuildContext context) {
     final isMe = msg.isMe;
-
-    // ← [NUEVO] Lógica para mostrar nombre SIEMPRE (propio o ajeno)
     final displayName = isMe
         ? (peer.myName.isNotEmpty ? peer.myName : 'TÚ')
-        : peer.getDisplayNameForIp(msg.senderIp); // ← Usa el nuevo método
+        : peer.getDisplayNameForIp(msg.senderIp);
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onLongPress: () {
-        print('🔍 LONG-PRESS DETECTADO: ${msg.id}');
         if (onLongPress != null) onLongPress!();
       },
       child: Align(
@@ -650,12 +936,9 @@ class _MessageBubble extends StatelessWidget {
             ),
           ),
           child: Column(
-            // ← [NUEVO] Alinear contenido según el remitente
-            crossAxisAlignment: isMe
-                ? CrossAxisAlignment.end
-                : CrossAxisAlignment.start,
+            crossAxisAlignment:
+                isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
             children: [
-              // ← [MODIFICADO] Nombre siempre visible
               Padding(
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Text(
@@ -669,15 +952,35 @@ class _MessageBubble extends StatelessWidget {
                   ),
                 ),
               ),
-              _buildContentReadOnly(context),
+              _buildContent(context),
               const SizedBox(height: 4),
-              Text(
-                '${msg.timestamp.hour.toString().padLeft(2, '0')}:${msg.timestamp.minute.toString().padLeft(2, '0')}',
-                style: TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 9,
-                  color: isMe ? kNeon.withOpacity(0.4) : Colors.white24,
-                ),
+              // ── Timestamp + indicador de edición ──────────────────────────
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (msg.isEdited) ...[
+                    Text(
+                      'editado',
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 8,
+                        color: isMe
+                            ? kNeon.withOpacity(0.35)
+                            : Colors.white.withOpacity(0.2),
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                  ],
+                  Text(
+                    '${msg.timestamp.hour.toString().padLeft(2, '0')}:${msg.timestamp.minute.toString().padLeft(2, '0')}',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 9,
+                      color: isMe ? kNeon.withOpacity(0.4) : Colors.white24,
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -686,8 +989,7 @@ class _MessageBubble extends StatelessWidget {
     );
   }
 
-  // ← [NUEVO] Método que SÍ debe existir para que compile
-  Widget _buildContentReadOnly(BuildContext context) {
+  Widget _buildContent(BuildContext context) {
     const textStyle = TextStyle(
       fontFamily: 'monospace',
       color: Colors.white,
@@ -699,41 +1001,127 @@ class _MessageBubble extends StatelessWidget {
         return Text(msg.content, style: textStyle);
 
       case MessageType.image:
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: Image.file(
-            File(msg.content),
-            height: 180,
-            fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => Container(
-              height: 180,
-              color: Colors.white10,
+        final file = File(msg.content);
+        if (file.existsSync()) {
+          return GestureDetector(
+            onTap: onTapFile,
+            child: Stack(
               alignment: Alignment.center,
-              child: const Text(
-                '❌ Imagen no disponible',
-                style: TextStyle(fontSize: 10, color: Colors.white38),
-              ),
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: Image.file(
+                    file,
+                    height: 180,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => _fileChip(
+                      Icons.image_outlined,
+                      msg.fileName ?? 'imagen',
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Icon(
+                    Icons.open_in_new,
+                    color: Colors.white,
+                    size: 16,
+                  ),
+                ),
+              ],
             ),
+          );
+        }
+        return _fileChip(
+          Icons.image_outlined,
+          msg.fileName ?? 'imagen',
+          unavailable: true,
+        );
+
+      case MessageType.video:
+        return GestureDetector(
+          onTap: onTapFile,
+          child: _fileChip(
+            Icons.movie_outlined,
+            msg.fileName ?? 'video',
+            tappable: File(msg.content).existsSync(),
+            unavailable: !File(msg.content).existsSync(),
+          ),
+        );
+
+      case MessageType.audio:
+        return GestureDetector(
+          onTap: onTapFile,
+          child: _fileChip(
+            Icons.graphic_eq,
+            msg.fileName ?? 'audio',
+            tappable: File(msg.content).existsSync(),
+            unavailable: !File(msg.content).existsSync(),
           ),
         );
 
       default:
-        return Row(
-          children: [
-            Icon(Icons.attach_file, size: 16, color: kNeon.withOpacity(0.7)),
-            const SizedBox(width: 6),
-            Flexible(
-              child: Text(
-                msg.fileName ?? 'Archivo',
-                style: TextStyle(
-                  fontFamily: 'monospace',
-                  color: kNeon.withOpacity(0.8),
-                  fontSize: 12,
-                ),
-              ),
-            ),
-          ],
+        return GestureDetector(
+          onTap: onTapFile,
+          child: _fileChip(
+            Icons.attach_file,
+            msg.fileName ?? 'archivo',
+            tappable: File(msg.content).existsSync(),
+            unavailable: !File(msg.content).existsSync(),
+          ),
         );
     }
+  }
+
+  Widget _fileChip(
+    IconData icon,
+    String name, {
+    bool tappable = false,
+    bool unavailable = false,
+  }) {
+    final color = unavailable
+        ? Colors.white24
+        : tappable
+            ? kNeon
+            : kNeon.withOpacity(0.8);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        border: Border.all(color: color.withOpacity(0.3)),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              name,
+              style: TextStyle(
+                fontFamily: 'monospace',
+                color: color,
+                fontSize: 12,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (tappable) ...[
+            const SizedBox(width: 8),
+            Icon(Icons.open_in_new, size: 12, color: color.withOpacity(0.6)),
+          ],
+          if (unavailable) ...[
+            const SizedBox(width: 8),
+            const Icon(Icons.cloud_off, size: 12, color: Colors.white24),
+          ],
+        ],
+      ),
+    );
   }
 }
