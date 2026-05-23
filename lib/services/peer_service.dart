@@ -43,30 +43,20 @@ class PeerService {
   static const String kGroupsKey = 'groups_data';
   static const String kUserHierarchyKey = 'user_hierarchy';
 
-  final Map<String, Group> _groups = {}; // id -> Group
-  int _myHierarchy = 1; // Por defecto, nivel mínimo
+  final Map<String, Group> _groups = {};
+  int _myHierarchy = 1;
 
-  // ─── Getter para la jerarquía actual ───────────────────────────────────────
   int get myHierarchy => _myHierarchy;
 
   // ─── Inicio ────────────────────────────────────────────────────────────────
 
-  // ─── [NUEVO] Obtener nombre para mostrar: username registrado o fallback a hostname/IP
   String getDisplayNameForIp(String ip) {
-    // 1. Primero intenta obtener el username registrado desde AuthService
     final registeredName = AuthService().getUsernameForIp(ip);
-
-    // 2. Si está registrado y es diferente a la IP, úsalo
-    if (registeredName != ip) {
-      return registeredName;
-    }
-
-    // 3. Si no está registrado, fallback al hostname de Tailscale o la IP
+    if (registeredName != ip) return registeredName;
     return peerNames[ip] ?? ip;
   }
 
   Future<void> start() async {
-    // Evitar múltiples inicios
     if (_server != null) {
       print('⚠️ [PeerService] Server already running');
       return;
@@ -94,7 +84,7 @@ class PeerService {
     Timer.periodic(const Duration(seconds: 10), (_) => _discoverPeers());
   }
 
-  // ─── Envío: mensaje a grupo (solo miembros) ────────────────────────────────
+  // ─── Envío: mensaje a grupo ────────────────────────────────────────────────
 
   Future<void> sendToGroup(
     String groupId,
@@ -183,6 +173,8 @@ class PeerService {
               );
               AuthService().syncWithNewPeer(ipStr);
               StudyRoomService().syncWithNewPeer(ipStr);
+              // ── Sincronizar video de fondo con el peer recién llegado ────
+              _syncBackgroundVideoWithPeer(ipStr);
             }
           }
         }
@@ -190,21 +182,190 @@ class PeerService {
     } catch (_) {}
   }
 
-  /// Envía un paquete de MaterialService a través del canal existente (puerto 9000)
+  // ─── Sincronización de video de fondo con peer nuevo ─────────────────────
+  //
+  // Estrategia: al detectar un peer nuevo, le pedimos su estado de video
+  // (request_bg_video_state). El peer responde con un paquete que indica
+  // si tiene video activo y su nombre de archivo.
+  //
+  // Luego comparamos con nuestro estado local:
+  //   • Si nosotros tenemos video y el peer NO → le enviamos el nuestro.
+  //   • Si el peer tiene video y nosotros NO   → le pedimos que nos lo envíe
+  //     (enviamos request_bg_video_transfer).
+  //   • Si ambos tienen video → gana el más reciente según timestamp guardado.
+  //   • Si ninguno tiene     → no hacemos nada.
+  //
+  Future<void> _syncBackgroundVideoWithPeer(String ip) async {
+    try {
+      // 1. Consultar el estado de video del peer
+      final socket = await Socket.connect(
+        ip, kPort,
+        timeout: const Duration(seconds: 8),
+      );
+
+      final headerBytes = utf8.encode(jsonEncode({
+        'type': 'request_bg_video_state',
+        'senderIp': myIp,
+      }));
+      final lenBytes = ByteData(4)
+        ..setInt32(0, headerBytes.length, Endian.big);
+      socket.add(lenBytes.buffer.asUint8List());
+      socket.add(headerBytes);
+      await socket.flush();
+
+      // Leer respuesta
+      final chunks = <int>[];
+      await for (final chunk in socket) {
+        chunks.addAll(chunk);
+      }
+      await socket.close();
+
+      if (chunks.length < 4) return;
+
+      final respHeaderLen = ByteData.view(
+        Uint8List.fromList(chunks.sublist(0, 4)).buffer,
+      ).getInt32(0, Endian.big);
+
+      if (chunks.length < 4 + respHeaderLen) return;
+
+      final respHeader = jsonDecode(
+        utf8.decode(chunks.sublist(4, 4 + respHeaderLen)),
+      ) as Map<String, dynamic>;
+
+      final peerHasVideo = respHeader['hasVideo'] as bool? ?? false;
+      final peerVideoName = respHeader['videoFileName'] as String?;
+      final peerVideoTs = respHeader['videoTimestamp'] as String?;
+
+      final myVideoPath = await getBackgroundVideoPath();
+      final myVideoTs = await _getBackgroundVideoTimestamp();
+
+      if (myVideoPath != null) {
+        // Nosotros tenemos video
+        if (!peerHasVideo) {
+          // El peer no tiene → enviarle el nuestro
+          print('[BgVideo] Peer $ip has no video, sending ours...');
+          await _sendBackgroundVideoToPeer(ip, myVideoPath);
+        } else {
+          // Ambos tienen → comparar timestamps, gana el más reciente
+          if (peerVideoTs != null && myVideoTs != null) {
+            final peerDt = DateTime.tryParse(peerVideoTs);
+            final myDt = DateTime.tryParse(myVideoTs);
+            if (peerDt != null && myDt != null && peerDt.isAfter(myDt)) {
+              // El peer tiene uno más reciente → pedirle que nos lo envíe
+              print('[BgVideo] Peer $ip has newer video, requesting...');
+              await _requestVideoTransferFrom(ip);
+            } else {
+              // El nuestro es más reciente o igual → enviarle el nuestro
+              print('[BgVideo] We have newer/equal video, pushing to $ip...');
+              await _sendBackgroundVideoToPeer(ip, myVideoPath);
+            }
+          }
+        }
+      } else {
+        // Nosotros no tenemos video
+        if (peerHasVideo) {
+          // El peer tiene → pedirle que nos lo envíe
+          print('[BgVideo] Peer $ip has video, requesting transfer...');
+          await _requestVideoTransferFrom(ip);
+        }
+        // Si ninguno tiene video, no hacer nada
+      }
+    } catch (e) {
+      print('[BgVideo] _syncBackgroundVideoWithPeer($ip) failed: $e');
+    }
+  }
+
+  /// Pide al peer que nos envíe su video de fondo activo.
+  Future<void> _requestVideoTransferFrom(String ip) async {
+    try {
+      final socket = await Socket.connect(
+        ip, kPort,
+        timeout: const Duration(seconds: 8),
+      );
+      final headerBytes = utf8.encode(jsonEncode({
+        'type': 'request_bg_video_transfer',
+        'senderIp': myIp,
+      }));
+      final lenBytes = ByteData(4)
+        ..setInt32(0, headerBytes.length, Endian.big);
+      socket.add(lenBytes.buffer.asUint8List());
+      socket.add(headerBytes);
+      await socket.flush();
+      await socket.close();
+      await socket.done;
+    } catch (e) {
+      print('[BgVideo] _requestVideoTransferFrom($ip) failed: $e');
+    }
+  }
+
+  /// Envía el video de fondo a un peer específico.
+  Future<void> _sendBackgroundVideoToPeer(
+      String ip, String filePath) async {
+    final file = File(filePath);
+    if (!await file.exists()) return;
+    final bytes = await file.readAsBytes();
+    final fileName = filePath.split(Platform.pathSeparator).last;
+    final ts = await _getBackgroundVideoTimestamp() ??
+        DateTime.now().toIso8601String();
+
+    try {
+      final socket = await Socket.connect(
+        ip, kPort,
+        timeout: const Duration(seconds: 30),
+      );
+      final header = {
+        'id': _uuid.v4(),
+        'senderId': myId,
+        'senderIp': myIp,
+        'type': MessageType.video.name,
+        'content': '',
+        'fileName': fileName,
+        'fileSize': bytes.length,
+        'timestamp': DateTime.now().toIso8601String(),
+        'recipientIp': null,
+        'isBackgroundVideo': true,
+        'videoTimestamp': ts,
+      };
+      final headerBytes = utf8.encode(jsonEncode(header));
+      final lenBytes = ByteData(4)
+        ..setInt32(0, headerBytes.length, Endian.big);
+      socket.add(lenBytes.buffer.asUint8List());
+      socket.add(headerBytes);
+      socket.add(bytes);
+      await socket.flush();
+      await socket.close();
+      await socket.done;
+      print('[BgVideo] Sent video to $ip: $fileName');
+    } catch (e) {
+      print('[BgVideo] _sendBackgroundVideoToPeer($ip) failed: $e');
+    }
+  }
+
+  /// Timestamp de cuándo se estableció el video de fondo actual.
+  Future<String?> _getBackgroundVideoTimestamp() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('${kBgVideoKey}_timestamp');
+  }
+
+  Future<void> _saveBackgroundVideoTimestamp(String ts) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('${kBgVideoKey}_timestamp', ts);
+  }
+
+  // ─── sendMaterialPacket ───────────────────────────────────────────────────
+
   Future<void> sendMaterialPacket(
     String peerIp,
     Map<String, dynamic> data,
   ) async {
     try {
       final socket = await Socket.connect(
-        peerIp,
-        kPort,
+        peerIp, kPort,
         timeout: const Duration(seconds: 10),
       );
-
       final headerBytes = utf8.encode(jsonEncode(data));
-      final lenBytes = ByteData(4)..setInt32(0, headerBytes.length, Endian.big);
-
+      final lenBytes = ByteData(4)
+        ..setInt32(0, headerBytes.length, Endian.big);
       socket.add(lenBytes.buffer.asUint8List());
       socket.add(headerBytes);
       await socket.flush();
@@ -255,24 +416,64 @@ class PeerService {
     if (allBytes.length < 4) return;
 
     final headerLen = ByteData.view(
-      allBytes.buffer,
-      0,
-      4,
+      allBytes.buffer, 0, 4,
     ).getInt32(0, Endian.big);
     if (allBytes.length < 4 + headerLen) return;
 
     final headerBytes = allBytes.sublist(4, 4 + headerLen);
-    final header = jsonDecode(utf8.decode(headerBytes)) as Map<String, dynamic>;
+    final header =
+        jsonDecode(utf8.decode(headerBytes)) as Map<String, dynamic>;
 
-    // ─── Manejo de paquetes de grupo ─────────────────────────────────────────
     final packetType = header['type'] as String?;
+
+    // ─── Consulta de estado de video de fondo ─────────────────────────────
+    // El peer nos pregunta si tenemos video activo. Respondemos con un
+    // paquete de estado (sin bytes de video) en el mismo socket.
+    if (packetType == 'request_bg_video_state') {
+      final myPath = await getBackgroundVideoPath();
+      final myTs = await _getBackgroundVideoTimestamp();
+      final hasVideo = myPath != null;
+      final fileName = hasVideo
+          ? myPath.split(Platform.pathSeparator).last
+          : null;
+
+      final responseHeader = jsonEncode({
+        'hasVideo': hasVideo,
+        'videoFileName': fileName,
+        'videoTimestamp': myTs,
+      });
+      final respBytes = utf8.encode(responseHeader);
+      final lenBytes = ByteData(4)
+        ..setInt32(0, respBytes.length, Endian.big);
+      socket.add(lenBytes.buffer.asUint8List());
+      socket.add(respBytes);
+      await socket.flush();
+      await socket.close();
+      return;
+    }
+
+    // ─── El peer nos pide que le enviemos nuestro video ───────────────────
+    if (packetType == 'request_bg_video_transfer') {
+      await socket.close();
+      final senderIp = header['senderIp'] as String?;
+      if (senderIp != null) {
+        final myPath = await getBackgroundVideoPath();
+        if (myPath != null) {
+          await _sendBackgroundVideoToPeer(senderIp, myPath);
+        }
+      }
+      return;
+    }
+
+    // ─── Manejo de paquetes de grupo ──────────────────────────────────────
     if (packetType != null &&
-        ['group_create', 'group_delete', 'group_update'].contains(packetType)) {
+        ['group_create', 'group_delete', 'group_update']
+            .contains(packetType)) {
       _handleGroupPacket(header);
       return;
     }
 
-    // ─── [NUEVO] Eliminar mensaje para todos ──────────────────────────────────
+    // ─── Eliminar mensaje ─────────────────────────────────────────────────
     if (packetType == 'message_delete') {
       final messageId = header['messageId'] as String?;
       if (messageId != null) {
@@ -282,7 +483,7 @@ class PeerService {
       return;
     }
 
-    // ─── [NUEVO] Editar mensaje para todos ────────────────────────────────────
+    // ─── Editar mensaje ───────────────────────────────────────────────────
     if (packetType == 'message_edit') {
       final messageId = header['messageId'] as String?;
       final newContent = header['newContent'] as String?;
@@ -321,6 +522,7 @@ class PeerService {
       print('🚫 [ReceiveClear] Received clear background video command');
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(kBgVideoKey);
+      await prefs.remove('${kBgVideoKey}_timestamp');
       _controller.add(PeerEvent('background_video_cleared', null));
       return;
     }
@@ -348,6 +550,7 @@ class PeerService {
         print('🎬 [ReceiveVideo] Received background video header');
         final fileName =
             header['fileName'] as String? ?? 'background_video.mp4';
+        final videoTimestamp = header['videoTimestamp'] as String?;
         try {
           final dir = await getApplicationDocumentsDirectory();
           final destPath = '${dir.path}/$fileName';
@@ -355,6 +558,9 @@ class PeerService {
           await destFile.writeAsBytes(fileBytes);
           final prefs = await SharedPreferences.getInstance();
           await prefs.setString(kBgVideoKey, destPath);
+          // Guardar timestamp del video para comparaciones futuras
+          final ts = videoTimestamp ?? DateTime.now().toIso8601String();
+          await prefs.setString('${kBgVideoKey}_timestamp', ts);
           _controller.add(PeerEvent('background_video_updated', destPath));
         } catch (e, stack) {
           print('❌ [ReceiveVideo] Error saving video: $e');
@@ -474,9 +680,11 @@ class PeerService {
 
     final bytes = await file.readAsBytes();
     final fileName = filePath.split(Platform.pathSeparator).last;
+    final ts = DateTime.now().toIso8601String();
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(kBgVideoKey, filePath);
+    await prefs.setString('${kBgVideoKey}_timestamp', ts);
     _controller.add(PeerEvent('background_video_updated', filePath));
 
     final header = {
@@ -490,15 +698,15 @@ class PeerService {
       'timestamp': DateTime.now().toIso8601String(),
       'recipientIp': null,
       'isBackgroundVideo': true,
+      'videoTimestamp': ts,   // ← timestamp para comparaciones futuras
     };
 
     for (final ip in List.from(knownPeers.keys)) {
       if (ip == myIp) continue;
       try {
         final socket = await Socket.connect(
-          ip,
-          kPort,
-          timeout: const Duration(seconds: 10),
+          ip, kPort,
+          timeout: const Duration(seconds: 30),
         );
         final headerBytes = utf8.encode(jsonEncode(header));
         final lenBytes = ByteData(4)
@@ -519,6 +727,7 @@ class PeerService {
   Future<void> clearBackgroundVideo() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(kBgVideoKey);
+    await prefs.remove('${kBgVideoKey}_timestamp');
     _controller.add(PeerEvent('background_video_cleared', null));
 
     final header = {
@@ -547,18 +756,13 @@ class PeerService {
     return path;
   }
 
-  // ─── [NUEVO] Eliminar mensaje para TODOS ─────────────────────────────────
-  ///
-  /// Envía el paquete de eliminación a los peers relevantes según el contexto
-  /// del chat (broadcast, 1-a-1 o grupo).
-  ///
-  /// Retorna true si se envió correctamente.
+  // ─── Eliminar mensaje para TODOS ─────────────────────────────────────────
+
   Future<void> deleteMessageForEveryone({
     required String messageId,
-    String? peerIp,         // null = broadcast global
-    String? groupId,        // si es chat de grupo
+    String? peerIp,
+    String? groupId,
   }) async {
-    // Eliminar localmente primero
     await deleteMessageLocally(messageId);
     _controller.add(PeerEvent('message_deleted', messageId));
 
@@ -569,7 +773,6 @@ class PeerService {
     };
 
     if (groupId != null) {
-      // Chat de grupo: enviar a todos los miembros (o knownPeers si no hay lista)
       final group = _groups[groupId];
       final targets = (group != null && group.memberIps.isNotEmpty)
           ? group.memberIps.where((ip) => ip != myIp)
@@ -578,26 +781,22 @@ class PeerService {
         await _sendPacket(ip, packet, null);
       }
     } else if (peerIp != null) {
-      // Chat 1-a-1: solo al peer
       await _sendPacket(peerIp, packet, null);
     } else {
-      // Broadcast global: a todos los peers conocidos
       for (final ip in List.from(knownPeers.keys)) {
         await _sendPacket(ip, packet, null);
       }
     }
   }
 
-  // ─── [NUEVO] Editar mensaje para TODOS ───────────────────────────────────
-  ///
-  /// Edita el mensaje localmente y propaga la edición a los peers relevantes.
+  // ─── Editar mensaje para TODOS ───────────────────────────────────────────
+
   Future<void> editMessageForEveryone({
     required String messageId,
     required String newContent,
     String? peerIp,
     String? groupId,
   }) async {
-    // Editar localmente
     await editMessageLocally(messageId, newContent);
     _controller.add(PeerEvent('message_edited', {
       'messageId': messageId,
@@ -628,8 +827,8 @@ class PeerService {
     }
   }
 
-  // ─── [NUEVO] Editar mensaje recibido de un peer (sin restricción de sender) ─
-  Future<void> _editMessageFromPeer(String messageId, String newContent) async {
+  Future<void> _editMessageFromPeer(
+      String messageId, String newContent) async {
     final prefs = await SharedPreferences.getInstance();
     final list = prefs.getStringList('messages') ?? [];
     final updated = <String>[];
@@ -656,13 +855,13 @@ class PeerService {
   ) async {
     try {
       final socket = await Socket.connect(
-        peerIp,
-        kPort,
+        peerIp, kPort,
         timeout: const Duration(seconds: 10),
       );
 
       final headerBytes = utf8.encode(jsonEncode(header));
-      final lenBytes = ByteData(4)..setInt32(0, headerBytes.length, Endian.big);
+      final lenBytes = ByteData(4)
+        ..setInt32(0, headerBytes.length, Endian.big);
 
       socket.add(lenBytes.buffer.asUint8List());
       socket.add(headerBytes);
@@ -681,7 +880,8 @@ class PeerService {
     await prefs.setStringList('messages', list);
   }
 
-  Future<List<Message>> loadMessages({String? peerIp, String? groupId}) async {
+  Future<List<Message>> loadMessages(
+      {String? peerIp, String? groupId}) async {
     final prefs = await SharedPreferences.getInstance();
     final myIp_ = myIp;
     final all = (prefs.getStringList('messages') ?? []).map((s) {
@@ -714,7 +914,6 @@ class PeerService {
 
   // ─── Gestión LOCAL de mensajes ─────────────────────────────────────────────
 
-  /// Elimina un mensaje específico solo de TU almacenamiento local
   Future<void> deleteMessageLocally(String messageId) async {
     final prefs = await SharedPreferences.getInstance();
     final list = prefs.getStringList('messages') ?? [];
@@ -725,8 +924,8 @@ class PeerService {
     await prefs.setStringList('messages', filtered);
   }
 
-  /// Edita un mensaje solo localmente (solo si es mío)
-  Future<void> editMessageLocally(String messageId, String newContent) async {
+  Future<void> editMessageLocally(
+      String messageId, String newContent) async {
     final prefs = await SharedPreferences.getInstance();
     final list = prefs.getStringList('messages') ?? [];
     final updated = <String>[];
@@ -744,8 +943,8 @@ class PeerService {
     await prefs.setStringList('messages', updated);
   }
 
-  /// Elimina TODOS los mensajes de un chat específico (solo local)
-  Future<void> deleteMessagesForChat({String? peerIp, String? groupId}) async {
+  Future<void> deleteMessagesForChat(
+      {String? peerIp, String? groupId}) async {
     final prefs = await SharedPreferences.getInstance();
     final myIp_ = myIp;
     final list = prefs.getStringList('messages') ?? [];
@@ -794,14 +993,13 @@ class PeerService {
     }
   }
 
-  // ─── Guardar grupos en persistencia ────────────────────────────────────────
   Future<void> _saveGroups() async {
     final prefs = await SharedPreferences.getInstance();
-    final jsonList = _groups.values.map((g) => jsonEncode(g.toJson())).toList();
+    final jsonList =
+        _groups.values.map((g) => jsonEncode(g.toJson())).toList();
     await prefs.setStringList(kGroupsKey, jsonList);
   }
 
-  // ─── Setear jerarquía (llamar tras login) ──────────────────────────────────
   Future<void> setMyHierarchy(int level) async {
     if (level < 1 || level > 10) return;
     _myHierarchy = level;
@@ -809,7 +1007,6 @@ class PeerService {
     await prefs.setInt(kUserHierarchyKey, level);
   }
 
-  // ─── Gestión de grupos ─────────────────────────────────────────────────────
   List<Group> get availableGroups {
     return _groups.values.where((g) => g.canJoin(_myHierarchy)).toList();
   }
@@ -884,7 +1081,6 @@ class PeerService {
     }
   }
 
-  // ─── Manejo de paquetes de grupo entrantes ─────────────────────────────────
   void _handleGroupPacket(Map<String, dynamic> header) {
     final type = header['type'] as String?;
     switch (type) {

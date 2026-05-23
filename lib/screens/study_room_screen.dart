@@ -528,7 +528,7 @@ class _TopicTileState extends State<_TopicTile>
     super.dispose();
   }
 
-  @override
+    @override
   Widget build(BuildContext context) {
     return MouseRegion(
       onEnter: (_) {
@@ -618,7 +618,7 @@ class _TopicTileState extends State<_TopicTile>
                   // ← overlay ANTES que el EditMenu para que no lo tape
                   if (_locked) _buildLockedOverlay(),
                   // ← EditMenu SIEMPRE al final del Stack para estar encima de todo
-                  if (widget.canEdit && _hovered)
+                  if (widget.canEdit)  // ← CAMBIO: se quitó "&& _hovered"
                     Positioned(
                       top: 28,
                       right: 4,
