@@ -8,8 +8,10 @@ import '../models/study_comment.dart';
 import '../services/study_room_service.dart';
 import '../services/auth_service.dart';
 import '../services/peer_service.dart';
+import '../widgets/quill_image_embed.dart';
 import 'dart:convert';
 import 'study_room_screen.dart'
+
     show
         kSRed,
         kSRedGlow,
@@ -466,25 +468,28 @@ class _StudyTopicDetailScreenState extends State<StudyTopicDetailScreen>
     );
   }
 
-  Widget _buildContent() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: kSPanel,
-        border: Border.all(color: kSBorder),
-        borderRadius: BorderRadius.circular(3),
+ Widget _buildContent() {
+  return Container(
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: kSPanel,
+      border: Border.all(color: kSBorder),
+      borderRadius: BorderRadius.circular(3),
+    ),
+    child: quill.QuillEditor(
+      controller: _quillCtrl,
+      focusNode: FocusNode(),
+      scrollController: ScrollController(),
+      config: quill.QuillEditorConfig(
+        showCursor: false,
+        autoFocus: false,
+        expands: false,
+        padding: EdgeInsets.zero,
+        embedBuilders: [LocalImageEmbedBuilder()],
       ),
-      child: quill.QuillEditor.basic(
-        controller: _quillCtrl,
-        config: const quill.QuillEditorConfig(
-          showCursor: false,
-          autoFocus: false,
-          expands: false,
-          padding: EdgeInsets.zero,
-        ),
-      ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildCommentsSection() {
     final visibleComments = _canApprove

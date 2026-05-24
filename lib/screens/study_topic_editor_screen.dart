@@ -6,6 +6,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:uuid/uuid.dart';
 import '../models/study_topic.dart';
 import '../services/study_room_service.dart';
+import '../widgets/quill_image_embed.dart';
+import 'package:path_provider/path_provider.dart';
 import '../services/peer_service.dart';
 import 'study_room_screen.dart'
     show kSRed, kSRedGlow, kSRedDim, kSBg, kSPanel, kSBorder, kSText, kSTextDim;
@@ -121,6 +123,29 @@ class _StudyTopicEditorScreenState extends State<StudyTopicEditorScreen> {
 
   // ─── Guardar ──────────────────────────────────────────────────────────────
 
+  
+  Future<void> _insertImageInBody() async {
+  final result = await FilePicker.platform.pickFiles(
+    type: FileType.image,
+    allowMultiple: false,
+  );
+  if (result == null || result.files.isEmpty) return;
+  final originalPath = result.files.first.path;
+  if (originalPath == null) return;
+
+  // Copiar con nombre estable a documentos
+  final dir = await getApplicationDocumentsDirectory();
+  final ext = originalPath.split('.').last;
+  final fileName = 'body_img_${const Uuid().v4()}.$ext';
+  final destPath = '${dir.path}/$fileName';
+  await File(originalPath).copy(destPath);
+
+  // Insertar en el Delta en la posición actual del cursor
+  final index = _quillCtrl.selection.baseOffset;
+  final safeIndex = index < 0 ? _quillCtrl.document.length - 1 : index;
+  _quillCtrl.document.insert(safeIndex, quill.BlockEmbed.image(destPath));
+}
+  
   Future<void> _save() async {
     final title = _titleCtrl.text.trim();
     if (title.isEmpty) {
@@ -184,34 +209,7 @@ class _StudyTopicEditorScreenState extends State<StudyTopicEditorScreen> {
         child: Column(
           children: [
             _buildHeader(),
-            // Toolbar del editor
-            Container(
-              color: kSPanel,
-              child: quill.QuillSimpleToolbar(
-                controller: _quillCtrl,
-                config: quill.QuillSimpleToolbarConfig(
-                  showDividers: true,
-                  showFontFamily: false,
-                  showFontSize: true,
-                  showBoldButton: true,
-                  showItalicButton: true,
-                  showUnderLineButton: true,
-                  showStrikeThrough: true,
-                  showInlineCode: true,
-                  showColorButton: false,
-                  showBackgroundColorButton: false,
-                  showListNumbers: true,
-                  showListBullets: true,
-                  showListCheck: false,
-                  showCodeBlock: true,
-                  showQuote: true,
-                  showLink: false,
-                  showSearchButton: false,
-                  showSubscript: false,
-                  showSuperscript: false,
-                ),
-              ),
-            ),
+           
             // Contenido principal scrolleable
             Expanded(
               child: SingleChildScrollView(
@@ -433,33 +431,96 @@ class _StudyTopicEditorScreenState extends State<StudyTopicEditorScreen> {
     );
   }
 
-  Widget _buildEditorArea() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const _FieldLabel(label: 'CONTENIDO'),
-        const SizedBox(height: 6),
-        Container(
-          constraints: const BoxConstraints(minHeight: 200),
-          decoration: BoxDecoration(
-            color: kSPanel,
-            border: Border.all(color: kSRed.withOpacity(0.2)),
-            borderRadius: BorderRadius.circular(2),
-          ),
-          padding: const EdgeInsets.all(14),
-          child: quill.QuillEditor.basic(
-            controller: _quillCtrl,
-            config: quill.QuillEditorConfig(
-              autoFocus: false,
-              expands: false,
-              padding: EdgeInsets.zero,
-              placeholder: '// escribe el contenido del tema aquí...',
+ Widget _buildEditorArea() {
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      const _FieldLabel(label: 'CONTENIDO'),
+      const SizedBox(height: 6),
+      Container(
+        color: kSPanel,
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        child: Row(
+          children: [
+            Expanded(
+              child: quill.QuillSimpleToolbar(
+                controller: _quillCtrl,
+                config: const quill.QuillSimpleToolbarConfig(
+                  showDividers: true,
+                  showFontFamily: false,
+                  showFontSize: true,
+                  showBoldButton: true,
+                  showItalicButton: true,
+                  showUnderLineButton: true,
+                  showStrikeThrough: true,
+                  showInlineCode: true,
+                  showColorButton: false,
+                  showBackgroundColorButton: false,
+                  showListNumbers: true,
+                  showListBullets: true,
+                  showListCheck: false,
+                  showCodeBlock: true,
+                  showQuote: true,
+                  showLink: false,
+                  showSearchButton: false,
+                  showSubscript: false,
+                  showSuperscript: false,
+                ),
+              ),
             ),
+            GestureDetector(
+              onTap: _insertImageInBody,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(
+                  border: Border.all(color: kSRed.withOpacity(0.4)),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.image_outlined, color: kSRedGlow, size: 16),
+                    SizedBox(width: 4),
+                    Text(
+                      'IMG',
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 9,
+                        color: kSRedGlow,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      Container(
+        constraints: const BoxConstraints(minHeight: 200),
+        decoration: BoxDecoration(
+          color: kSPanel,
+          border: Border.all(color: kSRed.withOpacity(0.2)),
+          borderRadius: BorderRadius.circular(2),
+        ),
+        padding: const EdgeInsets.all(14),
+        child: quill.QuillEditor(
+          controller: _quillCtrl,
+          focusNode: _focusNode,
+          scrollController: ScrollController(), // ← controller propio, no compartido
+          config: quill.QuillEditorConfig(
+            autoFocus: false,
+            expands: false,
+            padding: EdgeInsets.zero,
+            placeholder: '// escribe el contenido del tema aquí...',
+            embedBuilders: [LocalImageEmbedBuilder()],
           ),
         ),
-      ],
-    );
-  }
+      ),
+    ],
+  );
+}
 
   Widget _buildConfigSection() {
     return Container(

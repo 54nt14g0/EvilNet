@@ -103,28 +103,28 @@ class StudyRoomService {
   Timer? _syncTimer;
 
   Future<void> startSync(List<String> knownPeerIps) async {
-  print('🟡 [StudyRoom] startSync called with peers: $knownPeerIps');
-  if (knownPeerIps.isNotEmpty) {
-    await _syncWithPeers(knownPeerIps);
-    await _recoverMissingImages(knownPeerIps);
-  } else {
-    print('🔴 [StudyRoom] startSync: NO PEERS to sync with');
-  }
-
-  if (_syncTimer != null) {
-    print('🟡 [StudyRoom] startSync: timer already running');
-    return;
-  }
-
-  _syncTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
-    final peers = List<String>.from(PeerService().knownPeers.keys);
-    print('🟡 [StudyRoom] periodic sync with ${peers.length} peers');
-    if (peers.isNotEmpty) {
-      await _syncWithPeers(peers);
-      await _recoverMissingImages(peers);
+    print('🟡 [StudyRoom] startSync called with peers: $knownPeerIps');
+    if (knownPeerIps.isNotEmpty) {
+      await _syncWithPeers(knownPeerIps);
+      await _recoverMissingImages(knownPeerIps);
+    } else {
+      print('🔴 [StudyRoom] startSync: NO PEERS to sync with');
     }
-  });
-}
+
+    if (_syncTimer != null) {
+      print('🟡 [StudyRoom] startSync: timer already running');
+      return;
+    }
+
+    _syncTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      final peers = List<String>.from(PeerService().knownPeers.keys);
+      print('🟡 [StudyRoom] periodic sync with ${peers.length} peers');
+      if (peers.isNotEmpty) {
+        await _syncWithPeers(peers);
+        await _recoverMissingImages(peers);
+      }
+    });
+  }
   // ─── Persistencia local ───────────────────────────────────────────────────
 
   Future<File> _dataFile() async {
@@ -227,141 +227,151 @@ class StudyRoomService {
       break;
     }
   }
+
   /// Pide a un peer UNA imagen de portada específica por nombre de archivo.
-Future<void> _fetchCoverImageFromPeer(String ip, String fileName) async {
-  try {
-    final socket = await Socket.connect(
-      ip,
-      kStudyPort,
-      timeout: const Duration(seconds: 10),
-    );
-    socket.add(utf8.encode(jsonEncode({
-      'type': 'request_cover_image',
-      'fileName': fileName,
-    })));
-    await socket.flush();
-    await socket.close();
+  Future<void> _fetchCoverImageFromPeer(String ip, String fileName) async {
+    try {
+      final socket = await Socket.connect(
+        ip,
+        kStudyPort,
+        timeout: const Duration(seconds: 10),
+      );
+      socket.add(
+        utf8.encode(
+          jsonEncode({'type': 'request_cover_image', 'fileName': fileName}),
+        ),
+      );
+      await socket.flush();
+      await socket.close();
 
-    final chunks = <int>[];
-    await for (final chunk in socket) {
-      chunks.addAll(chunk);
-    }
-    if (chunks.isEmpty) return;
+      final chunks = <int>[];
+      await for (final chunk in socket) {
+        chunks.addAll(chunk);
+      }
+      if (chunks.isEmpty) return;
 
-    final response = jsonDecode(utf8.decode(chunks)) as Map<String, dynamic>;
-    if (response['type'] != 'cover_image_response') return;
+      final response = jsonDecode(utf8.decode(chunks)) as Map<String, dynamic>;
+      if (response['type'] != 'cover_image_response') return;
 
-    final imageBase64 = response['imageBase64'] as String?;
-    if (imageBase64 == null) return;
+      final imageBase64 = response['imageBase64'] as String?;
+      if (imageBase64 == null) return;
 
-    final dir = await getApplicationDocumentsDirectory();
-    final destPath = '${dir.path}/$fileName';
-    await File(destPath).writeAsBytes(base64Decode(imageBase64));
-    print('[StudyRoom] Recovered cover image from $ip: $fileName');
-    _updateTopicCoverPath(fileName, destPath);
-  } catch (e) {
-    print('[StudyRoom] _fetchCoverImageFromPeer($ip, $fileName) failed: $e');
-  }
-}
-
-/// Pide a un peer las imágenes de un comentario específico.
-Future<void> _fetchCommentImagesFromPeer(String ip, String commentId) async {
-  try {
-    final socket = await Socket.connect(
-      ip,
-      kStudyPort,
-      timeout: const Duration(seconds: 10),
-    );
-    socket.add(utf8.encode(jsonEncode({
-      'type': 'request_comment_images',
-      'commentId': commentId,
-    })));
-    await socket.flush();
-    await socket.close();
-
-    final chunks = <int>[];
-    await for (final chunk in socket) {
-      chunks.addAll(chunk);
-    }
-    if (chunks.isEmpty) return;
-
-    final response = jsonDecode(utf8.decode(chunks)) as Map<String, dynamic>;
-    if (response['type'] != 'comment_images_response') return;
-
-    final images = response['images'] as List?;
-    if (images == null || images.isEmpty) return;
-
-    final dir = await getApplicationDocumentsDirectory();
-    final savedPaths = <String>[];
-    for (final img in images) {
-      final imgMap = img as Map<String, dynamic>;
-      final fileName = imgMap['fileName'] as String;
-      final b64 = imgMap['base64'] as String;
+      final dir = await getApplicationDocumentsDirectory();
       final destPath = '${dir.path}/$fileName';
-      await File(destPath).writeAsBytes(base64Decode(b64));
-      savedPaths.add(destPath);
+      await File(destPath).writeAsBytes(base64Decode(imageBase64));
+      print('[StudyRoom] Recovered cover image from $ip: $fileName');
+      _updateTopicCoverPath(fileName, destPath);
+    } catch (e) {
+      print('[StudyRoom] _fetchCoverImageFromPeer($ip, $fileName) failed: $e');
     }
+  }
 
-    // Actualizar el comentario con las rutas locales correctas
-    final comment = _comments[commentId];
-    if (comment != null) {
-      _comments[commentId] = StudyComment(
-        id: comment.id,
-        topicId: comment.topicId,
-        userId: comment.userId,
-        username: comment.username,
-        content: comment.content,
-        imagePaths: savedPaths,
-        status: comment.status,
-        timestamp: comment.timestamp,
-        isEdited: comment.isEdited,
+  /// Pide a un peer las imágenes de un comentario específico.
+  Future<void> _fetchCommentImagesFromPeer(String ip, String commentId) async {
+    try {
+      final socket = await Socket.connect(
+        ip,
+        kStudyPort,
+        timeout: const Duration(seconds: 10),
       );
-      await _saveLocal();
-      _emit();
-      print('[StudyRoom] Recovered comment images from $ip: $commentId');
-    }
-  } catch (e) {
-    print('[StudyRoom] _fetchCommentImagesFromPeer($ip, $commentId) failed: $e');
-  }
-}
-
-/// Detecta imágenes faltantes (portadas y comentarios) y las pide a los peers.
-Future<void> _recoverMissingImages(List<String> peerIps) async {
-  if (peerIps.isEmpty) return;
-
-  // Portadas faltantes
-  for (final topic in _topics.values) {
-    if (topic.coverImagePath == null) continue;
-    final file = File(topic.coverImagePath!);
-    if (await file.exists()) continue;
-    final fileName = topic.coverImagePath!.split(Platform.pathSeparator).last;
-    for (final ip in peerIps) {
-      await _fetchCoverImageFromPeer(ip, fileName);
-      // Si ya se recuperó, no seguir pidiendo a otros peers
-      final recovered = File('${(await getApplicationDocumentsDirectory()).path}/$fileName');
-      if (await recovered.exists()) break;
-    }
-  }
-
-  // Imágenes de comentarios faltantes
-  for (final comment in _comments.values) {
-    if (comment.imagePaths.isEmpty) continue;
-    final anyMissing = await Future.any(
-      comment.imagePaths.map((p) async => !await File(p).exists()),
-    );
-    if (!anyMissing) continue;
-    for (final ip in peerIps) {
-      await _fetchCommentImagesFromPeer(ip, comment.id);
-      // Verificar si ya se recuperaron
-      final updated = _comments[comment.id];
-      if (updated == null) break;
-      final allPresent = await Future.wait(
-        updated.imagePaths.map((p) => File(p).exists()),
+      socket.add(
+        utf8.encode(
+          jsonEncode({
+            'type': 'request_comment_images',
+            'commentId': commentId,
+          }),
+        ),
       );
-      if (allPresent.every((e) => e)) break;
+      await socket.flush();
+      await socket.close();
+
+      final chunks = <int>[];
+      await for (final chunk in socket) {
+        chunks.addAll(chunk);
+      }
+      if (chunks.isEmpty) return;
+
+      final response = jsonDecode(utf8.decode(chunks)) as Map<String, dynamic>;
+      if (response['type'] != 'comment_images_response') return;
+
+      final images = response['images'] as List?;
+      if (images == null || images.isEmpty) return;
+
+      final dir = await getApplicationDocumentsDirectory();
+      final savedPaths = <String>[];
+      for (final img in images) {
+        final imgMap = img as Map<String, dynamic>;
+        final fileName = imgMap['fileName'] as String;
+        final b64 = imgMap['base64'] as String;
+        final destPath = '${dir.path}/$fileName';
+        await File(destPath).writeAsBytes(base64Decode(b64));
+        savedPaths.add(destPath);
+      }
+
+      // Actualizar el comentario con las rutas locales correctas
+      final comment = _comments[commentId];
+      if (comment != null) {
+        _comments[commentId] = StudyComment(
+          id: comment.id,
+          topicId: comment.topicId,
+          userId: comment.userId,
+          username: comment.username,
+          content: comment.content,
+          imagePaths: savedPaths,
+          status: comment.status,
+          timestamp: comment.timestamp,
+          isEdited: comment.isEdited,
+        );
+        await _saveLocal();
+        _emit();
+        print('[StudyRoom] Recovered comment images from $ip: $commentId');
+      }
+    } catch (e) {
+      print(
+        '[StudyRoom] _fetchCommentImagesFromPeer($ip, $commentId) failed: $e',
+      );
     }
   }
-}
+
+  /// Detecta imágenes faltantes (portadas y comentarios) y las pide a los peers.
+  Future<void> _recoverMissingImages(List<String> peerIps) async {
+    if (peerIps.isEmpty) return;
+
+    // Portadas faltantes
+    for (final topic in _topics.values) {
+      if (topic.coverImagePath == null) continue;
+      final file = File(topic.coverImagePath!);
+      if (await file.exists()) continue;
+      final fileName = topic.coverImagePath!.split(Platform.pathSeparator).last;
+      for (final ip in peerIps) {
+        await _fetchCoverImageFromPeer(ip, fileName);
+        // Si ya se recuperó, no seguir pidiendo a otros peers
+        final recovered = File(
+          '${(await getApplicationDocumentsDirectory()).path}/$fileName',
+        );
+        if (await recovered.exists()) break;
+      }
+    }
+
+    // Imágenes de comentarios faltantes
+    for (final comment in _comments.values) {
+      if (comment.imagePaths.isEmpty) continue;
+      final anyMissing = await Future.any(
+        comment.imagePaths.map((p) async => !await File(p).exists()),
+      );
+      if (!anyMissing) continue;
+      for (final ip in peerIps) {
+        await _fetchCommentImagesFromPeer(ip, comment.id);
+        // Verificar si ya se recuperaron
+        final updated = _comments[comment.id];
+        if (updated == null) break;
+        final allPresent = await Future.wait(
+          updated.imagePaths.map((p) => File(p).exists()),
+        );
+        if (allPresent.every((e) => e)) break;
+      }
+    }
+  }
 
   Future<void> _saveLocal() async {
     final file = await _dataFile();
@@ -397,10 +407,10 @@ Future<void> _recoverMissingImages(List<String> peerIps) async {
   }
 
   Future<void> syncWithNewPeer(String ip) async {
-  print('🟡 [StudyRoom] syncWithNewPeer($ip) called');
-  await _requestDataFrom(ip);
-  await _recoverMissingImages([ip]);
-}
+    print('🟡 [StudyRoom] syncWithNewPeer($ip) called');
+    await _requestDataFrom(ip);
+    await _recoverMissingImages([ip]);
+  }
 
   void _handleConnection(Socket socket) async {
     try {
@@ -450,35 +460,61 @@ Future<void> _recoverMissingImages(List<String> peerIps) async {
           );
           final imageBase64 = packet['imageBase64'] as String?;
           final imageFileName = packet['imageFileName'] as String?;
+          final embeddedImages = packet['embeddedImages'] as List?;
+
+          String? validCoverPath;
+
+          // Guardar portada
           if (imageBase64 != null && imageFileName != null) {
             try {
               final dir = await getApplicationDocumentsDirectory();
               final destPath = '${dir.path}/$imageFileName';
-              final imgBytes = base64Decode(imageBase64);
-              await File(destPath).writeAsBytes(imgBytes);
-              final topicWithLocalCover = StudyTopic(
-                id: topic.id,
-                title: topic.title,
-                contentDelta: topic.contentDelta,
-                coverImagePath: destPath,
-                minHierarchy: topic.minHierarchy,
-                isSequential: topic.isSequential,
-                requiredTopicIds: topic.requiredTopicIds,
-                unlocksTopicIds: topic.unlocksTopicIds,
-                requiresApproval: topic.requiresApproval,
-                order: topic.order,
-                creatorId: topic.creatorId,
-                createdAt: topic.createdAt,
-                updatedAt: topic.updatedAt,
-              );
-              await _upsertTopicLocal(topicWithLocalCover);
+              await File(destPath).writeAsBytes(base64Decode(imageBase64));
+              validCoverPath = destPath;
             } catch (e) {
-              print('[StudyRoom] Error saving embedded image: $e');
-              await _upsertTopicLocal(topic);
+              print('[StudyRoom] Error saving cover image: $e');
             }
-          } else {
-            await _upsertTopicLocal(topic);
           }
+
+          // Guardar imágenes embebidas y reparar rutas en el Delta
+          String fixedDelta = topic.contentDelta;
+          if (embeddedImages != null && embeddedImages.isNotEmpty) {
+            final dir = await getApplicationDocumentsDirectory();
+            final fileNameToLocalPath = <String, String>{};
+            for (final img in embeddedImages) {
+              final imgMap = img as Map<String, dynamic>;
+              final fileName = imgMap['fileName'] as String;
+              final b64 = imgMap['base64'] as String;
+              final destPath = '${dir.path}/$fileName';
+              try {
+                await File(destPath).writeAsBytes(base64Decode(b64));
+                fileNameToLocalPath[fileName] = destPath;
+              } catch (e) {
+                print('[StudyRoom] Error saving embedded image: $e');
+              }
+            }
+            fixedDelta = await _fixEmbeddedImagePaths(
+              topic.contentDelta,
+              fileNameToLocalPath,
+            );
+          }
+
+          final topicToSave = StudyTopic(
+            id: topic.id,
+            title: topic.title,
+            contentDelta: fixedDelta,
+            coverImagePath: validCoverPath ?? topic.coverImagePath,
+            minHierarchy: topic.minHierarchy,
+            isSequential: topic.isSequential,
+            requiredTopicIds: topic.requiredTopicIds,
+            unlocksTopicIds: topic.unlocksTopicIds,
+            requiresApproval: topic.requiresApproval,
+            order: topic.order,
+            creatorId: topic.creatorId,
+            createdAt: topic.createdAt,
+            updatedAt: topic.updatedAt,
+          );
+          await _upsertTopicLocal(topicToSave);
           break;
 
         case 'topic_delete':
@@ -749,6 +785,8 @@ Future<void> _recoverMissingImages(List<String> peerIps) async {
     final topicsJson = <Map<String, dynamic>>[];
     for (final t in _topics.values) {
       final tj = t.toJson();
+
+      // Portada
       if (t.coverImagePath != null) {
         final f = File(t.coverImagePath!);
         if (f.existsSync()) {
@@ -762,6 +800,30 @@ Future<void> _recoverMissingImages(List<String> peerIps) async {
           } catch (_) {}
         }
       }
+
+      // Imágenes embebidas en el cuerpo
+      try {
+        final ops = jsonDecode(t.contentDelta) as List<dynamic>;
+        final embedded = <Map<String, String>>[];
+        for (final op in ops) {
+          if (op is! Map) continue;
+          final insert = op['insert'];
+          if (insert is! Map) continue;
+          final imagePath = insert['image'] as String?;
+          if (imagePath == null) continue;
+          final file = File(imagePath);
+          if (!file.existsSync()) continue;
+          final bytes = file.readAsBytesSync();
+          final fileName = imagePath.split('/').last.split('\\').last;
+          embedded.add({
+            'fileName': fileName,
+            'base64': base64Encode(bytes),
+            'originalPath': imagePath,
+          });
+        }
+        if (embedded.isNotEmpty) tj['embeddedImages'] = embedded;
+      } catch (_) {}
+
       topicsJson.add(tj);
     }
 
@@ -782,9 +844,7 @@ Future<void> _recoverMissingImages(List<String> peerIps) async {
           } catch (_) {}
         }
       }
-      if (imagePayloads.isNotEmpty) {
-        cj['images'] = imagePayloads;
-      }
+      if (imagePayloads.isNotEmpty) cj['images'] = imagePayloads;
       commentsJson.add(cj);
     }
 
@@ -797,6 +857,78 @@ Future<void> _recoverMissingImages(List<String> peerIps) async {
     };
   }
 
+  /// Escanea el Delta JSON y extrae las imágenes embebidas como base64.
+  Future<List<Map<String, String>>> _extractEmbeddedImages(String deltaJson) async {
+  final result = <Map<String, String>>[];
+  try {
+    final ops = jsonDecode(deltaJson) as List<dynamic>;
+    for (final op in ops) {
+      if (op is! Map) continue;
+      final insert = op['insert'];
+      if (insert is! Map) continue;
+      final imagePath = insert['image'] as String?;
+      if (imagePath == null) continue;
+      final file = File(imagePath);
+      if (!await file.exists()) continue;
+      final bytes = await file.readAsBytes();
+
+      // Split con ambos separadores
+      final fileName = imagePath
+          .split('/')
+          .last
+          .split('\\')
+          .last;
+
+      result.add({
+        'fileName': fileName,
+        'base64': base64Encode(bytes),
+        'originalPath': imagePath,
+      });
+    }
+  } catch (e) {
+    print('[StudyRoom] _extractEmbeddedImages error: $e');
+  }
+  return result;
+}
+  /// Toma un Delta JSON y reemplaza las rutas de imágenes embebidas
+  /// por las rutas locales correctas del peer receptor.
+  Future<String> _fixEmbeddedImagePaths(
+  String deltaJson,
+  Map<String, String> fileNameToLocalPath,
+) async {
+  try {
+    final ops = jsonDecode(deltaJson) as List<dynamic>;
+    final fixed = ops.map((op) {
+      if (op is! Map) return op;
+      final insert = op['insert'];
+      if (insert is! Map) return op;
+      final imagePath = insert['image'] as String?;
+      if (imagePath == null) return op;
+
+      // Split con ambos separadores para cubrir Windows → Android y viceversa
+      final fileName = imagePath
+          .split('/')
+          .last
+          .split('\\')
+          .last;
+
+      final localPath = fileNameToLocalPath[fileName];
+      if (localPath == null) return op;
+
+      return {
+        ...Map<String, dynamic>.from(op as Map),
+        'insert': {
+          ...Map<String, dynamic>.from(insert as Map),
+          'image': localPath,
+        },
+      };
+    }).toList();
+    return jsonEncode(fixed);
+  } catch (e) {
+    print('[StudyRoom] _fixEmbeddedImagePaths error: $e');
+    return deltaJson;
+  }
+}
   Future<void> _mergeFullPayload(Map<String, dynamic> data) async {
     bool changed = false;
     final incomingTopics = (data['topics'] as List? ?? []);
@@ -812,8 +944,10 @@ Future<void> _recoverMissingImages(List<String> peerIps) async {
       if (local == null || remote.updatedAt.isAfter(local.updatedAt)) {
         final imageBase64 = tMap['imageBase64'] as String?;
         final imageFileName = tMap['imageFileName'] as String?;
+        final embeddedImages = tMap['embeddedImages'] as List?;
         String? validCoverPath = remote.coverImagePath;
 
+        // Portada
         if (imageBase64 != null && imageFileName != null) {
           try {
             final dir = await getApplicationDocumentsDirectory();
@@ -829,17 +963,36 @@ Future<void> _recoverMissingImages(List<String> peerIps) async {
           final dir = await getApplicationDocumentsDirectory();
           final fileName = validCoverPath.split(Platform.pathSeparator).last;
           final localPath = '${dir.path}/$fileName';
-          if (await File(localPath).exists()) {
-            validCoverPath = localPath;
-          } else {
-            validCoverPath = null;
+          validCoverPath = await File(localPath).exists() ? localPath : null;
+        }
+
+        // Imágenes embebidas
+        String fixedDelta = remote.contentDelta;
+        if (embeddedImages != null && embeddedImages.isNotEmpty) {
+          final dir = await getApplicationDocumentsDirectory();
+          final fileNameToLocalPath = <String, String>{};
+          for (final img in embeddedImages) {
+            final imgMap = img as Map<String, dynamic>;
+            final fileName = imgMap['fileName'] as String;
+            final b64 = imgMap['base64'] as String;
+            final destPath = '${dir.path}/$fileName';
+            try {
+              await File(destPath).writeAsBytes(base64Decode(b64));
+              fileNameToLocalPath[fileName] = destPath;
+            } catch (e) {
+              print('[StudyRoom] Error saving embedded image in merge: $e');
+            }
           }
+          fixedDelta = await _fixEmbeddedImagePaths(
+            remote.contentDelta,
+            fileNameToLocalPath,
+          );
         }
 
         _topics[remote.id] = StudyTopic(
           id: remote.id,
           title: remote.title,
-          contentDelta: remote.contentDelta,
+          contentDelta: fixedDelta,
           coverImagePath: validCoverPath,
           minHierarchy: remote.minHierarchy,
           isSequential: remote.isSequential,
@@ -1034,11 +1187,15 @@ Future<void> _recoverMissingImages(List<String> peerIps) async {
       }
     }
 
+    // Escanear Delta para extraer imágenes embebidas en el cuerpo
+    final embeddedImages = await _extractEmbeddedImages(topic.contentDelta);
+
     await _broadcastPacket({
       'type': 'topic_upsert',
       'topic': topic.toJson(),
       if (imageBase64 != null) 'imageBase64': imageBase64,
       if (imageFileName != null) 'imageFileName': imageFileName,
+      if (embeddedImages.isNotEmpty) 'embeddedImages': embeddedImages,
     });
   }
 
