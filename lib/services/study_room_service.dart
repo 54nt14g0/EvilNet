@@ -58,9 +58,9 @@ class StudyRoomService {
         ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
   List<StudyComment> approvedCommentsForTopic(String topicId) =>
-      commentsForTopic(topicId)
-          .where((c) => c.status == CommentStatus.approved)
-          .toList();
+      commentsForTopic(
+        topicId,
+      ).where((c) => c.status == CommentStatus.approved).toList();
 
   Map<String, UserProgress> get allProgress => Map.unmodifiable(_progress);
 
@@ -92,7 +92,9 @@ class StudyRoomService {
     }
     _started = true;
     await _loadLocal();
-    print('🟡 [StudyRoom] After _loadLocal: ${_topics.length} topics in memory');
+    print(
+      '🟡 [StudyRoom] After _loadLocal: ${_topics.length} topics in memory',
+    );
     await _startServer();
     print('🟡 [StudyRoom] startLocal COMPLETE');
     _emit();
@@ -195,10 +197,14 @@ class StudyRoomService {
           createdAt: topic.createdAt,
           updatedAt: topic.updatedAt,
         );
-        print('[StudyRoom] Repaired cover path for "${topic.title}": $localPath');
+        print(
+          '[StudyRoom] Repaired cover path for "${topic.title}": $localPath',
+        );
         changed = true;
       } else {
-        print('[StudyRoom] Cover missing for "${topic.title}", will request from peers');
+        print(
+          '[StudyRoom] Cover missing for "${topic.title}", will request from peers',
+        );
       }
     }
 
@@ -211,7 +217,9 @@ class StudyRoomService {
       if (topic.coverImagePath == null) continue;
       final file = File(topic.coverImagePath!);
       if (await file.exists()) continue;
-      print('[StudyRoom] Requesting missing image for "${topic.title}" from $ip');
+      print(
+        '[StudyRoom] Requesting missing image for "${topic.title}" from $ip',
+      );
       await _requestDataFrom(ip);
       break;
     }
@@ -344,7 +352,39 @@ class StudyRoomService {
           final comment = StudyComment.fromJson(
             packet['comment'] as Map<String, dynamic>,
           );
-          await _upsertCommentLocal(comment);
+          // Guardar imágenes embebidas si vienen en el packet
+          final images = packet['images'] as List?;
+          if (images != null && images.isNotEmpty) {
+            final dir = await getApplicationDocumentsDirectory();
+            final savedPaths = <String>[];
+            for (final img in images) {
+              final imgMap = img as Map<String, dynamic>;
+              final fileName = imgMap['fileName'] as String;
+              final b64 = imgMap['base64'] as String;
+              final destPath = '${dir.path}/$fileName';
+              try {
+                await File(destPath).writeAsBytes(base64Decode(b64));
+                savedPaths.add(destPath);
+              } catch (e) {
+                print('[StudyRoom] Error saving comment image: $e');
+              }
+            }
+            // Reconstruir el comentario con las rutas locales correctas
+            final fixedComment = StudyComment(
+              id: comment.id,
+              topicId: comment.topicId,
+              userId: comment.userId,
+              username: comment.username,
+              content: comment.content,
+              imagePaths: savedPaths,
+              status: comment.status,
+              timestamp: comment.timestamp,
+              isEdited: comment.isEdited,
+            );
+            await _upsertCommentLocal(fixedComment);
+          } else {
+            await _upsertCommentLocal(comment);
+          }
           break;
 
         case 'comment_delete':
@@ -508,7 +548,9 @@ class StudyRoomService {
       final topicCount = (data['topics'] as List?)?.length ?? 0;
       print('🔵 [StudyRoom] Parsed response: $topicCount topics from $ip');
       await _mergeFullPayload(data);
-      print('🔵 [StudyRoom] Merge complete. Total topics now: ${_topics.length}');
+      print(
+        '🔵 [StudyRoom] Merge complete. Total topics now: ${_topics.length}',
+      );
     } catch (e) {
       print('🔴 [StudyRoom] _requestDataFrom($ip) FAILED: $e');
     }
@@ -523,7 +565,9 @@ class StudyRoomService {
         if (f.existsSync()) {
           try {
             final bytes = f.readAsBytesSync();
-            final fileName = t.coverImagePath!.split(Platform.pathSeparator).last;
+            final fileName = t.coverImagePath!
+                .split(Platform.pathSeparator)
+                .last;
             tj['imageBase64'] = base64Encode(bytes);
             tj['imageFileName'] = fileName;
           } catch (_) {}
@@ -532,11 +576,34 @@ class StudyRoomService {
       topicsJson.add(tj);
     }
 
+    final commentsJson = <Map<String, dynamic>>[];
+    for (final c in _comments.values) {
+      final cj = c.toJson();
+      final imagePayloads = <Map<String, String>>[];
+      for (final imgPath in c.imagePaths) {
+        final f = File(imgPath);
+        if (f.existsSync()) {
+          try {
+            final bytes = f.readAsBytesSync();
+            final fileName = imgPath.split(Platform.pathSeparator).last;
+            imagePayloads.add({
+              'fileName': fileName,
+              'base64': base64Encode(bytes),
+            });
+          } catch (_) {}
+        }
+      }
+      if (imagePayloads.isNotEmpty) {
+        cj['images'] = imagePayloads;
+      }
+      commentsJson.add(cj);
+    }
+
     return {
       'type': 'full_push',
       'version': _version,
       'topics': topicsJson,
-      'comments': _comments.values.map((c) => c.toJson()).toList(),
+      'comments': commentsJson,
       'progress': _progress.values.map((p) => p.toJson()).toList(),
     };
   }
@@ -600,9 +667,41 @@ class StudyRoomService {
     }
 
     for (final c in (data['comments'] as List? ?? [])) {
-      final remote = StudyComment.fromJson(c as Map<String, dynamic>);
+      final cMap = c as Map<String, dynamic>;
+      final remote = StudyComment.fromJson(cMap);
+
       if (!_comments.containsKey(remote.id)) {
-        _comments[remote.id] = remote;
+        // Guardar imágenes si vienen embebidas en el full_push
+        final images = cMap['images'] as List?;
+        if (images != null && images.isNotEmpty) {
+          final dir = await getApplicationDocumentsDirectory();
+          final savedPaths = <String>[];
+          for (final img in images) {
+            final imgMap = img as Map<String, dynamic>;
+            final fileName = imgMap['fileName'] as String;
+            final b64 = imgMap['base64'] as String;
+            final destPath = '${dir.path}/$fileName';
+            try {
+              await File(destPath).writeAsBytes(base64Decode(b64));
+              savedPaths.add(destPath);
+            } catch (e) {
+              print('[StudyRoom] Error saving comment image in merge: $e');
+            }
+          }
+          _comments[remote.id] = StudyComment(
+            id: remote.id,
+            topicId: remote.topicId,
+            userId: remote.userId,
+            username: remote.username,
+            content: remote.content,
+            imagePaths: savedPaths,
+            status: remote.status,
+            timestamp: remote.timestamp,
+            isEdited: remote.isEdited,
+          );
+        } else {
+          _comments[remote.id] = remote;
+        }
         changed = true;
       } else {
         final local = _comments[remote.id]!;
@@ -678,9 +777,32 @@ class StudyRoomService {
   Future<void> _deleteTopicLocal(String id) async {
     _topics.remove(id);
     _comments.removeWhere((_, c) => c.topicId == id);
+
+    // Limpiar referencias huérfanas en todos los demás temas
+    final topicsToUpdate = <StudyTopic>[];
+    for (final entry in _topics.entries) {
+      final t = entry.value;
+      final hadReq = t.requiredTopicIds.contains(id);
+      final hadUnlocks = t.unlocksTopicIds.contains(id);
+      if (hadReq || hadUnlocks) {
+        final updated = t.copyWith(
+          requiredTopicIds: t.requiredTopicIds.where((r) => r != id).toList(),
+          unlocksTopicIds: t.unlocksTopicIds.where((u) => u != id).toList(),
+          updatedAt: DateTime.now(),
+        );
+        _topics[entry.key] = updated;
+        topicsToUpdate.add(updated);
+      }
+    }
+
     _version++;
     await _saveLocal();
     _emit();
+
+    // Propagar los temas modificados a los peers
+    for (final t in topicsToUpdate) {
+      await _broadcastPacket({'type': 'topic_upsert', 'topic': t.toJson()});
+    }
   }
 
   Future<void> _upsertCommentLocal(StudyComment comment) async {
@@ -717,8 +839,9 @@ class StudyRoomService {
       if (await file.exists()) {
         final bytes = await file.readAsBytes();
         imageBase64 = base64Encode(bytes);
-        imageFileName =
-            topic.coverImagePath!.split(Platform.pathSeparator).last;
+        imageFileName = topic.coverImagePath!
+            .split(Platform.pathSeparator)
+            .last;
       }
     }
 
@@ -769,13 +892,30 @@ class StudyRoomService {
         ? CommentStatus.pending
         : CommentStatus.approved;
 
+    // Guardar imágenes localmente con nombre estable basado en UUID
+    final dir = await getApplicationDocumentsDirectory();
+    final savedPaths = <String>[];
+    final imagePayloads = <Map<String, String>>[];
+
+    for (final originalPath in imagePaths) {
+      final file = File(originalPath);
+      if (!await file.exists()) continue;
+      final ext = originalPath.split('.').last;
+      final fileName = 'comment_img_${_uuid.v4()}.$ext';
+      final destPath = '${dir.path}/$fileName';
+      await file.copy(destPath);
+      savedPaths.add(destPath);
+      final bytes = await File(destPath).readAsBytes();
+      imagePayloads.add({'fileName': fileName, 'base64': base64Encode(bytes)});
+    }
+
     final comment = StudyComment(
       id: _uuid.v4(),
       topicId: topicId,
       userId: userId,
       username: username,
       content: content,
-      imagePaths: imagePaths,
+      imagePaths: savedPaths,
       status: status,
       timestamp: DateTime.now(),
     );
@@ -784,6 +924,7 @@ class StudyRoomService {
     await _broadcastPacket({
       'type': 'comment_upsert',
       'comment': comment.toJson(),
+      'images': imagePayloads,
     });
 
     if (!topic.requiresApproval) {
@@ -838,10 +979,7 @@ class StudyRoomService {
     final username = comment.username;
 
     await _deleteCommentLocal(commentId);
-    await _broadcastPacket({
-      'type': 'comment_delete',
-      'commentId': commentId,
-    });
+    await _broadcastPacket({'type': 'comment_delete', 'commentId': commentId});
 
     final topic = _topics[topicId];
     final remainingComments = _comments.values.where((c) {

@@ -47,37 +47,37 @@ class _StudyTopicEditorScreenState extends State<StudyTopicEditorScreen> {
   List<StudyTopic> get _allTopics => _service.topics;
 
   @override
-void initState() {
-  super.initState();
+  void initState() {
+    super.initState();
 
-  final existing = widget.existing;
-  if (existing != null) {
-    _titleCtrl.text = existing.title;
-    _isSequential = existing.isSequential;
-    _requiresApproval = existing.requiresApproval;
-    _minHierarchy = existing.minHierarchy;
-    _coverImagePath = existing.coverImagePath;
-    _requiredTopicIds = List.from(existing.requiredTopicIds);
-    _unlocksTopicIds = List.from(existing.unlocksTopicIds);
+    final existing = widget.existing;
+    if (existing != null) {
+      _titleCtrl.text = existing.title;
+      _isSequential = existing.isSequential;
+      _requiresApproval = existing.requiresApproval;
+      _minHierarchy = existing.minHierarchy;
+      _coverImagePath = existing.coverImagePath;
+      _requiredTopicIds = List.from(existing.requiredTopicIds);
+      _unlocksTopicIds = List.from(existing.unlocksTopicIds);
 
-    try {
-      final delta = existing.contentDelta;
-      if (delta.isNotEmpty && delta != '[]') {
-        final doc = quill.Document.fromJson(
-          jsonDecode(delta) as List<dynamic>,
-        );
-        _quillCtrl = quill.QuillController(
-          document: doc,
-          selection: const TextSelection.collapsed(offset: 0),
-        );
+      try {
+        final delta = existing.contentDelta;
+        if (delta.isNotEmpty && delta != '[]') {
+          final doc = quill.Document.fromJson(
+            jsonDecode(delta) as List<dynamic>,
+          );
+          _quillCtrl = quill.QuillController(
+            document: doc,
+            selection: const TextSelection.collapsed(offset: 0),
+          );
+        }
+        // delta vacío → _quillCtrl ya tiene QuillController.basic() por defecto
+      } catch (_) {
+        // error → _quillCtrl ya tiene QuillController.basic() por defecto
       }
-      // delta vacío → _quillCtrl ya tiene QuillController.basic() por defecto
-    } catch (_) {
-      // error → _quillCtrl ya tiene QuillController.basic() por defecto
     }
+    // existing == null → _quillCtrl ya tiene QuillController.basic() por defecto
   }
-  // existing == null → _quillCtrl ya tiene QuillController.basic() por defecto
-}
 
   @override
   void dispose() {
@@ -101,6 +101,24 @@ void initState() {
 
   void _clearCover() => setState(() => _coverImagePath = null);
 
+  /// Retorna true si agregar [candidateId] como requisito de [thisTopicId]
+  bool _wouldCreateCycle(String thisTopicId, String candidateId) {
+    final visited = <String>{};
+    final queue = <String>[candidateId];
+
+    while (queue.isNotEmpty) {
+      final current = queue.removeLast();
+      if (current == thisTopicId) return true;
+      if (visited.contains(current)) continue;
+      visited.add(current);
+
+      final matches = _service.topics.where((t) => t.id == current);
+      if (matches.isEmpty) continue;
+      queue.addAll(matches.first.requiredTopicIds);
+    }
+    return false;
+  }
+
   // ─── Guardar ──────────────────────────────────────────────────────────────
 
   Future<void> _save() async {
@@ -115,7 +133,6 @@ void initState() {
     try {
       // Serializar el contenido del editor
       final delta = jsonEncode(_quillCtrl.document.toDelta().toJson());
-
 
       final now = DateTime.now();
       final existing = widget.existing;
@@ -519,9 +536,16 @@ void initState() {
   }
 
   Widget _buildTopicLinksSection() {
-    final otherTopics = _allTopics
-        .where((t) => t.id != widget.existing?.id)
+    final thisId = widget.existing?.id ?? '';
+
+    // Para requisitos: excluir el tema actual y los que formarían ciclo
+    final topicsForRequirements = _allTopics
+        .where((t) => t.id != thisId)
+        .where((t) => !_wouldCreateCycle(thisId, t.id))
         .toList();
+
+    // Para desbloqueos: excluir solo el tema actual
+    final topicsForUnlocks = _allTopics.where((t) => t.id != thisId).toList();
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -550,7 +574,7 @@ void initState() {
           _TopicPickerSection(
             label: '⟵  REQUISITOS (deben comentarse ANTES)',
             labelColor: Colors.orange,
-            topics: otherTopics,
+            topics: topicsForRequirements,
             selectedIds: _requiredTopicIds,
             onToggle: (id) {
               setState(() {
@@ -570,7 +594,7 @@ void initState() {
           _TopicPickerSection(
             label: '⟶  DESBLOQUEA (al comentar ESTE)',
             labelColor: Colors.green,
-            topics: otherTopics,
+            topics: topicsForUnlocks,
             selectedIds: _unlocksTopicIds,
             onToggle: (id) {
               setState(() {
