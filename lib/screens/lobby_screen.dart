@@ -4,6 +4,12 @@ import '../services/peer_service.dart';
 import 'chat_screen.dart';
 import '../models/group.dart';
 import 'package:audioplayers/audioplayers.dart';
+import '../services/auth_service.dart';
+import '../models/app_user.dart';
+import '../services/auth_service.dart' show kSeedAdmin;
+
+import '../services/chat_service.dart';
+import 'chat_screen.dart';
 
 const Color kNeon = Color(0xFF00FFB2); // Cian neón (principal)
 const Color kPink = Color(0xFFFF2D78); // Rosa neón (alertas)
@@ -15,6 +21,7 @@ const Color kTextPrimary = Color(
   0xFFE0FFFA,
 ); // ← Texto blanco-cian (alto contraste)
 const Color kTextSecondary = Color(0xFF80A095); // ← Texto secundario suave
+final _auth = AuthService();
 
 class LobbyScreen extends StatefulWidget {
   const LobbyScreen({super.key});
@@ -29,6 +36,7 @@ class _LobbyScreenState extends State<LobbyScreen>
   bool _audioInitialized = false;
   late AnimationController _pulseCtrl;
   late AnimationController _scanCtrl;
+  final _auth = AuthService();
 
   @override
   void initState() {
@@ -43,11 +51,25 @@ class _LobbyScreenState extends State<LobbyScreen>
       duration: const Duration(seconds: 4),
     )..repeat();
 
-    _peer.events.listen((_) {
-      if (mounted) setState(() {});
+    // Escuchar cambios de peers (conexiones nuevas)
+    _peer.events.listen((e) {
+      if (!mounted) return;
+      if (e.type == 'peer_online') {
+        // Cuando llega un peer nuevo, sincronizar usuarios
+        final ip = (e.data as Map)['ip'] as String?;
+        if (ip != null) {
+          _auth.syncWithNewPeer(ip);
+        }
+      }
+      setState(() {});
+    });
+
+    // Escuchar cambios de AuthService (usuarios nuevos, actualizaciones)
+    _auth.events.listen((e) {
+      if (!mounted) return;
+      setState(() {}); // Refrescar lista de usuarios
     });
   }
-
   @override
   void dispose() {
     _audioPlayer.dispose(); // ← Liberar recursos
@@ -78,32 +100,31 @@ class _LobbyScreenState extends State<LobbyScreen>
     }
   }
 
-  void _openBroadcastChat() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => const ChatScreen(
-          peerIp: null, // null = broadcast "Todos"
-          peerName: '◈ TODOS LOS NODOS',
-          isGroup: true,
-        ),
+ void _openBroadcastChat() {
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => const ChatScreen(
+        peerName: '◈ TODOS LOS NODOS',
       ),
-    );
-  }
+    ),
+  );
+}
 
-  void _openPeerChat(String ip) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ChatScreen(
-          peerIp: ip,
-          // ← [CAMBIO CLAVE] Usar el nuevo método que prioriza username registrado
-          peerName: _peer.getDisplayNameForIp(ip),
-          isGroup: false,
-        ),
+void _openPeerChat(String ip, String username) {
+  // Buscar userId del usuario
+  final users = _auth.users.where((u) => u.username == username).toList();
+  if (users.isEmpty) return;
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => ChatScreen(
+        recipientId: users.first.id,
+        peerName: '@$username',
       ),
-    );
-  }
+    ),
+  );
+}
 
   // ─── Diálogo para crear grupo ─────────────────────────────────────────────
   void _showCreateGroupDialog() {
@@ -332,18 +353,43 @@ class _LobbyScreenState extends State<LobbyScreen>
   }
 
   void _openGroupChat(Group group) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ChatScreen(
-          groupId: group.id, // ← Usar groupId en lugar de peerIp
-          peerIp: null,
-          peerName: group.name,
-          isGroup: true,
-        ),
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => ChatScreen(
+        groupId: group.id,
+        peerName: group.name,
       ),
+    ),
+  );
+}
+
+  bool _isUserOnline(String username) {
+    return _peer.knownPeers.keys.any(
+      (ip) => _peer.getDisplayNameForIp(ip) == username,
     );
   }
+
+  String? _getIpForUser(String username) {
+    for (final ip in _peer.knownPeers.keys) {
+      if (_peer.getDisplayNameForIp(ip) == username) return ip;
+    }
+    return null;
+  }
+
+  void _openOfflineUserChat(String username) {
+  final users = _auth.users.where((u) => u.username == username).toList();
+  if (users.isEmpty) return;
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => ChatScreen(
+        recipientId: users.first.id,
+        peerName: '@$username (offline)',
+      ),
+    ),
+  );
+}
 
   @override
   Widget build(BuildContext context) {
@@ -471,12 +517,25 @@ class _LobbyScreenState extends State<LobbyScreen>
   }
 
   Widget _buildContent() {
+    final allUsers =
+        _auth.users
+            .where(
+              (u) => u.id != kSeedAdmin.id && u.id != _auth.currentUser?.id,
+            )
+            .toList()
+          ..sort((a, b) {
+            final aOnline = _isUserOnline(a.username);
+            final bOnline = _isUserOnline(b.username);
+            if (aOnline && !bOnline) return -1;
+            if (!aOnline && bOnline) return 1;
+            return a.username.compareTo(b.username);
+          });
+
     return CustomScrollView(
       slivers: [
         // ── Sección: GRUPOS ────────────────────────────────────────────────
         SliverToBoxAdapter(child: _buildSectionLabel('GRUPOS', Icons.hub)),
 
-        // Grupo global "Todos los nodos"
         SliverToBoxAdapter(
           child: _buildGroupCard(
             id: 'broadcast',
@@ -491,7 +550,6 @@ class _LobbyScreenState extends State<LobbyScreen>
           ),
         ),
 
-        // Botón crear grupo (solo J8-10)
         SliverToBoxAdapter(
           child: _peer.myHierarchy >= 8
               ? _buildActionCard(
@@ -507,7 +565,6 @@ class _LobbyScreenState extends State<LobbyScreen>
               : _buildComingSoonCard('Crear grupo', 'Requiere jerarquía 8+'),
         ),
 
-        // Lista de grupos disponibles
         if (_peer.availableGroups.isNotEmpty) ...[
           const SliverToBoxAdapter(child: SizedBox(height: 12)),
           SliverToBoxAdapter(
@@ -538,39 +595,34 @@ class _LobbyScreenState extends State<LobbyScreen>
 
         const SliverToBoxAdapter(child: SizedBox(height: 8)),
 
-        // ── [NUEVO] Sección: USUARIOS ACTIVOS (registrados) ─────────────────
-        SliverToBoxAdapter(
-          child: _buildSectionLabel('USUARIOS ACTIVOS', Icons.people),
-        ),
+        // ── Sección: USUARIOS REGISTRADOS (todos, online primero) ──────────
+        SliverToBoxAdapter(child: _buildSectionLabel('USUARIOS', Icons.people)),
 
-        // Filtrar solo usuarios registrados (nombre ≠ IP)
-        if (_peer.knownPeers.isEmpty)
-          SliverToBoxAdapter(child: _buildEmptyPeers())
-        else ...[
+        if (allUsers.isEmpty)
+          SliverToBoxAdapter(child: _buildEmptyUsers())
+        else
           SliverList(
             delegate: SliverChildBuilderDelegate((_, i) {
-              final ip = _peer.knownPeers.keys.elementAt(i);
-              final displayName = _peer.getDisplayNameForIp(ip);
-              final isRegistered =
-                  displayName != ip; // Si es diferente, está registrado
-
-              // Solo mostrar en "Usuarios activos" si está registrado
-              if (!isRegistered) return const SizedBox.shrink();
-
+              final user = allUsers[i];
+              final online = _isUserOnline(user.username);
+              final ip = _getIpForUser(user.username);
               return _buildUserCard(
-                ip: ip,
-                name: displayName,
-                isRegistered: true,
+                ip: ip ?? user.username,
+                name: user.username,
+                isOnline: online,
+                jerarquia: user.jerarquia,
                 onTap: () {
                   _playClick();
-                  _openPeerChat(ip);
+                  if (ip != null) {
+                    _openPeerChat(ip, user.username);
+                  } else {
+                    _openOfflineUserChat(user.username);
+                  }
                 },
               );
-            }, childCount: _peer.knownPeers.length),
+            }, childCount: allUsers.length),
           ),
-        ],
 
-        // ── [NUEVO] Botón para ver nodos técnicos (opcional) ────────────────
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -798,51 +850,70 @@ class _LobbyScreenState extends State<LobbyScreen>
   Widget _buildUserCard({
     required String ip,
     required String name,
-    required bool isRegistered,
+    required bool isOnline,
+    required int jerarquia,
     required VoidCallback onTap,
   }) {
+    final jColor = jerarquia >= 10
+        ? kPink
+        : jerarquia >= 7
+        ? kPurple
+        : jerarquia >= 4
+        ? kNeon
+        : Colors.white38;
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: _InteractiveCard(
         onTap: onTap,
-        glowColor: isRegistered ? kNeon : Colors.white38,
+        glowColor: isOnline ? kNeon : Colors.white12,
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             color: kCard,
             border: Border.all(
-              color: isRegistered ? kNeon.withOpacity(0.4) : Colors.white10,
+              color: isOnline ? kNeon.withOpacity(0.3) : Colors.white10,
             ),
             borderRadius: BorderRadius.circular(4),
           ),
           child: Row(
             children: [
-              // Avatar
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: (isRegistered ? kNeon : Colors.white38).withOpacity(
-                    0.15,
-                  ),
-                  border: Border.all(
-                    color: (isRegistered ? kNeon : Colors.white38).withOpacity(
-                      0.5,
+              Stack(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: jColor.withOpacity(0.15),
+                      border: Border.all(color: jColor.withOpacity(0.5)),
+                    ),
+                    child: Center(
+                      child: Text(
+                        name.isNotEmpty ? name[0].toUpperCase() : '?',
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: jColor,
+                        ),
+                      ),
                     ),
                   ),
-                ),
-                child: Center(
-                  child: Text(
-                    name.isNotEmpty ? name[0].toUpperCase() : '?',
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: isRegistered ? kNeon : Colors.white38,
+                  Positioned(
+                    bottom: 0,
+                    right: 0,
+                    child: Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: isOnline ? kNeon : Colors.white24,
+                        border: Border.all(color: kCard, width: 1.5),
+                      ),
                     ),
                   ),
-                ),
+                ],
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -852,56 +923,54 @@ class _LobbyScreenState extends State<LobbyScreen>
                     Row(
                       children: [
                         Text(
-                          name.toUpperCase(),
+                          '@$name',
                           style: TextStyle(
                             fontFamily: 'monospace',
                             fontSize: 13,
-                            color: isRegistered ? Colors.white : Colors.white38,
+                            color: isOnline ? Colors.white : Colors.white54,
                             letterSpacing: 1,
                           ),
                         ),
-                        if (isRegistered) ...[
-                          const SizedBox(width: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 4,
-                              vertical: 1,
-                            ),
-                            decoration: BoxDecoration(
-                              color: kNeon.withOpacity(0.2),
-                              borderRadius: BorderRadius.circular(2),
-                              border: Border.all(color: kNeon.withOpacity(0.3)),
-                            ),
-                            child: const Text(
-                              '✓',
-                              style: TextStyle(
-                                fontFamily: 'monospace',
-                                fontSize: 9,
-                                color: kNeon,
-                                fontWeight: FontWeight.bold,
-                              ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: jColor.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(2),
+                            border: Border.all(color: jColor.withOpacity(0.4)),
+                          ),
+                          child: Text(
+                            'J$jerarquia',
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 9,
+                              color: jColor,
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
-                        ],
+                        ),
                       ],
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      isRegistered
-                          ? 'Usuario registrado'
-                          : 'Sin registrar · $ip',
+                      isOnline ? 'En línea' : 'Desconectado',
                       style: TextStyle(
                         fontFamily: 'monospace',
                         fontSize: 10,
-                        color: isRegistered ? Colors.white38 : Colors.white24,
+                        color: isOnline
+                            ? kNeon.withOpacity(0.6)
+                            : Colors.white24,
                       ),
                     ),
                   ],
                 ),
               ),
               Icon(
-                Icons.chevron_right,
-                color: (isRegistered ? kNeon : Colors.white24).withOpacity(0.5),
+                isOnline ? Icons.chevron_right : Icons.lock_clock_outlined,
+                color: isOnline ? kNeon.withOpacity(0.5) : Colors.white12,
                 size: 18,
               ),
             ],
@@ -967,11 +1036,11 @@ class _LobbyScreenState extends State<LobbyScreen>
     );
   }
 
-  Widget _buildPeerCard({required String ip, required String name}) {
+ Widget _buildPeerCard({required String ip, required String name}) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: _InteractiveCard(
-        onTap: () => _openPeerChat(ip),
+        onTap: () => _openPeerChat(ip, name),
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -981,7 +1050,6 @@ class _LobbyScreenState extends State<LobbyScreen>
           ),
           child: Row(
             children: [
-              // Avatar generativo basado en IP
               _PeerAvatar(ip: ip, name: name),
               const SizedBox(width: 14),
               Expanded(
@@ -1009,7 +1077,6 @@ class _LobbyScreenState extends State<LobbyScreen>
                   ],
                 ),
               ),
-              // Estado online
               Column(
                 children: [
                   Container(
@@ -1040,8 +1107,7 @@ class _LobbyScreenState extends State<LobbyScreen>
       ),
     );
   }
-
-  Widget _buildEmptyPeers() {
+  Widget _buildEmptyUsers() {
     return Container(
       margin: const EdgeInsets.all(20),
       padding: const EdgeInsets.all(32),
@@ -1051,21 +1117,22 @@ class _LobbyScreenState extends State<LobbyScreen>
         color: kCard,
       ),
       child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.device_hub, size: 40, color: kNeon.withOpacity(0.6)),
+          Icon(Icons.people_outline, size: 40, color: kNeon.withOpacity(0.4)),
           const SizedBox(height: 12),
           const Text(
-            'NINGÚN NODO DETECTADO',
+            'SIN OTROS USUARIOS REGISTRADOS',
             style: TextStyle(
               fontFamily: 'monospace',
               fontSize: 12,
-              color: kTextPrimary, // ← Alto contraste
+              color: kTextPrimary,
               letterSpacing: 2,
             ),
           ),
           const SizedBox(height: 6),
           Text(
-            'Esperando peers en la red Tailscale...',
+            'Los usuarios aparecerán aquí cuando se registren.',
             style: TextStyle(
               fontFamily: 'monospace',
               fontSize: 10,
@@ -1079,7 +1146,7 @@ class _LobbyScreenState extends State<LobbyScreen>
 
   void _showRawNodesDialog() {
     showDialog(
-      context: context, // ← Ahora sí reconoce 'context'
+      context: context, // ← Ahora sí reconoce 'context'f
       builder: (_) => AlertDialog(
         backgroundColor: kDarkPanel,
         shape: RoundedRectangleBorder(

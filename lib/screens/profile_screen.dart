@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../services/peer_service.dart';
+import 'auth_screen.dart';
 
 const Color kNeon = Color(0xFF00FFB2);
 const Color kPink = Color(0xFFFF2D78);
@@ -48,6 +49,67 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
       _telefonoCtrl.text = u.telefono;
       _edadCtrl.text = u.edad;
       _correoCtrl.text = u.correo;
+    }
+  }
+  Future<void> _confirmLogout() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: kDarkPanel,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(4),
+          side: BorderSide(color: kPink.withOpacity(0.4)),
+        ),
+        title: const Text(
+          'CERRAR SESIÓN',
+          style: TextStyle(
+            fontFamily: 'monospace',
+            fontSize: 14,
+            color: kPink,
+            letterSpacing: 2,
+          ),
+        ),
+        content: const Text(
+          '¿Confirmas que deseas cerrar sesión?',
+          style: TextStyle(
+            fontFamily: 'monospace',
+            fontSize: 12,
+            color: Colors.white54,
+            height: 1.5,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text(
+              'CANCELAR',
+              style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              'CERRAR SESIÓN',
+              style: TextStyle(
+                fontFamily: 'monospace',
+                color: kPink,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      await _auth.logout();
+      if (mounted) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const AuthScreen()),
+          (route) => false,
+        );
+      }
     }
   }
 
@@ -277,6 +339,34 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
                   ),
                 ),
               ],
+            ),
+          ),
+          GestureDetector(
+            onTap: _confirmLogout,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                border: Border.all(color: kPink.withOpacity(0.5)),
+                borderRadius: BorderRadius.circular(2),
+                color: kPink.withOpacity(0.08),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.logout, color: kPink, size: 14),
+                  SizedBox(width: 6),
+                  Text(
+                    'SALIR',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 10,
+                      color: kPink,
+                      letterSpacing: 2,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],

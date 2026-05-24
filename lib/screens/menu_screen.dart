@@ -14,6 +14,7 @@ import 'material_screen.dart';
 import '../services/material_service.dart';
 import '../services/study_room_service.dart';
 import 'study_room_screen.dart';
+import '../services/chat_service.dart';
 
 // ─── Paleta retrowave / matrix ────────────────────────────────────────────────
 const Color kNeon = Color(0xFF00FFB2);
@@ -156,46 +157,48 @@ class _MenuScreenState extends State<MenuScreen>
   // ── Servicio P2P ─────────────────────────────────────────────────────────────
 
   Future<void> _initService() async {
-  print('🚀 [MenuScreen] Initializing services...');
+    print('🚀 [MenuScreen] Initializing services...');
 
-  try {
-    await _peer.start();
-    print('✅ [MenuScreen] PeerService started on ${_peer.myIp}');
-  } catch (e) {
-    print('❌ [MenuScreen] PeerService failed: $e');
-  }
-
-  setState(() => _initialized = true);
-  _loadVideo();
-
-  // ← AGREGAR: Iniciar StudyRoomService en background
-  Future.microtask(() async {
-    await StudyRoomService().startLocal();
-    print('✅ [MenuScreen] StudyRoomService started');
-    final peerIps = _peer.knownPeers.keys.toList();
-    StudyRoomService().startSync(peerIps);
-  });
-
-  // Escuchar eventos del peer service
-  _peer.events.listen((e) {
-    print('📩 [MenuScreen] Received event: ${e.type}');
-    if (!mounted) return;
-
-    if (e.type == 'background_video_updated') {
-      print('🎬 [MenuScreen] Loading background video: ${e.data}');
-      _loadVideo(path: e.data as String);
-    } else if (e.type == 'background_video_cleared') {
-      print('🚫 [MenuScreen] Clearing background video');
-      _clearVideo();
-    } else if (e.type == 'peer_online') {
-      // ← AGREGAR: cuando llega un peer nuevo, sincronizar StudyRoom
-      final ip = (e.data as Map)['ip'] as String?;
-      if (ip != null) StudyRoomService().syncWithNewPeer(ip);
+    try {
+      await _peer.start();
+      // Arrancar ChatService
+      await ChatService().start();
+      print('✅ [MenuScreen] PeerService started on ${_peer.myIp}');
+    } catch (e) {
+      print('❌ [MenuScreen] PeerService failed: $e');
     }
-  });
 
-  print('✅ [MenuScreen] Event listener registered');
-}
+    setState(() => _initialized = true);
+    _loadVideo();
+
+    // ← AGREGAR: Iniciar StudyRoomService en background
+    Future.microtask(() async {
+      await StudyRoomService().startLocal();
+      print('✅ [MenuScreen] StudyRoomService started');
+      final peerIps = _peer.knownPeers.keys.toList();
+      StudyRoomService().startSync(peerIps);
+    });
+
+    // Escuchar eventos del peer service
+    _peer.events.listen((e) {
+      print('📩 [MenuScreen] Received event: ${e.type}');
+      if (!mounted) return;
+
+      if (e.type == 'background_video_updated') {
+        print('🎬 [MenuScreen] Loading background video: ${e.data}');
+        _loadVideo(path: e.data as String);
+      } else if (e.type == 'background_video_cleared') {
+        print('🚫 [MenuScreen] Clearing background video');
+        _clearVideo();
+      } else if (e.type == 'peer_online') {
+        // ← AGREGAR: cuando llega un peer nuevo, sincronizar StudyRoom
+        final ip = (e.data as Map)['ip'] as String?;
+        if (ip != null) StudyRoomService().syncWithNewPeer(ip);
+      }
+    });
+
+    print('✅ [MenuScreen] Event listener registered');
+  }
 
   // ── Video de fondo ───────────────────────────────────────────────────────────
 

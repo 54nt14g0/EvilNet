@@ -2,37 +2,30 @@ import 'dart:convert';
 
 enum MessageType { text, image, video, audio, file, system }
 
-/// Constante especial: cuando recipientId == null → broadcast a todos.
-/// Cuando recipientId tiene valor → mensaje privado 1 a 1.
-/// Cuando senderId == 'ADMIN' y type == video → video de fondo del menú.
-
 class Message {
   final String id;
   final String senderId;
+  final String senderUsername;
   final String senderIp;
   final MessageType type;
-  final String content; // texto o ruta local del archivo
+  final String content;
   final String? fileName;
   final int? fileSize;
   final DateTime timestamp;
   final bool isMe;
-
-  /// null = broadcast/1-a-1, valor = ID del grupo (chat grupal)
   final String? groupId;
 
-  /// null = broadcast global / mensaje de grupo "Todos"
-  /// valor = IP del destinatario (chat 1 a 1)
-  final String? recipientIp;
+  // Para mensajes privados: userId del destinatario (nunca IP)
+  final String? recipientId;
+  final String? recipientUsername;
 
-  /// Indica si este mensaje es el video de fondo del menú (enviado por ADMIN)
+  final bool isEdited;
   final bool isBackgroundVideo;
 
-  /// [NUEVO] Indica si el mensaje fue editado después de ser enviado
-  final bool isEdited;
-
-  Message({
+  const Message({
     required this.id,
     required this.senderId,
+    required this.senderUsername,
     required this.senderIp,
     required this.type,
     required this.content,
@@ -40,40 +33,136 @@ class Message {
     this.fileSize,
     required this.timestamp,
     required this.isMe,
-    this.recipientIp,
-    this.isBackgroundVideo = false,
     this.groupId,
+    this.recipientId,
+    this.recipientUsername,
     this.isEdited = false,
+    this.isBackgroundVideo = false,
   });
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'senderId': senderId,
-        'senderIp': senderIp,
-        'type': type.name,
-        'content': content,
-        'fileName': fileName,
-        'fileSize': fileSize,
-        'timestamp': timestamp.toIso8601String(),
-        'recipientIp': recipientIp,
-        'isBackgroundVideo': isBackgroundVideo,
-        'groupId': groupId,
-        'isEdited': isEdited,
-      };
+    'id': id,
+    'senderId': senderId,
+    'senderUsername': senderUsername,
+    'senderIp': senderIp,
+    'type': type.name,
+    'content': content,
+    'fileName': fileName,
+    'fileSize': fileSize,
+    'timestamp': timestamp.toIso8601String(),
+    'groupId': groupId,
+    'recipientId': recipientId,
+    'recipientUsername': recipientUsername,
+    'isEdited': isEdited,
+    'isBackgroundVideo': isBackgroundVideo,
+  };
 
   factory Message.fromJson(Map<String, dynamic> j, bool isMe) => Message(
-        id: j['id'],
-        senderId: j['senderId'],
-        senderIp: j['senderIp'],
-        type: MessageType.values.byName(j['type']),
-        content: j['content'],
-        fileName: j['fileName'],
-        fileSize: j['fileSize'],
-        timestamp: DateTime.parse(j['timestamp']),
-        isMe: isMe,
-        recipientIp: j['recipientIp'],
-        isBackgroundVideo: j['isBackgroundVideo'] ?? false,
-        groupId: j['groupId'],
-        isEdited: j['isEdited'] ?? false,
-      );
+    id: j['id'] as String,
+    senderId: j['senderId'] as String,
+    senderUsername: j['senderUsername'] as String? ?? '',
+    senderIp: j['senderIp'] as String? ?? '',
+    type: MessageType.values.byName(j['type'] as String? ?? 'text'),
+    content: j['content'] as String? ?? '',
+    fileName: j['fileName'] as String?,
+    fileSize: j['fileSize'] as int?,
+    timestamp: DateTime.parse(j['timestamp'] as String),
+    isMe: isMe,
+    groupId: j['groupId'] as String?,
+    recipientId: j['recipientId'] as String?,
+    recipientUsername: j['recipientUsername'] as String?,
+    isEdited: j['isEdited'] as bool? ?? false,
+    isBackgroundVideo: j['isBackgroundVideo'] as bool? ?? false,
+  );
+
+  Message copyWith({
+    String? content,
+    bool? isEdited,
+  }) => Message(
+    id: id,
+    senderId: senderId,
+    senderUsername: senderUsername,
+    senderIp: senderIp,
+    type: type,
+    content: content ?? this.content,
+    fileName: fileName,
+    fileSize: fileSize,
+    timestamp: timestamp,
+    isMe: isMe,
+    groupId: groupId,
+    recipientId: recipientId,
+    recipientUsername: recipientUsername,
+    isEdited: isEdited ?? this.isEdited,
+    isBackgroundVideo: isBackgroundVideo,
+  );
+}
+
+// ─── Comentarios y temas de estudio (sin cambios) ─────────────────────────────
+enum CommentStatus { pending, approved }
+
+class StudyComment {
+  final String id;
+  final String topicId;
+  final String userId;
+  final String username;
+  final String content;
+  final List<String> imagePaths;
+  final CommentStatus status;
+  final DateTime timestamp;
+  final bool isEdited;
+
+  const StudyComment({
+    required this.id,
+    required this.topicId,
+    required this.userId,
+    required this.username,
+    required this.content,
+    required this.imagePaths,
+    required this.status,
+    required this.timestamp,
+    this.isEdited = false,
+  });
+
+  StudyComment copyWith({
+    CommentStatus? status,
+    String? content,
+    bool? isEdited,
+  }) => StudyComment(
+    id: id,
+    topicId: topicId,
+    userId: userId,
+    username: username,
+    content: content ?? this.content,
+    imagePaths: imagePaths,
+    status: status ?? this.status,
+    timestamp: timestamp,
+    isEdited: isEdited ?? this.isEdited,
+  );
+
+  bool get isPending => status == CommentStatus.pending;
+  bool get isApproved => status == CommentStatus.approved;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'topicId': topicId,
+    'userId': userId,
+    'username': username,
+    'content': content,
+    'imagePaths': imagePaths,
+    'status': status.name,
+    'timestamp': timestamp.toIso8601String(),
+    'isEdited': isEdited,
+  };
+
+  factory StudyComment.fromJson(Map<String, dynamic> j) => StudyComment(
+    id: j['id'] as String,
+    topicId: j['topicId'] as String,
+    userId: j['userId'] as String,
+    username: j['username'] as String? ?? 'Anónimo',
+    content: j['content'] as String? ?? '',
+    imagePaths: List<String>.from(j['imagePaths'] as List? ?? []),
+    status: CommentStatus.values.byName(j['status'] as String? ?? 'pending'),
+    timestamp: DateTime.parse(j['timestamp'] as String),
+    isEdited: j['isEdited'] as bool? ?? false,
+  );
 }
