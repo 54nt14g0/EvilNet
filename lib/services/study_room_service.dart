@@ -103,25 +103,28 @@ class StudyRoomService {
   Timer? _syncTimer;
 
   Future<void> startSync(List<String> knownPeerIps) async {
-    print('🟡 [StudyRoom] startSync called with peers: $knownPeerIps');
-    if (knownPeerIps.isNotEmpty) {
-      await _syncWithPeers(knownPeerIps);
-    } else {
-      print('🔴 [StudyRoom] startSync: NO PEERS to sync with');
-    }
-
-    if (_syncTimer != null) {
-      print('🟡 [StudyRoom] startSync: timer already running');
-      return;
-    }
-
-    _syncTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
-      final peers = List<String>.from(PeerService().knownPeers.keys);
-      print('🟡 [StudyRoom] periodic sync with ${peers.length} peers');
-      if (peers.isNotEmpty) await _syncWithPeers(peers);
-    });
+  print('🟡 [StudyRoom] startSync called with peers: $knownPeerIps');
+  if (knownPeerIps.isNotEmpty) {
+    await _syncWithPeers(knownPeerIps);
+    await _recoverMissingImages(knownPeerIps);
+  } else {
+    print('🔴 [StudyRoom] startSync: NO PEERS to sync with');
   }
 
+  if (_syncTimer != null) {
+    print('🟡 [StudyRoom] startSync: timer already running');
+    return;
+  }
+
+  _syncTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+    final peers = List<String>.from(PeerService().knownPeers.keys);
+    print('🟡 [StudyRoom] periodic sync with ${peers.length} peers');
+    if (peers.isNotEmpty) {
+      await _syncWithPeers(peers);
+      await _recoverMissingImages(peers);
+    }
+  });
+}
   // ─── Persistencia local ───────────────────────────────────────────────────
 
   Future<File> _dataFile() async {
@@ -224,6 +227,141 @@ class StudyRoomService {
       break;
     }
   }
+  /// Pide a un peer UNA imagen de portada específica por nombre de archivo.
+Future<void> _fetchCoverImageFromPeer(String ip, String fileName) async {
+  try {
+    final socket = await Socket.connect(
+      ip,
+      kStudyPort,
+      timeout: const Duration(seconds: 10),
+    );
+    socket.add(utf8.encode(jsonEncode({
+      'type': 'request_cover_image',
+      'fileName': fileName,
+    })));
+    await socket.flush();
+    await socket.close();
+
+    final chunks = <int>[];
+    await for (final chunk in socket) {
+      chunks.addAll(chunk);
+    }
+    if (chunks.isEmpty) return;
+
+    final response = jsonDecode(utf8.decode(chunks)) as Map<String, dynamic>;
+    if (response['type'] != 'cover_image_response') return;
+
+    final imageBase64 = response['imageBase64'] as String?;
+    if (imageBase64 == null) return;
+
+    final dir = await getApplicationDocumentsDirectory();
+    final destPath = '${dir.path}/$fileName';
+    await File(destPath).writeAsBytes(base64Decode(imageBase64));
+    print('[StudyRoom] Recovered cover image from $ip: $fileName');
+    _updateTopicCoverPath(fileName, destPath);
+  } catch (e) {
+    print('[StudyRoom] _fetchCoverImageFromPeer($ip, $fileName) failed: $e');
+  }
+}
+
+/// Pide a un peer las imágenes de un comentario específico.
+Future<void> _fetchCommentImagesFromPeer(String ip, String commentId) async {
+  try {
+    final socket = await Socket.connect(
+      ip,
+      kStudyPort,
+      timeout: const Duration(seconds: 10),
+    );
+    socket.add(utf8.encode(jsonEncode({
+      'type': 'request_comment_images',
+      'commentId': commentId,
+    })));
+    await socket.flush();
+    await socket.close();
+
+    final chunks = <int>[];
+    await for (final chunk in socket) {
+      chunks.addAll(chunk);
+    }
+    if (chunks.isEmpty) return;
+
+    final response = jsonDecode(utf8.decode(chunks)) as Map<String, dynamic>;
+    if (response['type'] != 'comment_images_response') return;
+
+    final images = response['images'] as List?;
+    if (images == null || images.isEmpty) return;
+
+    final dir = await getApplicationDocumentsDirectory();
+    final savedPaths = <String>[];
+    for (final img in images) {
+      final imgMap = img as Map<String, dynamic>;
+      final fileName = imgMap['fileName'] as String;
+      final b64 = imgMap['base64'] as String;
+      final destPath = '${dir.path}/$fileName';
+      await File(destPath).writeAsBytes(base64Decode(b64));
+      savedPaths.add(destPath);
+    }
+
+    // Actualizar el comentario con las rutas locales correctas
+    final comment = _comments[commentId];
+    if (comment != null) {
+      _comments[commentId] = StudyComment(
+        id: comment.id,
+        topicId: comment.topicId,
+        userId: comment.userId,
+        username: comment.username,
+        content: comment.content,
+        imagePaths: savedPaths,
+        status: comment.status,
+        timestamp: comment.timestamp,
+        isEdited: comment.isEdited,
+      );
+      await _saveLocal();
+      _emit();
+      print('[StudyRoom] Recovered comment images from $ip: $commentId');
+    }
+  } catch (e) {
+    print('[StudyRoom] _fetchCommentImagesFromPeer($ip, $commentId) failed: $e');
+  }
+}
+
+/// Detecta imágenes faltantes (portadas y comentarios) y las pide a los peers.
+Future<void> _recoverMissingImages(List<String> peerIps) async {
+  if (peerIps.isEmpty) return;
+
+  // Portadas faltantes
+  for (final topic in _topics.values) {
+    if (topic.coverImagePath == null) continue;
+    final file = File(topic.coverImagePath!);
+    if (await file.exists()) continue;
+    final fileName = topic.coverImagePath!.split(Platform.pathSeparator).last;
+    for (final ip in peerIps) {
+      await _fetchCoverImageFromPeer(ip, fileName);
+      // Si ya se recuperó, no seguir pidiendo a otros peers
+      final recovered = File('${(await getApplicationDocumentsDirectory()).path}/$fileName');
+      if (await recovered.exists()) break;
+    }
+  }
+
+  // Imágenes de comentarios faltantes
+  for (final comment in _comments.values) {
+    if (comment.imagePaths.isEmpty) continue;
+    final anyMissing = await Future.any(
+      comment.imagePaths.map((p) async => !await File(p).exists()),
+    );
+    if (!anyMissing) continue;
+    for (final ip in peerIps) {
+      await _fetchCommentImagesFromPeer(ip, comment.id);
+      // Verificar si ya se recuperaron
+      final updated = _comments[comment.id];
+      if (updated == null) break;
+      final allPresent = await Future.wait(
+        updated.imagePaths.map((p) => File(p).exists()),
+      );
+      if (allPresent.every((e) => e)) break;
+    }
+  }
+}
 
   Future<void> _saveLocal() async {
     final file = await _dataFile();
@@ -259,10 +397,10 @@ class StudyRoomService {
   }
 
   Future<void> syncWithNewPeer(String ip) async {
-    print('🟡 [StudyRoom] syncWithNewPeer($ip) called');
-    await _requestDataFrom(ip);
-    await _requestMissingImagesFrom(ip);
-  }
+  print('🟡 [StudyRoom] syncWithNewPeer($ip) called');
+  await _requestDataFrom(ip);
+  await _recoverMissingImages([ip]);
+}
 
   void _handleConnection(Socket socket) async {
     try {
@@ -398,7 +536,58 @@ class StudyRoomService {
           );
           await _upsertProgressLocal(prog);
           break;
+        case 'request_cover_image':
+          final fileName = packet['fileName'] as String?;
+          if (fileName == null) break;
+          final dir = await getApplicationDocumentsDirectory();
+          final file = File('${dir.path}/$fileName');
+          if (!await file.exists()) {
+            socket.add(
+              utf8.encode(jsonEncode({'type': 'cover_image_not_found'})),
+            );
+            await socket.flush();
+          } else {
+            final bytes = await file.readAsBytes();
+            final response = jsonEncode({
+              'type': 'cover_image_response',
+              'fileName': fileName,
+              'imageBase64': base64Encode(bytes),
+            });
+            socket.add(utf8.encode(response));
+            await socket.flush();
+          }
+          break;
 
+        case 'request_comment_images':
+          final commentId = packet['commentId'] as String?;
+          if (commentId == null) break;
+          final comment = _comments[commentId];
+          if (comment == null) break;
+          final dir = await getApplicationDocumentsDirectory();
+          final imagePayloads = <Map<String, String>>[];
+          for (final imgPath in comment.imagePaths) {
+            final f = File(imgPath);
+            if (!await f.exists()) continue;
+            try {
+              final bytes = await f.readAsBytes();
+              final fileName = imgPath.split(Platform.pathSeparator).last;
+              imagePayloads.add({
+                'fileName': fileName,
+                'base64': base64Encode(bytes),
+              });
+            } catch (_) {}
+          }
+          socket.add(
+            utf8.encode(
+              jsonEncode({
+                'type': 'comment_images_response',
+                'commentId': commentId,
+                'images': imagePayloads,
+              }),
+            ),
+          );
+          await socket.flush();
+          break;
         case 'image_transfer':
           await _receiveImageTransfer(socket, packet, chunks);
           break;
