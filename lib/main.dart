@@ -21,6 +21,7 @@ Future<void> _setupFirewall() async {
     'EvilNet StudyRoom': '45001',
     'EvilNet Material': '45002',
     'EvilNet Chat': '45003',
+    'EvilNet Universe' : '45004',
   };
   // Construir un script de PowerShell que agregue todas las reglas
   final scriptLines = rules.entries

@@ -34,6 +34,8 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
 
   List<UniverseIdea> _ideas = [];
   UniverseCentralTopic? _centralTopic;
+  static const double _canvasSize = 8000.0;
+  static const double _canvasCenter = 4000.0;
 
   String get _myUserId => _peer.myId;
   String get _myUsername => _auth.currentUser?.username ?? _peer.myName;
@@ -44,9 +46,18 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
   void initState() {
     super.initState();
     _starsCtrl = AnimationController(
-      vsync: this, duration: const Duration(seconds: 30),
+      vsync: this,
+      duration: const Duration(seconds: 30),
     )..repeat();
     _transformCtrl = TransformationController();
+
+    // Centrar la vista en el centro del canvas al iniciar
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final screenSize = MediaQuery.of(context).size;
+      final dx = _canvasCenter - screenSize.width / 2;
+      final dy = _canvasCenter - screenSize.height / 2;
+      _transformCtrl.value = Matrix4.identity()..translate(-dx, -dy);
+    });
 
     _loadData();
     _service.events.listen((e) {
@@ -73,143 +84,25 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
   }
 
   void _showAddIdeaDialog() {
-    final textCtrl = TextEditingController();
-    List<String> imagePaths = [];
-
     showDialog(
       context: context,
-      builder: (_) => StatefulBuilder(
-        builder: (ctx, setS) => AlertDialog(
-          backgroundColor: kUPanel,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(3),
-            side: BorderSide(color: kURed.withOpacity(0.4)),
-          ),
-          title: const Text('◈ NUEVA IDEA', style: TextStyle(
-            fontFamily: 'monospace', fontSize: 13, color: kURedGlow, letterSpacing: 2,
-          )),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                TextField(
-                  controller: textCtrl,
-                  maxLines: 4,
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12, color: kUText),
-                  decoration: InputDecoration(
-                    hintText: '// describe tu idea...',
-                    hintStyle: const TextStyle(color: kUTextDim, fontFamily: 'monospace'),
-                    enabledBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: kURed.withOpacity(0.3)),
-                    ),
-                    focusedBorder: const OutlineInputBorder(
-                      borderSide: BorderSide(color: kURedGlow),
-                    ),
-                    filled: true, fillColor: kUBg,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                // Imágenes
-                if (imagePaths.isNotEmpty) ...[
-                  SizedBox(
-                    height: 60,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: imagePaths.length,
-                      separatorBuilder: (_, __) => const SizedBox(width: 6),
-                      itemBuilder: (_, i) => Stack(
-                        children: [
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(2),
-                            child: Image.file(File(imagePaths[i]),
-                                width: 60, height: 60, fit: BoxFit.cover),
-                          ),
-                          Positioned(
-                            top: 2, right: 2,
-                            child: GestureDetector(
-                              onTap: () => setS(() => imagePaths.removeAt(i)),
-                              child: Container(
-                                padding: const EdgeInsets.all(2),
-                                decoration: const BoxDecoration(
-                                  color: Colors.black87, shape: BoxShape.circle,
-                                ),
-                                child: const Icon(Icons.close, size: 10, color: Colors.white),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                ],
-                GestureDetector(
-                  onTap: () async {
-                    final r = await FilePicker.platform.pickFiles(
-                      type: FileType.image, allowMultiple: true,
-                    );
-                    if (r != null) {
-                      setS(() => imagePaths.addAll(
-                        r.files.map((f) => f.path!).where((p) => p.isNotEmpty),
-                      ));
-                    }
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      border: Border.all(color: kURed.withOpacity(0.3)),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.image_outlined, color: kUTextDim, size: 14),
-                        SizedBox(width: 6),
-                        Text('ADJUNTAR IMAGEN', style: TextStyle(
-                          fontFamily: 'monospace', fontSize: 9, color: kUTextDim, letterSpacing: 1,
-                        )),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('CANCELAR',
-                  style: TextStyle(fontFamily: 'monospace', color: kUTextDim)),
-            ),
-            TextButton(
-              onPressed: () async {
-                final text = textCtrl.text.trim();
-                if (text.isEmpty) return;
-                Navigator.pop(ctx);
-
-                // Posición aleatoria alrededor del centro
-                final rng = Random();
-                final angle = rng.nextDouble() * 2 * pi;
-                final radius = 200.0 + rng.nextDouble() * 200;
-                final x = 500 + cos(angle) * radius;
-                final y = 500 + sin(angle) * radius;
-
-                await _service.addIdea(
-                  universeId: widget.universe.id,
-                  authorId: _myUserId,
-                  authorUsername: _myUsername,
-                  text: text,
-                  imagePaths: imagePaths,
-                  x: x, y: y,
-                );
-              },
-              child: const Text('AGREGAR', style: TextStyle(
-                fontFamily: 'monospace', color: kURedGlow, letterSpacing: 1,
-              )),
-            ),
-          ],
-        ),
+      builder: (_) => _AddIdeaDialog(
+        onAdd: (text, imagePaths) async {
+          final rng = Random();
+          final angle = rng.nextDouble() * 2 * pi;
+          final radius = 200.0 + rng.nextDouble() * 200;
+          final x = 4000 + cos(angle) * radius;
+          final y = 4000 + sin(angle) * radius;
+          await _service.addIdea(
+            universeId: widget.universe.id,
+            authorId: _myUserId,
+            authorUsername: _myUsername,
+            text: text,
+            imagePaths: imagePaths,
+            x: x,
+            y: y,
+          );
+        },
       ),
     );
   }
@@ -229,7 +122,9 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
         isAdmin: _isAdmin,
         onRate: (rating) async {
           await _service.rateIdea(
-            ideaId: idea.id, userId: _myUserId, rating: rating,
+            ideaId: idea.id,
+            userId: _myUserId,
+            rating: rating,
           );
         },
         onEdit: idea.authorId == _myUserId
@@ -262,13 +157,23 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
           borderRadius: BorderRadius.circular(3),
           side: BorderSide(color: Colors.orange.withOpacity(0.4)),
         ),
-        title: const Text('◈ EDITAR IDEA', style: TextStyle(
-          fontFamily: 'monospace', fontSize: 13, color: Colors.orange, letterSpacing: 2,
-        )),
+        title: const Text(
+          '◈ EDITAR IDEA',
+          style: TextStyle(
+            fontFamily: 'monospace',
+            fontSize: 13,
+            color: Colors.orange,
+            letterSpacing: 2,
+          ),
+        ),
         content: TextField(
           controller: textCtrl,
           maxLines: 4,
-          style: const TextStyle(fontFamily: 'monospace', fontSize: 12, color: kUText),
+          style: const TextStyle(
+            fontFamily: 'monospace',
+            fontSize: 12,
+            color: kUText,
+          ),
           decoration: InputDecoration(
             enabledBorder: OutlineInputBorder(
               borderSide: BorderSide(color: Colors.orange.withOpacity(0.3)),
@@ -276,14 +181,17 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
             focusedBorder: const OutlineInputBorder(
               borderSide: BorderSide(color: Colors.orange),
             ),
-            filled: true, fillColor: kUBg,
+            filled: true,
+            fillColor: kUBg,
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('CANCELAR',
-                style: TextStyle(fontFamily: 'monospace', color: kUTextDim)),
+            child: const Text(
+              'CANCELAR',
+              style: TextStyle(fontFamily: 'monospace', color: kUTextDim),
+            ),
           ),
           TextButton(
             onPressed: () async {
@@ -291,12 +199,19 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
               if (newText.isEmpty) return;
               Navigator.pop(context);
               await _service.editIdea(
-                ideaId: idea.id, newText: newText, requestingUserId: _myUserId,
+                ideaId: idea.id,
+                newText: newText,
+                requestingUserId: _myUserId,
               );
             },
-            child: const Text('GUARDAR', style: TextStyle(
-              fontFamily: 'monospace', color: Colors.orange, letterSpacing: 1,
-            )),
+            child: const Text(
+              'GUARDAR',
+              style: TextStyle(
+                fontFamily: 'monospace',
+                color: Colors.orange,
+                letterSpacing: 1,
+              ),
+            ),
           ),
         ],
       ),
@@ -305,7 +220,9 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
 
   void _showEditCentralTopicDialog() {
     final titleCtrl = TextEditingController(text: _centralTopic?.title ?? '');
-    final descCtrl = TextEditingController(text: _centralTopic?.description ?? '');
+    final descCtrl = TextEditingController(
+      text: _centralTopic?.description ?? '',
+    );
     String? imagePath = _centralTopic?.imagePath;
 
     showDialog(
@@ -317,57 +234,82 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
             borderRadius: BorderRadius.circular(3),
             side: BorderSide(color: kURed.withOpacity(0.4)),
           ),
-          title: const Text('◈ TEMA CENTRAL', style: TextStyle(
-            fontFamily: 'monospace', fontSize: 13, color: kURedGlow, letterSpacing: 2,
-          )),
+          title: const Text(
+            '◈ TEMA CENTRAL',
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 13,
+              color: kURedGlow,
+              letterSpacing: 2,
+            ),
+          ),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 TextField(
                   controller: titleCtrl,
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 13, color: kUText),
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 13,
+                    color: kUText,
+                  ),
                   decoration: InputDecoration(
                     hintText: '// título del tema central...',
-                    hintStyle: const TextStyle(color: kUTextDim, fontFamily: 'monospace'),
+                    hintStyle: const TextStyle(
+                      color: kUTextDim,
+                      fontFamily: 'monospace',
+                    ),
                     enabledBorder: OutlineInputBorder(
                       borderSide: BorderSide(color: kURed.withOpacity(0.3)),
                     ),
                     focusedBorder: const OutlineInputBorder(
                       borderSide: BorderSide(color: kURedGlow),
                     ),
-                    filled: true, fillColor: kUBg,
+                    filled: true,
+                    fillColor: kUBg,
                   ),
                 ),
                 const SizedBox(height: 10),
                 TextField(
                   controller: descCtrl,
                   maxLines: 3,
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12, color: kUText),
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    color: kUText,
+                  ),
                   decoration: InputDecoration(
                     hintText: '// descripción...',
-                    hintStyle: const TextStyle(color: kUTextDim, fontFamily: 'monospace'),
+                    hintStyle: const TextStyle(
+                      color: kUTextDim,
+                      fontFamily: 'monospace',
+                    ),
                     enabledBorder: OutlineInputBorder(
                       borderSide: BorderSide(color: kURed.withOpacity(0.3)),
                     ),
                     focusedBorder: const OutlineInputBorder(
                       borderSide: BorderSide(color: kURedGlow),
                     ),
-                    filled: true, fillColor: kUBg,
+                    filled: true,
+                    fillColor: kUBg,
                   ),
                 ),
                 const SizedBox(height: 10),
                 GestureDetector(
                   onTap: () async {
                     final r = await FilePicker.platform.pickFiles(
-                      type: FileType.image, allowMultiple: false,
+                      type: FileType.image,
+                      allowMultiple: false,
                     );
                     if (r != null && r.files.isNotEmpty) {
                       setS(() => imagePath = r.files.first.path);
                     }
                   },
                   child: Container(
-                    height: imagePath != null && File(imagePath!).existsSync() ? 80 : 50,
+                    height: imagePath != null && File(imagePath!).existsSync()
+                        ? 80
+                        : 50,
                     width: double.infinity,
                     decoration: BoxDecoration(
                       color: kUBg,
@@ -377,11 +319,18 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
                     child: imagePath != null && File(imagePath!).existsSync()
                         ? ClipRRect(
                             borderRadius: BorderRadius.circular(2),
-                            child: Image.file(File(imagePath!), fit: BoxFit.cover),
+                            child: Image.file(
+                              File(imagePath!),
+                              fit: BoxFit.cover,
+                            ),
                           )
-                        : const Center(child: Icon(
-                            Icons.add_photo_alternate_outlined, color: kUTextDim, size: 20,
-                          )),
+                        : const Center(
+                            child: Icon(
+                              Icons.add_photo_alternate_outlined,
+                              color: kUTextDim,
+                              size: 20,
+                            ),
+                          ),
                   ),
                 ),
               ],
@@ -390,8 +339,10 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('CANCELAR',
-                  style: TextStyle(fontFamily: 'monospace', color: kUTextDim)),
+              child: const Text(
+                'CANCELAR',
+                style: TextStyle(fontFamily: 'monospace', color: kUTextDim),
+              ),
             ),
             TextButton(
               onPressed: () async {
@@ -400,8 +351,9 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
                 Navigator.pop(ctx);
 
                 String? finalImagePath = imagePath;
-                if (finalImagePath != null && File(finalImagePath).existsSync()
-                    && finalImagePath != _centralTopic?.imagePath) {
+                if (finalImagePath != null &&
+                    File(finalImagePath).existsSync() &&
+                    finalImagePath != _centralTopic?.imagePath) {
                   final dir = await getApplicationDocumentsDirectory();
                   final ext = finalImagePath.split('.').last;
                   final fileName = 'central_img_${_uuid.v4()}.$ext';
@@ -410,17 +362,24 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
                   finalImagePath = destPath;
                 }
 
-                await _service.upsertCentralTopic(UniverseCentralTopic(
-                  universeId: widget.universe.id,
-                  title: title,
-                  description: descCtrl.text.trim(),
-                  imagePath: finalImagePath,
-                  updatedAt: DateTime.now(),
-                ));
+                await _service.upsertCentralTopic(
+                  UniverseCentralTopic(
+                    universeId: widget.universe.id,
+                    title: title,
+                    description: descCtrl.text.trim(),
+                    imagePath: finalImagePath,
+                    updatedAt: DateTime.now(),
+                  ),
+                );
               },
-              child: const Text('GUARDAR', style: TextStyle(
-                fontFamily: 'monospace', color: kURedGlow, letterSpacing: 1,
-              )),
+              child: const Text(
+                'GUARDAR',
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  color: kURedGlow,
+                  letterSpacing: 1,
+                ),
+              ),
             ),
           ],
         ),
@@ -445,11 +404,12 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
           ),
           // Header
           Positioned(
-            top: 0, left: 0, right: 0,
-            child: SafeArea(
-              child: _buildHeader(),
-            ),
+            top: 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(child: _buildHeader()),
           ),
+          // Canvas interactivo
           // Canvas interactivo
           Positioned.fill(
             child: SafeArea(
@@ -458,48 +418,62 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
                 child: InteractiveViewer(
                   transformationController: _transformCtrl,
                   boundaryMargin: const EdgeInsets.all(double.infinity),
-                  minScale: 0.3,
-                  maxScale: 3.0,
+                  minScale: 0.1,
+                  maxScale: 4.0,
+                  constrained: false,
                   child: SizedBox(
-                    width: 1200,
-                    height: 1200,
+                    width: _canvasSize,
+                    height: _canvasSize,
                     child: Stack(
+                      clipBehavior: Clip.none,
                       children: [
+                        // Fondo extra del canvas (estrellas densas)
+                        Positioned.fill(
+                          child: CustomPaint(painter: _CanvasGridPainter()),
+                        ),
                         // Líneas de conexión del centro a ideas
                         Positioned.fill(
                           child: CustomPaint(
                             painter: _ConnectionPainter(
                               ideas: _ideas,
-                              center: const Offset(500, 500),
+                              center: const Offset(
+                                _canvasCenter,
+                                _canvasCenter,
+                              ),
                             ),
                           ),
                         ),
                         // Nodo central
                         Positioned(
-                          left: 500 - 70,
-                          top: 500 - 70,
+                          left: _canvasCenter - 70,
+                          top: _canvasCenter - 70,
                           child: _CentralTopicNode(
                             topic: _centralTopic,
                             isAdmin: _isAdmin,
-                            onTap: _isAdmin ? _showEditCentralTopicDialog : null,
+                            onTap: _isAdmin
+                                ? _showEditCentralTopicDialog
+                                : null,
                           ),
                         ),
                         // Ideas
-                        ..._ideas.map((idea) => _IdeaNode(
-                          key: ValueKey(idea.id),
-                          idea: idea,
-                          myUserId: _myUserId,
-                          onTap: () => _showIdeaDetail(idea),
-                          onDragEnd: (details) {
-                            // Convertir posición global a local del canvas
-                            final matrix = _transformCtrl.value;
-                            final scale = matrix.getMaxScaleOnAxis();
-                            final translation = matrix.getTranslation();
-                            final localX = (details.offset.dx - translation.x) / scale;
-                            final localY = (details.offset.dy - translation.y) / scale;
-                            _service.moveIdea(idea.id, localX, localY);
-                          },
-                        )),
+                        ..._ideas.map(
+                          (idea) => _IdeaNode(
+                            key: ValueKey(idea.id),
+                            idea: idea,
+                            myUserId: _myUserId,
+                            onTap: () => _showIdeaDetail(idea),
+                            onDragEnd: (details) {
+                              final matrix = _transformCtrl.value;
+                              final scale = matrix.getMaxScaleOnAxis();
+                              final translation = matrix.getTranslation();
+                              final localX =
+                                  (details.offset.dx - translation.x) / scale;
+                              final localY =
+                                  (details.offset.dy - translation.y) / scale;
+                              _service.moveIdea(idea.id, localX, localY);
+                            },
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -509,13 +483,20 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
           ),
           // FAB agregar idea
           Positioned(
-            bottom: 24, right: 24,
+            bottom: 24,
+            right: 24,
             child: FloatingActionButton.extended(
               onPressed: _showAddIdeaDialog,
               backgroundColor: kURedDim,
-              label: const Text('IDEA', style: TextStyle(
-                fontFamily: 'monospace', fontSize: 11, color: kURedGlow, letterSpacing: 2,
-              )),
+              label: const Text(
+                'IDEA',
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                  color: kURedGlow,
+                  letterSpacing: 2,
+                ),
+              ),
               icon: const Icon(Icons.add, color: kURedGlow, size: 16),
             ),
           ),
@@ -541,7 +522,11 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
                 border: Border.all(color: kURed.withOpacity(0.4)),
                 borderRadius: BorderRadius.circular(2),
               ),
-              child: const Icon(Icons.arrow_back_ios_new, color: kURed, size: 13),
+              child: const Icon(
+                Icons.arrow_back_ios_new,
+                color: kURed,
+                size: 13,
+              ),
             ),
           ),
           const SizedBox(width: 12),
@@ -552,14 +537,20 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
                 Text(
                   widget.universe.name.toUpperCase(),
                   style: const TextStyle(
-                    fontFamily: 'monospace', fontSize: 13,
-                    fontWeight: FontWeight.bold, color: kUText, letterSpacing: 2,
+                    fontFamily: 'monospace',
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: kUText,
+                    letterSpacing: 2,
                   ),
                 ),
                 Text(
                   '${_ideas.length} IDEAS',
                   style: const TextStyle(
-                    fontFamily: 'monospace', fontSize: 9, color: kUTextDim, letterSpacing: 1,
+                    fontFamily: 'monospace',
+                    fontSize: 9,
+                    color: kUTextDim,
+                    letterSpacing: 1,
                   ),
                 ),
               ],
@@ -577,9 +568,15 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
                 children: [
                   Icon(Icons.lock_outline, color: Colors.amber, size: 10),
                   SizedBox(width: 4),
-                  Text('PRIVADO', style: TextStyle(
-                    fontFamily: 'monospace', fontSize: 8, color: Colors.amber, letterSpacing: 1,
-                  )),
+                  Text(
+                    'PRIVADO',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 8,
+                      color: Colors.amber,
+                      letterSpacing: 1,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -610,18 +607,25 @@ class _CentralTopicNode extends StatelessWidget {
           shape: BoxShape.circle,
           border: Border.all(color: kURed, width: 2),
           boxShadow: [
-            BoxShadow(color: kURed.withOpacity(0.4), blurRadius: 20, spreadRadius: 2),
+            BoxShadow(
+              color: kURed.withOpacity(0.4),
+              blurRadius: 20,
+              spreadRadius: 2,
+            ),
           ],
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (topic?.imagePath != null && File(topic!.imagePath!).existsSync()) ...[
+            if (topic?.imagePath != null &&
+                File(topic!.imagePath!).existsSync()) ...[
               ClipOval(
                 child: Image.file(
                   File(topic!.imagePath!),
-                  width: 60, height: 60, fit: BoxFit.cover,
+                  width: 60,
+                  height: 60,
+                  fit: BoxFit.cover,
                 ),
               ),
               const SizedBox(height: 6),
@@ -632,8 +636,11 @@ class _CentralTopicNode extends StatelessWidget {
                 topic?.title ?? 'TEMA CENTRAL',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
-                  fontFamily: 'monospace', fontSize: 11,
-                  fontWeight: FontWeight.bold, color: kUText, letterSpacing: 1,
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: kUText,
+                  letterSpacing: 1,
                 ),
               ),
             ),
@@ -644,7 +651,9 @@ class _CentralTopicNode extends StatelessWidget {
                   topic!.description,
                   textAlign: TextAlign.center,
                   style: const TextStyle(
-                    fontFamily: 'monospace', fontSize: 8, color: kUTextDim,
+                    fontFamily: 'monospace',
+                    fontSize: 8,
+                    color: kUTextDim,
                   ),
                 ),
               ),
@@ -690,10 +699,10 @@ class _IdeaNodeState extends State<_IdeaNode> {
     final ratingColor = avg >= 7
         ? Colors.green
         : avg >= 4
-            ? Colors.orange
-            : avg > 0
-                ? Colors.red
-                : kUTextDim;
+        ? Colors.orange
+        : avg > 0
+        ? Colors.red
+        : kUTextDim;
 
     final nodeContent = GestureDetector(
       onTap: widget.onTap,
@@ -709,7 +718,9 @@ class _IdeaNodeState extends State<_IdeaNode> {
           borderRadius: BorderRadius.circular(8),
           boxShadow: [
             BoxShadow(
-              color: kURed.withOpacity(0.1), blurRadius: 8, spreadRadius: 0,
+              color: kURed.withOpacity(0.1),
+              blurRadius: 8,
+              spreadRadius: 0,
             ),
           ],
         ),
@@ -721,8 +732,10 @@ class _IdeaNodeState extends State<_IdeaNode> {
             Text(
               '@${widget.idea.authorUsername}',
               style: TextStyle(
-                fontFamily: 'monospace', fontSize: 8,
-                color: isOwn ? kURedGlow : kUTextDim, letterSpacing: 1,
+                fontFamily: 'monospace',
+                fontSize: 8,
+                color: isOwn ? kURedGlow : kUTextDim,
+                letterSpacing: 1,
               ),
             ),
             const SizedBox(height: 4),
@@ -732,7 +745,10 @@ class _IdeaNodeState extends State<_IdeaNode> {
               maxLines: 4,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                fontFamily: 'monospace', fontSize: 10, color: kUText, height: 1.4,
+                fontFamily: 'monospace',
+                fontSize: 10,
+                color: kUText,
+                height: 1.4,
               ),
             ),
             // Imágenes
@@ -754,7 +770,9 @@ class _IdeaNodeState extends State<_IdeaNode> {
                   child: Text(
                     '+${widget.idea.imagePaths.length - 1} más',
                     style: const TextStyle(
-                      fontFamily: 'monospace', fontSize: 7, color: kUTextDim,
+                      fontFamily: 'monospace',
+                      fontSize: 7,
+                      color: kUTextDim,
                     ),
                   ),
                 ),
@@ -770,7 +788,9 @@ class _IdeaNodeState extends State<_IdeaNode> {
                       ? '${avg.toStringAsFixed(1)} (${widget.idea.ratingCount})'
                       : 'Sin calificar',
                   style: TextStyle(
-                    fontFamily: 'monospace', fontSize: 8, color: ratingColor,
+                    fontFamily: 'monospace',
+                    fontSize: 8,
+                    color: ratingColor,
                   ),
                 ),
               ],
@@ -849,7 +869,8 @@ class _IdeaDetailSheetState extends State<_IdeaDetailSheet> {
             // Handle
             Center(
               child: Container(
-                width: 40, height: 4,
+                width: 40,
+                height: 4,
                 decoration: BoxDecoration(
                   color: kURed.withOpacity(0.4),
                   borderRadius: BorderRadius.circular(2),
@@ -860,24 +881,44 @@ class _IdeaDetailSheetState extends State<_IdeaDetailSheet> {
             // Cabecera
             Row(
               children: [
-                Text('@${widget.idea.authorUsername}', style: const TextStyle(
-                  fontFamily: 'monospace', fontSize: 12, color: kURedGlow,
-                  fontWeight: FontWeight.bold, letterSpacing: 1,
-                )),
+                Text(
+                  '@${widget.idea.authorUsername}',
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    color: kURedGlow,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1,
+                  ),
+                ),
                 const Spacer(),
                 if (widget.onEdit != null)
-                  _SheetBtn(icon: Icons.edit_outlined, color: Colors.orange, onTap: widget.onEdit!),
+                  _SheetBtn(
+                    icon: Icons.edit_outlined,
+                    color: Colors.orange,
+                    onTap: widget.onEdit!,
+                  ),
                 if (widget.onDelete != null) ...[
                   const SizedBox(width: 6),
-                  _SheetBtn(icon: Icons.delete_outline, color: kURedGlow, onTap: widget.onDelete!),
+                  _SheetBtn(
+                    icon: Icons.delete_outline,
+                    color: kURedGlow,
+                    onTap: widget.onDelete!,
+                  ),
                 ],
               ],
             ),
             const SizedBox(height: 12),
             // Texto
-            Text(widget.idea.text, style: const TextStyle(
-              fontFamily: 'monospace', fontSize: 13, color: kUText, height: 1.6,
-            )),
+            Text(
+              widget.idea.text,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 13,
+                color: kUText,
+                height: 1.6,
+              ),
+            ),
             // Imágenes
             if (widget.idea.imagePaths.isNotEmpty) ...[
               const SizedBox(height: 12),
@@ -890,9 +931,7 @@ class _IdeaDetailSheetState extends State<_IdeaDetailSheet> {
                       backgroundColor: Colors.transparent,
                       child: GestureDetector(
                         onTap: () => Navigator.pop(context),
-                        child: InteractiveViewer(
-                          child: Image.file(File(p)),
-                        ),
+                        child: InteractiveViewer(child: Image.file(File(p))),
                       ),
                     ),
                   ),
@@ -900,7 +939,11 @@ class _IdeaDetailSheetState extends State<_IdeaDetailSheet> {
                     margin: const EdgeInsets.only(bottom: 8),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(3),
-                      child: Image.file(File(p), width: double.infinity, fit: BoxFit.cover),
+                      child: Image.file(
+                        File(p),
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                      ),
                     ),
                   ),
                 );
@@ -924,15 +967,19 @@ class _IdeaDetailSheetState extends State<_IdeaDetailSheet> {
                         ? '${avg.toStringAsFixed(1)} / 10'
                         : 'Sin calificaciones',
                     style: const TextStyle(
-                      fontFamily: 'monospace', fontSize: 13,
-                      color: Colors.amber, fontWeight: FontWeight.bold,
+                      fontFamily: 'monospace',
+                      fontSize: 13,
+                      color: Colors.amber,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
                   const SizedBox(width: 8),
                   Text(
                     '(${widget.idea.ratingCount} voto${widget.idea.ratingCount != 1 ? "s" : ""})',
                     style: const TextStyle(
-                      fontFamily: 'monospace', fontSize: 10, color: kUTextDim,
+                      fontFamily: 'monospace',
+                      fontSize: 10,
+                      color: kUTextDim,
                     ),
                   ),
                 ],
@@ -941,9 +988,15 @@ class _IdeaDetailSheetState extends State<_IdeaDetailSheet> {
             // Solo calificar si no es tu propia idea
             if (!isOwn) ...[
               const SizedBox(height: 16),
-              const Text('TU CALIFICACIÓN', style: TextStyle(
-                fontFamily: 'monospace', fontSize: 9, color: kURed, letterSpacing: 2,
-              )),
+              const Text(
+                'TU CALIFICACIÓN',
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 9,
+                  color: kURed,
+                  letterSpacing: 2,
+                ),
+              ),
               const SizedBox(height: 8),
               Row(
                 children: List.generate(10, (i) {
@@ -951,12 +1004,16 @@ class _IdeaDetailSheetState extends State<_IdeaDetailSheet> {
                   final selected = _selectedRating >= val;
                   return GestureDetector(
                     onTap: () async {
-                      setState(() { _selectedRating = val; _rating = true; });
+                      setState(() {
+                        _selectedRating = val;
+                        _rating = true;
+                      });
                       await widget.onRate(val);
                       if (mounted) setState(() => _rating = false);
                     },
                     child: Container(
-                      width: 28, height: 28,
+                      width: 28,
+                      height: 28,
                       margin: const EdgeInsets.only(right: 4),
                       decoration: BoxDecoration(
                         color: selected ? kURed.withOpacity(0.3) : kUBg,
@@ -966,11 +1023,17 @@ class _IdeaDetailSheetState extends State<_IdeaDetailSheet> {
                         borderRadius: BorderRadius.circular(2),
                       ),
                       child: Center(
-                        child: Text('$val', style: TextStyle(
-                          fontFamily: 'monospace', fontSize: 10,
-                          color: selected ? kURedGlow : kUTextDim,
-                          fontWeight: selected ? FontWeight.bold : FontWeight.normal,
-                        )),
+                        child: Text(
+                          '$val',
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 10,
+                            color: selected ? kURedGlow : kUTextDim,
+                            fontWeight: selected
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                          ),
+                        ),
                       ),
                     ),
                   );
@@ -979,9 +1042,14 @@ class _IdeaDetailSheetState extends State<_IdeaDetailSheet> {
               if (_rating)
                 const Padding(
                   padding: EdgeInsets.only(top: 8),
-                  child: Text('Guardando...', style: TextStyle(
-                    fontFamily: 'monospace', fontSize: 9, color: kUTextDim,
-                  )),
+                  child: Text(
+                    'Guardando...',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 9,
+                      color: kUTextDim,
+                    ),
+                  ),
                 ),
             ],
             const SizedBox(height: 40),
@@ -996,7 +1064,11 @@ class _SheetBtn extends StatelessWidget {
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
-  const _SheetBtn({required this.icon, required this.color, required this.onTap});
+  const _SheetBtn({
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1010,6 +1082,210 @@ class _SheetBtn extends StatelessWidget {
         ),
         child: Icon(icon, color: color, size: 14),
       ),
+    );
+  }
+}
+
+class _AddIdeaDialog extends StatefulWidget {
+  final Future<void> Function(String text, List<String> imagePaths) onAdd;
+  const _AddIdeaDialog({required this.onAdd});
+
+  @override
+  State<_AddIdeaDialog> createState() => _AddIdeaDialogState();
+}
+
+class _AddIdeaDialogState extends State<_AddIdeaDialog> {
+  final _textCtrl = TextEditingController();
+  final List<String> _imagePaths = [];
+  bool _loading = false;
+
+  @override
+  void dispose() {
+    _textCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickImages() async {
+    // Cerrar el teclado antes de abrir el picker para evitar conflictos en Windows
+    FocusScope.of(context).unfocus();
+    await Future.delayed(const Duration(milliseconds: 150));
+
+    final r = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      allowMultiple: true,
+    );
+    if (r != null && mounted) {
+      setState(() {
+        _imagePaths.addAll(
+          r.files.map((f) => f.path ?? '').where((p) => p.isNotEmpty),
+        );
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: kUPanel,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(3),
+        side: BorderSide(color: kURed.withOpacity(0.4)),
+      ),
+      title: const Text(
+        '◈ NUEVA IDEA',
+        style: TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 13,
+          color: kURedGlow,
+          letterSpacing: 2,
+        ),
+      ),
+      content: SizedBox(
+        width: 340,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: _textCtrl,
+                maxLines: 4,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  color: kUText,
+                ),
+                decoration: InputDecoration(
+                  hintText: '// describe tu idea...',
+                  hintStyle: const TextStyle(
+                    color: kUTextDim,
+                    fontFamily: 'monospace',
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderSide: BorderSide(color: kURed.withOpacity(0.3)),
+                  ),
+                  focusedBorder: const OutlineInputBorder(
+                    borderSide: BorderSide(color: kURedGlow),
+                  ),
+                  filled: true,
+                  fillColor: kUBg,
+                ),
+              ),
+              const SizedBox(height: 12),
+              if (_imagePaths.isNotEmpty) ...[
+                SizedBox(
+                  height: 64,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: _imagePaths.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 6),
+                    itemBuilder: (_, i) => Stack(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(2),
+                          child: Image.file(
+                            File(_imagePaths[i]),
+                            width: 60,
+                            height: 60,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                        Positioned(
+                          top: 2,
+                          right: 2,
+                          child: GestureDetector(
+                            onTap: () =>
+                                setState(() => _imagePaths.removeAt(i)),
+                            child: Container(
+                              padding: const EdgeInsets.all(2),
+                              decoration: const BoxDecoration(
+                                color: Colors.black87,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.close,
+                                size: 10,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
+              GestureDetector(
+                onTap: _pickImages,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: kURed.withOpacity(0.3)),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.image_outlined, color: kUTextDim, size: 14),
+                      SizedBox(width: 6),
+                      Text(
+                        'ADJUNTAR IMAGEN',
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 9,
+                          color: kUTextDim,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _loading ? null : () => Navigator.pop(context),
+          child: const Text(
+            'CANCELAR',
+            style: TextStyle(fontFamily: 'monospace', color: kUTextDim),
+          ),
+        ),
+        TextButton(
+          onPressed: _loading
+              ? null
+              : () async {
+                  final text = _textCtrl.text.trim();
+                  if (text.isEmpty) return;
+                  setState(() => _loading = true);
+                  Navigator.pop(context);
+                  await widget.onAdd(text, List.from(_imagePaths));
+                },
+          child: _loading
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    color: kURedGlow,
+                    strokeWidth: 1.5,
+                  ),
+                )
+              : const Text(
+                  'AGREGAR',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    color: kURedGlow,
+                    letterSpacing: 1,
+                  ),
+                ),
+        ),
+      ],
     );
   }
 }
@@ -1029,11 +1305,7 @@ class _ConnectionPainter extends CustomPainter {
       ..style = PaintingStyle.stroke;
 
     for (final idea in ideas) {
-      canvas.drawLine(
-        center,
-        Offset(idea.x, idea.y),
-        paint,
-      );
+      canvas.drawLine(center, Offset(idea.x, idea.y), paint);
     }
   }
 
@@ -1047,7 +1319,10 @@ class _CanvasStarfieldPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    canvas.drawRect(Offset.zero & size, Paint()..color = const Color(0xFF020202));
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..color = const Color(0xFF020202),
+    );
     final rng = Random(99);
     for (int i = 0; i < 300; i++) {
       final x = rng.nextDouble() * size.width;
@@ -1055,7 +1330,8 @@ class _CanvasStarfieldPainter extends CustomPainter {
       final r = rng.nextDouble() * 1.8 + 0.2;
       final blink = (sin(t * pi * 2 * (0.2 + i * 0.03) + i) + 1) / 2;
       canvas.drawCircle(
-        Offset(x, y), r,
+        Offset(x, y),
+        r,
         Paint()..color = Colors.white.withOpacity(0.1 + blink * 0.5),
       );
     }
@@ -1069,4 +1345,21 @@ class _CanvasStarfieldPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_CanvasStarfieldPainter old) => old.t != t;
+}
+
+class _CanvasGridPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Grid de puntos muy sutil para dar sensación de espacio infinito
+    final paint = Paint()..color = Colors.white.withOpacity(0.03);
+    const spacing = 80.0;
+    for (double x = 0; x < size.width; x += spacing) {
+      for (double y = 0; y < size.height; y += spacing) {
+        canvas.drawCircle(Offset(x, y), 1, paint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_CanvasGridPainter old) => false;
 }
