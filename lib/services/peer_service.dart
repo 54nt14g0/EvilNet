@@ -9,6 +9,7 @@ import 'package:uuid/uuid.dart';
 import '../models/message.dart';
 import '../models/group.dart';
 import '../services/auth_service.dart';
+import 'universe_service.dart';
 import '../services/material_service.dart';
 import 'study_room_service.dart';
 
@@ -168,6 +169,7 @@ class PeerService {
               }
               AuthService().syncWithNewPeer(ipStr);
               StudyRoomService().syncWithNewPeer(ipStr);
+              UniverseService().syncWithNewPeer(ipStr); // ← AGREGAR
 
               // Intentar sincronizar video con reintentos.
               // El peer recién conectado puede no tener el servidor listo aún.

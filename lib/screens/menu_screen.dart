@@ -13,6 +13,9 @@ import 'control_panel_screen.dart'; // 🔐 MERGE: Nuevas vistas
 import 'material_screen.dart';
 import '../services/material_service.dart';
 import '../services/study_room_service.dart';
+
+import '../services/universe_service.dart';
+import 'universe_list_screen.dart';
 import 'study_room_screen.dart';
 import '../services/chat_service.dart';
 
@@ -198,6 +201,17 @@ class _MenuScreenState extends State<MenuScreen>
     });
 
     print('✅ [MenuScreen] Event listener registered');
+    Future.microtask(() async {
+      await StudyRoomService().startLocal();
+      print('✅ [MenuScreen] StudyRoomService started');
+      final peerIps = _peer.knownPeers.keys.toList();
+      StudyRoomService().startSync(peerIps);
+
+      // ← AGREGAR
+      await UniverseService().startLocal();
+      print('✅ [MenuScreen] UniverseService started');
+      UniverseService().startSync(peerIps);
+    });
   }
 
   // ── Video de fondo ───────────────────────────────────────────────────────────
@@ -400,7 +414,7 @@ class _MenuScreenState extends State<MenuScreen>
 
         break;
       case 'Rincón de Ideas':
-        _showComingSoon('Rincón de Ideas');
+        _navigateTo(const UniverseListScreen());
         break;
       case 'Panel de Control': // 🔐 MERGE: Nueva navegación
         _navigateTo(const ControlPanelScreen());
