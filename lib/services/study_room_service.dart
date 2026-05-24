@@ -1449,48 +1449,55 @@ class StudyRoomService {
   // ─── Lógica de acceso ─────────────────────────────────────────────────────
 
   bool canViewTopic({
-    required String topicId,
-    required String userId,
-    required int userHierarchy,
-  }) {
-    final topic = _topics[topicId];
-    if (topic == null) return false;
-    if (userHierarchy < topic.minHierarchy) return false;
-    if (!topic.isSequential || topic.requiredTopicIds.isEmpty) return true;
-    final prog = _progress[userId];
-    if (prog == null) return false;
-    return topic.requiredTopicIds.every((id) => prog.hasUnlocked(id));
-  }
+  required String topicId,
+  required String userId,
+  required int userHierarchy,
+}) {
+  final topic = _topics[topicId];
+  if (topic == null) return false;
+
+  // J9+ accede a todo sin restricción
+  if (userHierarchy >= 9) return true;
+
+  if (userHierarchy < topic.minHierarchy) return false;
+  if (!topic.isSequential || topic.requiredTopicIds.isEmpty) return true;
+  final prog = _progress[userId];
+  if (prog == null) return false;
+  return topic.requiredTopicIds.every((id) => prog.hasUnlocked(id));
+}
 
   String? lockReason({
-    required String topicId,
-    required String userId,
-    required int userHierarchy,
-  }) {
-    final topic = _topics[topicId];
-    if (topic == null) return null;
+  required String topicId,
+  required String userId,
+  required int userHierarchy,
+}) {
+  final topic = _topics[topicId];
+  if (topic == null) return null;
 
-    if (userHierarchy < topic.minHierarchy) {
-      return 'Requiere jerarquía ${topic.minHierarchy} para acceder';
-    }
+  // J9+ sin restricciones, nunca muestra candado
+  if (userHierarchy >= 9) return null;
 
-    if (topic.isSequential && topic.requiredTopicIds.isNotEmpty) {
-      final prog = _progress[userId];
-      final missing = topic.requiredTopicIds
-          .where((id) => prog == null || !prog.hasUnlocked(id))
-          .map((id) => _topics[id]?.title ?? id)
-          .toList();
-
-      if (missing.isNotEmpty) {
-        if (missing.length == 1) {
-          return 'Debes comentar "${missing.first}" para desbloquear este tema';
-        }
-        return 'Debes comentar: ${missing.map((t) => '"$t"').join(', ')}';
-      }
-    }
-
-    return null;
+  if (userHierarchy < topic.minHierarchy) {
+    return 'Requiere jerarquía ${topic.minHierarchy} para acceder';
   }
+
+  if (topic.isSequential && topic.requiredTopicIds.isNotEmpty) {
+    final prog = _progress[userId];
+    final missing = topic.requiredTopicIds
+        .where((id) => prog == null || !prog.hasUnlocked(id))
+        .map((id) => _topics[id]?.title ?? id)
+        .toList();
+
+    if (missing.isNotEmpty) {
+      if (missing.length == 1) {
+        return 'Debes comentar "${missing.first}" para desbloquear este tema';
+      }
+      return 'Debes comentar: ${missing.map((t) => '"$t"').join(', ')}';
+    }
+  }
+
+  return null;
+}
 
   // ─── Transferencia de imágenes de portada ─────────────────────────────────
 

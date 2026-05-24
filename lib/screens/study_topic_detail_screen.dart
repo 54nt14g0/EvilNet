@@ -431,42 +431,106 @@ class _StudyTopicDetailScreenState extends State<StudyTopicDetailScreen>
   }
 
   Widget _buildMeta() {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 6,
-      children: [
-        _MetaBadge(
-          icon: Icons.shield_outlined,
-          label: 'J${widget.topic.minHierarchy}+',
-          color: kSRed,
+  final isAdmin = _myHierarchy >= 9;
+  final hasRestrictions = widget.topic.requiredTopicIds.isNotEmpty ||
+      widget.topic.minHierarchy > 1;
+
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      // Banner visible solo para admins cuando el tema tiene restricciones
+      if (isAdmin && hasRestrictions) ...[
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          margin: const EdgeInsets.only(bottom: 12),
+          decoration: BoxDecoration(
+            color: Colors.orange.withOpacity(0.08),
+            border: Border.all(color: Colors.orange.withOpacity(0.4)),
+            borderRadius: BorderRadius.circular(3),
+          ),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.admin_panel_settings_outlined,
+                color: Colors.orange,
+                size: 13,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _buildRestrictionSummary(),
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 10,
+                    color: Colors.orange,
+                    height: 1.5,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
-        if (widget.topic.isSequential)
-          _MetaBadge(
-            icon: Icons.link,
-            label: 'SECUENCIAL',
-            color: Colors.orange,
-          ),
-        if (widget.topic.requiresApproval)
-          _MetaBadge(
-            icon: Icons.verified_outlined,
-            label: 'APROBACIÓN',
-            color: Colors.purple.shade300,
-          ),
-        if (widget.topic.requiredTopicIds.isNotEmpty)
-          _MetaBadge(
-            icon: Icons.lock_clock_outlined,
-            label: '${widget.topic.requiredTopicIds.length} REQUISITO(S)',
-            color: kSTextDim,
-          ),
-        if (widget.topic.unlocksTopicIds.isNotEmpty)
-          _MetaBadge(
-            icon: Icons.lock_open_outlined,
-            label: 'DESBLOQUEA ${widget.topic.unlocksTopicIds.length}',
-            color: Colors.green.shade700,
-          ),
       ],
-    );
+      // Badges normales
+      Wrap(
+        spacing: 8,
+        runSpacing: 6,
+        children: [
+          _MetaBadge(
+            icon: Icons.shield_outlined,
+            label: 'J${widget.topic.minHierarchy}+',
+            color: kSRed,
+          ),
+          if (widget.topic.isSequential)
+            _MetaBadge(
+              icon: Icons.link,
+              label: 'SECUENCIAL',
+              color: Colors.orange,
+            ),
+          if (widget.topic.requiresApproval)
+            _MetaBadge(
+              icon: Icons.verified_outlined,
+              label: 'APROBACIÓN',
+              color: Colors.purple.shade300,
+            ),
+          if (widget.topic.requiredTopicIds.isNotEmpty)
+            _MetaBadge(
+              icon: Icons.lock_clock_outlined,
+              label: '${widget.topic.requiredTopicIds.length} REQUISITO(S)',
+              color: kSTextDim,
+            ),
+          if (widget.topic.unlocksTopicIds.isNotEmpty)
+            _MetaBadge(
+              icon: Icons.lock_open_outlined,
+              label: 'DESBLOQUEA ${widget.topic.unlocksTopicIds.length}',
+              color: Colors.green.shade700,
+            ),
+        ],
+      ),
+    ],
+  );
+}
+
+String _buildRestrictionSummary() {
+  final parts = <String>[];
+
+  if (widget.topic.minHierarchy > 1) {
+    parts.add('Visible solo para J${widget.topic.minHierarchy}+');
   }
+
+  if (widget.topic.requiredTopicIds.isNotEmpty) {
+    final names = widget.topic.requiredTopicIds
+        .map((id) => _service.topics
+            .where((t) => t.id == id)
+            .map((t) => '"${t.title}"')
+            .firstOrNull ?? '"$id"')
+        .join(', ');
+    parts.add('Bloqueado hasta comentar: $names');
+  }
+
+  return '⚠ SOLO VISIBLE PARA TI  ·  ${parts.join('  ·  ')}';
+}
 
  Widget _buildContent() {
   return Container(

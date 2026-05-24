@@ -665,41 +665,74 @@ class _TopicTileState extends State<_TopicTile>
     );
   }
 
-  Widget _buildStatusBadge() {
-    if (_locked) {
-      return const Icon(Icons.lock_outline, color: kSTextDim, size: 14);
-    }
-    if (_unlocked) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-        decoration: BoxDecoration(
-          color: Colors.green.withOpacity(0.2),
-          border: Border.all(color: Colors.green.withOpacity(0.5)),
-          borderRadius: BorderRadius.circular(2),
-        ),
-        child: const Text(
-          '✓',
-          style: TextStyle(
-            fontFamily: 'monospace',
-            fontSize: 9,
-            color: Colors.green,
+ Widget _buildStatusBadge() {
+  // Para admins: mostrar badge de "restringido para otros" si el tema
+  // tiene requisitos, pero sin bloquear el acceso
+  if (widget.canEdit && widget.topic.requiredTopicIds.isNotEmpty) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.orange.withOpacity(0.15),
+        border: Border.all(color: Colors.orange.withOpacity(0.5)),
+        borderRadius: BorderRadius.circular(2),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.lock_clock_outlined, color: Colors.orange, size: 9),
+          SizedBox(width: 3),
+          Text(
+            'RESTRINGIDO',
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 8,
+              color: Colors.orange,
+              letterSpacing: 1,
+            ),
           ),
-        ),
-      );
-    }
-    if (_pending) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-        decoration: BoxDecoration(
-          color: Colors.orange.withOpacity(0.15),
-          border: Border.all(color: Colors.orange.withOpacity(0.4)),
-          borderRadius: BorderRadius.circular(2),
-        ),
-        child: const Text('⏳', style: TextStyle(fontSize: 9)),
-      );
-    }
-    return const SizedBox.shrink();
+        ],
+      ),
+    );
   }
+
+  // Para usuarios normales bloqueados
+  if (_locked) {
+    return const Icon(Icons.lock_outline, color: kSTextDim, size: 14);
+  }
+
+  if (_unlocked) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.green.withOpacity(0.2),
+        border: Border.all(color: Colors.green.withOpacity(0.5)),
+        borderRadius: BorderRadius.circular(2),
+      ),
+      child: const Text(
+        '✓',
+        style: TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 9,
+          color: Colors.green,
+        ),
+      ),
+    );
+  }
+
+  if (_pending) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.orange.withOpacity(0.15),
+        border: Border.all(color: Colors.orange.withOpacity(0.4)),
+        borderRadius: BorderRadius.circular(2),
+      ),
+      child: const Text('⏳', style: TextStyle(fontSize: 9)),
+    );
+  }
+
+  return const SizedBox.shrink();
+}
 
   Widget _buildInfo() {
     return Container(
