@@ -123,50 +123,50 @@ class PeerService {
   }
 
   Future<void> _connectToKnownPeers() async {
-  final ips = List<String>.from(knownPeers.keys);
-  for (final ip in ips) {
-    if (ip == myIp) continue;
-    try {
-      final socket = await Socket.connect(
-        ip,
-        kPort,
-        timeout: const Duration(seconds: 4),
-      );
-      final headerBytes = utf8.encode(
-        jsonEncode({
-          'type': 'peer_announce',
-          'senderIp': myIp,
-          'senderName': myName,
-          'senderId': myId,
-        }),
-      );
-      final lenBytes = ByteData(4)
-        ..setInt32(0, headerBytes.length, Endian.big);
-      socket.add(lenBytes.buffer.asUint8List());
-      socket.add(headerBytes);
-      await socket.flush();
-      await socket.close();
-      await socket.done;
-
-      knownPeers[ip] = DateTime.now();
-
-      final lastSync = _lastSync[ip];
-      final needsSync =
-          lastSync == null ||
-          DateTime.now().difference(lastSync).inMinutes >= 2;
-
-      if (needsSync) {
-        _lastSync[ip] = DateTime.now();
-        peerNames[ip] = peerNames[ip] ?? ip;
-        _controller.add(
-          PeerEvent('peer_online', {'ip': ip, 'name': peerNames[ip]}),
+    final ips = List<String>.from(knownPeers.keys);
+    for (final ip in ips) {
+      if (ip == myIp) continue;
+      try {
+        final socket = await Socket.connect(
+          ip,
+          kPort,
+          timeout: const Duration(seconds: 4),
         );
-        // ← No bloquear el loop: lanzar sin await
-        Future.microtask(() => _triggerSync(ip));
-      }
-    } catch (_) {}
+        final headerBytes = utf8.encode(
+          jsonEncode({
+            'type': 'peer_announce',
+            'senderIp': myIp,
+            'senderName': myName,
+            'senderId': myId,
+          }),
+        );
+        final lenBytes = ByteData(4)
+          ..setInt32(0, headerBytes.length, Endian.big);
+        socket.add(lenBytes.buffer.asUint8List());
+        socket.add(headerBytes);
+        await socket.flush();
+        await socket.close();
+        await socket.done;
+
+        knownPeers[ip] = DateTime.now();
+
+        final lastSync = _lastSync[ip];
+        final needsSync =
+            lastSync == null ||
+            DateTime.now().difference(lastSync).inMinutes >= 2;
+
+        if (needsSync) {
+          _lastSync[ip] = DateTime.now();
+          peerNames[ip] = peerNames[ip] ?? ip;
+          _controller.add(
+            PeerEvent('peer_online', {'ip': ip, 'name': peerNames[ip]}),
+          );
+          // ← No bloquear el loop: lanzar sin await
+          Future.microtask(() => _triggerSync(ip));
+        }
+      } catch (_) {}
+    }
   }
-}
 
   void _onPeerDiscovered(String ip, String name, {bool isNew = false}) {
     peerNames[ip] = name;
@@ -195,11 +195,18 @@ class PeerService {
       await ChatService().syncBroadcastWithPeer(ip);
     });
     Future.microtask(() async {
+      final myId = AuthService().currentUser?.id;
+      if (myId != null) {
+        await ChatService().syncPrivateWithPeer(ip, myId);
+      }
+    });
+    Future.microtask(() async {
       await StudyRoomService().syncWithNewPeer(ip);
     });
     Future.microtask(() async {
       await UniverseService().syncWithNewPeer(ip);
     });
+
     Future.microtask(() async {
       await NookService().syncWithNewPeer(ip);
     });
