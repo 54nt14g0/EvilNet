@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/app_user.dart';
 import '../services/auth_service.dart';
+import '../widgets/user_avatar.dart';
 import '../services/peer_service.dart';
 
 const Color kNeon = Color(0xFF00FFB2);
@@ -30,12 +31,14 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
   @override
   void initState() {
     super.initState();
-    _scanCtrl =
-        AnimationController(vsync: this, duration: const Duration(seconds: 3))
-          ..repeat();
+    _scanCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 3),
+    )..repeat();
     _pulseCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1800))
-      ..repeat(reverse: true);
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    )..repeat(reverse: true);
 
     _auth.events.listen((e) {
       if (mounted && e == 'users_updated') setState(() {});
@@ -64,9 +67,7 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
   }
 
   List<AppUser> get _filteredUsers {
-    final users = _auth.users
-        .where((u) => u.id != kSeedAdmin.id)
-        .toList()
+    final users = _auth.users.where((u) => u.id != kSeedAdmin.id).toList()
       ..sort((a, b) => b.jerarquia.compareTo(a.jerarquia));
 
     if (_searchQuery.isEmpty) return users;
@@ -133,7 +134,11 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
                 border: Border.all(color: kPink.withOpacity(0.4)),
                 borderRadius: BorderRadius.circular(2),
               ),
-              child: const Icon(Icons.arrow_back_ios_new, color: kPink, size: 14),
+              child: const Icon(
+                Icons.arrow_back_ios_new,
+                color: kPink,
+                size: 14,
+              ),
             ),
           ),
           const SizedBox(width: 16),
@@ -198,8 +203,11 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.lock_clock_outlined,
-                size: 48, color: kPurple.withOpacity(0.4)),
+            Icon(
+              Icons.lock_clock_outlined,
+              size: 48,
+              color: kPurple.withOpacity(0.4),
+            ),
             const SizedBox(height: 20),
             Text(
               'NIVEL $jerarquia',
@@ -300,8 +308,11 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
             fontSize: 12,
             color: Colors.white24,
           ),
-          prefixIcon:
-              Icon(Icons.search, color: kNeon.withOpacity(0.5), size: 18),
+          prefixIcon: Icon(
+            Icons.search,
+            color: kNeon.withOpacity(0.5),
+            size: 18,
+          ),
           suffixIcon: _searchQuery.isNotEmpty
               ? IconButton(
                   icon: Icon(Icons.close, color: Colors.white38, size: 16),
@@ -318,8 +329,10 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
             borderRadius: BorderRadius.circular(2),
             borderSide: const BorderSide(color: kNeon),
           ),
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 10,
+          ),
         ),
         cursorColor: kNeon,
       ),
@@ -331,8 +344,11 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 4),
       child: Row(
         children: [
-          Icon(Icons.admin_panel_settings_outlined,
-              size: 14, color: kPink.withOpacity(0.6)),
+          Icon(
+            Icons.admin_panel_settings_outlined,
+            size: 14,
+            color: kPink.withOpacity(0.6),
+          ),
           const SizedBox(width: 8),
           Text(
             label,
@@ -355,8 +371,9 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
   Widget _buildUserCard(AppUser user) {
     final jColor = _jerarquiaColor(user.jerarquia);
     final isMe = user.id == _auth.currentUser?.id;
-    final isOnline = _peer.knownPeers.keys
-        .any((ip) => _auth.getUsernameForIp(ip) == user.username);
+    final isOnline = _peer.knownPeers.keys.any(
+      (ip) => _auth.getUsernameForIp(ip) == user.username,
+    );
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -418,17 +435,19 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
               const Text(
                 'CAMBIAR JERARQUÍA',
                 style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 14,
-                    color: kPink,
-                    letterSpacing: 2),
+                  fontFamily: 'monospace',
+                  fontSize: 14,
+                  color: kPink,
+                  letterSpacing: 2,
+                ),
               ),
               Text(
                 '@${user.username}',
                 style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 11,
-                    color: Colors.white38),
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                  color: Colors.white38,
+                ),
               ),
             ],
           ),
@@ -449,8 +468,8 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     decoration: BoxDecoration(
                       border: Border.all(
-                          color:
-                              _jerarquiaColor(selected).withOpacity(0.5)),
+                        color: _jerarquiaColor(selected).withOpacity(0.5),
+                      ),
                       borderRadius: BorderRadius.circular(2),
                     ),
                     child: Center(
@@ -478,7 +497,10 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
                 Text(
                   errorMsg!,
                   style: const TextStyle(
-                      fontFamily: 'monospace', fontSize: 11, color: kPink),
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    color: kPink,
+                  ),
                 ),
               ],
             ],
@@ -486,9 +508,13 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('CANCELAR',
-                  style: TextStyle(
-                      color: Colors.white38, fontFamily: 'monospace')),
+              child: const Text(
+                'CANCELAR',
+                style: TextStyle(
+                  color: Colors.white38,
+                  fontFamily: 'monospace',
+                ),
+              ),
             ),
             TextButton(
               onPressed: () async {
@@ -497,8 +523,7 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
                   setDialogState(() => errorMsg = err);
                   return;
                 }
-                await _auth.pushUsersToPeers(
-                    _peer.knownPeers.keys.toList());
+                await _auth.pushUsersToPeers(_peer.knownPeers.keys.toList());
                 if (mounted) {
                   Navigator.pop(ctx);
                   setState(() {});
@@ -507,9 +532,10 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
               child: const Text(
                 'CONFIRMAR',
                 style: TextStyle(
-                    color: kPink,
-                    fontFamily: 'monospace',
-                    fontWeight: FontWeight.bold),
+                  color: kPink,
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
           ],
@@ -535,17 +561,19 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
             const Text(
               '⚠ ELIMINAR USUARIO',
               style: TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 14,
-                  color: kPink,
-                  letterSpacing: 2),
+                fontFamily: 'monospace',
+                fontSize: 14,
+                color: kPink,
+                letterSpacing: 2,
+              ),
             ),
             Text(
               '@${user.username}',
               style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 11,
-                  color: Colors.white38),
+                fontFamily: 'monospace',
+                fontSize: 11,
+                color: Colors.white38,
+              ),
             ),
           ],
         ),
@@ -578,9 +606,10 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('CANCELAR',
-                style: TextStyle(
-                    color: Colors.white38, fontFamily: 'monospace')),
+            child: const Text(
+              'CANCELAR',
+              style: TextStyle(color: Colors.white38, fontFamily: 'monospace'),
+            ),
           ),
           TextButton(
             onPressed: () async {
@@ -589,9 +618,13 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
               if (mounted && err != null) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text(err,
-                        style: const TextStyle(
-                            fontFamily: 'monospace', color: kPink)),
+                    content: Text(
+                      err,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        color: kPink,
+                      ),
+                    ),
                     backgroundColor: kDarkPanel,
                   ),
                 );
@@ -600,10 +633,11 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
             child: const Text(
               'ELIMINAR PARA TODOS',
               style: TextStyle(
-                  color: kPink,
-                  fontFamily: 'monospace',
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1),
+                color: kPink,
+                fontFamily: 'monospace',
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1,
+              ),
             ),
           ),
         ],
@@ -664,6 +698,7 @@ class _ExpandableUserCardState extends State<_ExpandableUserCard> {
                   // Avatar
                   Stack(
                     children: [
+                      // Reemplaza este bloque:
                       Container(
                         width: 42,
                         height: 42,
@@ -671,7 +706,8 @@ class _ExpandableUserCardState extends State<_ExpandableUserCard> {
                           shape: BoxShape.circle,
                           color: widget.jColor.withOpacity(0.12),
                           border: Border.all(
-                              color: widget.jColor.withOpacity(0.5)),
+                            color: widget.jColor.withOpacity(0.5),
+                          ),
                         ),
                         child: Center(
                           child: Text(
@@ -687,6 +723,14 @@ class _ExpandableUserCardState extends State<_ExpandableUserCard> {
                           ),
                         ),
                       ),
+
+                      // Por esto:
+                      UserAvatar(
+                        user: widget.user,
+                        size: 42,
+                        borderColor: widget.jColor.withOpacity(0.5),
+                        borderWidth: 1.5,
+                      ),
                       // Punto de estado online
                       Positioned(
                         bottom: 0,
@@ -696,11 +740,8 @@ class _ExpandableUserCardState extends State<_ExpandableUserCard> {
                           height: 10,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: widget.isOnline
-                                ? kNeon
-                                : Colors.white24,
-                            border: Border.all(
-                                color: kCard, width: 1.5),
+                            color: widget.isOnline ? kNeon : Colors.white24,
+                            border: Border.all(color: kCard, width: 1.5),
                           ),
                         ),
                       ),
@@ -729,9 +770,10 @@ class _ExpandableUserCardState extends State<_ExpandableUserCard> {
                               Text(
                                 '(tú)',
                                 style: TextStyle(
-                                    fontFamily: 'monospace',
-                                    fontSize: 10,
-                                    color: kNeon.withOpacity(0.5)),
+                                  fontFamily: 'monospace',
+                                  fontSize: 10,
+                                  color: kNeon.withOpacity(0.5),
+                                ),
                               ),
                             ],
                           ],
@@ -742,9 +784,10 @@ class _ExpandableUserCardState extends State<_ExpandableUserCard> {
                               ? widget.user.nombre
                               : 'Sin nombre',
                           style: const TextStyle(
-                              fontFamily: 'monospace',
-                              fontSize: 10,
-                              color: Colors.white38),
+                            fontFamily: 'monospace',
+                            fontSize: 10,
+                            color: Colors.white38,
+                          ),
                         ),
                       ],
                     ),
@@ -753,10 +796,11 @@ class _ExpandableUserCardState extends State<_ExpandableUserCard> {
                   // Badge jerarquía
                   Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 5),
+                      horizontal: 8,
+                      vertical: 5,
+                    ),
                     decoration: BoxDecoration(
-                      border: Border.all(
-                          color: widget.jColor.withOpacity(0.4)),
+                      border: Border.all(color: widget.jColor.withOpacity(0.4)),
                       borderRadius: BorderRadius.circular(2),
                       color: widget.jColor.withOpacity(0.08),
                     ),
@@ -789,8 +833,8 @@ class _ExpandableUserCardState extends State<_ExpandableUserCard> {
             Container(
               decoration: BoxDecoration(
                 border: Border(
-                    top: BorderSide(
-                        color: widget.jColor.withOpacity(0.15))),
+                  top: BorderSide(color: widget.jColor.withOpacity(0.15)),
+                ),
               ),
               padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
               child: Column(
@@ -798,41 +842,46 @@ class _ExpandableUserCardState extends State<_ExpandableUserCard> {
                 children: [
                   // Datos personales
                   _DetailRow(
-                      icon: Icons.badge_outlined,
-                      label: 'NOMBRE',
-                      value: widget.user.nombre.isNotEmpty
-                          ? widget.user.nombre
-                          : '—'),
+                    icon: Icons.badge_outlined,
+                    label: 'NOMBRE',
+                    value: widget.user.nombre.isNotEmpty
+                        ? widget.user.nombre
+                        : '—',
+                  ),
                   _DetailRow(
-                      icon: Icons.phone_outlined,
-                      label: 'TELÉFONO',
-                      value: widget.user.telefono.isNotEmpty
-                          ? widget.user.telefono
-                          : '—'),
+                    icon: Icons.phone_outlined,
+                    label: 'TELÉFONO',
+                    value: widget.user.telefono.isNotEmpty
+                        ? widget.user.telefono
+                        : '—',
+                  ),
                   _DetailRow(
-                      icon: Icons.cake_outlined,
-                      label: 'EDAD',
-                      value: widget.user.edad.isNotEmpty
-                          ? widget.user.edad
-                          : '—'),
+                    icon: Icons.cake_outlined,
+                    label: 'EDAD',
+                    value: widget.user.edad.isNotEmpty ? widget.user.edad : '—',
+                  ),
                   _DetailRow(
-                      icon: Icons.alternate_email,
-                      label: 'CORREO',
-                      value: widget.user.correo.isNotEmpty
-                          ? widget.user.correo
-                          : '—'),
+                    icon: Icons.alternate_email,
+                    label: 'CORREO',
+                    value: widget.user.correo.isNotEmpty
+                        ? widget.user.correo
+                        : '—',
+                  ),
                   _DetailRow(
-                      icon: Icons.calendar_today_outlined,
-                      label: 'REGISTRO',
-                      value: _formatDate(widget.user.createdAt)),
+                    icon: Icons.calendar_today_outlined,
+                    label: 'REGISTRO',
+                    value: _formatDate(widget.user.createdAt),
+                  ),
                   _DetailRow(
-                      icon: Icons.update_outlined,
-                      label: 'ACTUALIZADO',
-                      value: _formatDate(widget.user.updatedAt)),
+                    icon: Icons.update_outlined,
+                    label: 'ACTUALIZADO',
+                    value: _formatDate(widget.user.updatedAt),
+                  ),
                   _DetailRow(
-                      icon: Icons.fingerprint,
-                      label: 'ID',
-                      value: widget.user.id.substring(0, 12) + '…'),
+                    icon: Icons.fingerprint,
+                    label: 'ID',
+                    value: widget.user.id.substring(0, 12) + '…',
+                  ),
 
                   const SizedBox(height: 12),
                   // Botones de acción
@@ -880,8 +929,11 @@ class _StatChip extends StatelessWidget {
   final String value;
   final String label;
   final Color color;
-  const _StatChip(
-      {required this.value, required this.label, required this.color});
+  const _StatChip({
+    required this.value,
+    required this.label,
+    required this.color,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -916,8 +968,11 @@ class _DetailRow extends StatelessWidget {
   final IconData icon;
   final String label;
   final String value;
-  const _DetailRow(
-      {required this.icon, required this.label, required this.value});
+  const _DetailRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -961,11 +1016,12 @@ class _ActionButton extends StatelessWidget {
   final String label;
   final Color color;
   final VoidCallback onTap;
-  const _ActionButton(
-      {required this.icon,
-      required this.label,
-      required this.color,
-      required this.onTap});
+  const _ActionButton({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {

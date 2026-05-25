@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
+import '../widgets/user_avatar.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../models/message.dart';
@@ -690,87 +691,99 @@ class _MessageBubble extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final isMe = msg.isMe;
-    final displayName = isMe
-        ? (msg.senderUsername.isNotEmpty ? msg.senderUsername : 'TÚ')
-        : (msg.senderUsername.isNotEmpty ? msg.senderUsername : msg.senderIp);
+Widget build(BuildContext context) {
+  final isMe = msg.isMe;
+  final displayName = isMe
+      ? (msg.senderUsername.isNotEmpty ? msg.senderUsername : 'TÚ')
+      : (msg.senderUsername.isNotEmpty ? msg.senderUsername : msg.senderIp);
 
-    return GestureDetector(
-      onLongPress: onLongPress,
-      child: Align(
-        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 3),
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-          constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * 0.78,
-          ),
-          decoration: BoxDecoration(
-            color: isMe
-                ? kNeon.withOpacity(0.12)
-                : Colors.white.withOpacity(0.05),
-            border: Border.all(
-              color: isMe ? kNeon.withOpacity(0.3) : Colors.white12,
+  // Buscar usuario para el avatar
+  final users = AuthService().users
+      .where((u) => u.username == msg.senderUsername)
+      .toList();
+  final user = users.isNotEmpty ? users.first : null;
+
+  return GestureDetector(
+    onLongPress: onLongPress,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          if (!isMe) ...[
+            UserAvatar(user: user, size: 28),
+            const SizedBox(width: 6),
+          ],
+          Container(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.of(context).size.width * 0.72,
             ),
-            borderRadius: BorderRadius.only(
-              topLeft: const Radius.circular(4),
-              topRight: const Radius.circular(4),
-              bottomLeft: Radius.circular(isMe ? 4 : 0),
-              bottomRight: Radius.circular(isMe ? 0 : 4),
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment:
-                isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-            children: [
-              Text(
-                displayName.toUpperCase(),
-                style: TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 9,
-                  color: isMe ? kNeon : kNeon.withOpacity(0.6),
-                  letterSpacing: 1,
-                  fontWeight: FontWeight.bold,
-                ),
+            decoration: BoxDecoration(
+              color: isMe
+                  ? kNeon.withOpacity(0.12)
+                  : Colors.white.withOpacity(0.05),
+              border: Border.all(
+                color: isMe ? kNeon.withOpacity(0.3) : Colors.white12,
               ),
-              const SizedBox(height: 4),
-              _buildContent(context),
-              const SizedBox(height: 4),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (msg.isEdited) ...[
-                    Text(
-                      'editado',
-                      style: TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 8,
+              borderRadius: BorderRadius.only(
+                topLeft: const Radius.circular(4),
+                topRight: const Radius.circular(4),
+                bottomLeft: Radius.circular(isMe ? 4 : 0),
+                bottomRight: Radius.circular(isMe ? 0 : 4),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment:
+                  isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              children: [
+                Text(
+                  displayName.toUpperCase(),
+                  style: TextStyle(
+                    fontFamily: 'monospace', fontSize: 9,
+                    color: isMe ? kNeon : kNeon.withOpacity(0.6),
+                    letterSpacing: 1, fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                _buildContent(context),
+                const SizedBox(height: 4),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (msg.isEdited) ...[
+                      Text('editado', style: TextStyle(
+                        fontFamily: 'monospace', fontSize: 8,
                         color: isMe
                             ? kNeon.withOpacity(0.35)
                             : Colors.white.withOpacity(0.2),
                         fontStyle: FontStyle.italic,
+                      )),
+                      const SizedBox(width: 4),
+                    ],
+                    Text(
+                      '${msg.timestamp.hour.toString().padLeft(2, '0')}:'
+                      '${msg.timestamp.minute.toString().padLeft(2, '0')}',
+                      style: TextStyle(
+                        fontFamily: 'monospace', fontSize: 9,
+                        color: isMe ? kNeon.withOpacity(0.4) : Colors.white24,
                       ),
                     ),
-                    const SizedBox(width: 4),
                   ],
-                  Text(
-                    '${msg.timestamp.hour.toString().padLeft(2, '0')}:'
-                    '${msg.timestamp.minute.toString().padLeft(2, '0')}',
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 9,
-                      color: isMe ? kNeon.withOpacity(0.4) : Colors.white24,
-                    ),
-                  ),
-                ],
-              ),
-            ],
+                ),
+              ],
+            ),
           ),
-        ),
+          if (isMe) ...[
+            const SizedBox(width: 6),
+            UserAvatar.me(size: 28),
+          ],
+        ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildContent(BuildContext context) {
     const textStyle = TextStyle(

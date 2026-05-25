@@ -6,6 +6,7 @@ import '../models/group.dart';
 import 'package:audioplayers/audioplayers.dart';
 import '../services/auth_service.dart';
 import '../models/app_user.dart';
+import '../widgets/user_avatar.dart';
 import '../services/auth_service.dart' show kSeedAdmin;
 
 import '../services/chat_service.dart';
@@ -70,6 +71,7 @@ class _LobbyScreenState extends State<LobbyScreen>
       setState(() {}); // Refrescar lista de usuarios
     });
   }
+
   @override
   void dispose() {
     _audioPlayer.dispose(); // ← Liberar recursos
@@ -100,31 +102,27 @@ class _LobbyScreenState extends State<LobbyScreen>
     }
   }
 
- void _openBroadcastChat() {
-  Navigator.push(
-    context,
-    MaterialPageRoute(
-      builder: (_) => const ChatScreen(
-        peerName: '◈ TODOS LOS NODOS',
+  void _openBroadcastChat() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const ChatScreen(peerName: '◈ TODOS LOS NODOS'),
       ),
-    ),
-  );
-}
+    );
+  }
 
-void _openPeerChat(String ip, String username) {
-  // Buscar userId del usuario
-  final users = _auth.users.where((u) => u.username == username).toList();
-  if (users.isEmpty) return;
-  Navigator.push(
-    context,
-    MaterialPageRoute(
-      builder: (_) => ChatScreen(
-        recipientId: users.first.id,
-        peerName: '@$username',
+  void _openPeerChat(String ip, String username) {
+    // Buscar userId del usuario
+    final users = _auth.users.where((u) => u.username == username).toList();
+    if (users.isEmpty) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            ChatScreen(recipientId: users.first.id, peerName: '@$username'),
       ),
-    ),
-  );
-}
+    );
+  }
 
   // ─── Diálogo para crear grupo ─────────────────────────────────────────────
   void _showCreateGroupDialog() {
@@ -353,21 +351,31 @@ void _openPeerChat(String ip, String username) {
   }
 
   void _openGroupChat(Group group) {
-  Navigator.push(
-    context,
-    MaterialPageRoute(
-      builder: (_) => ChatScreen(
-        groupId: group.id,
-        peerName: group.name,
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatScreen(groupId: group.id, peerName: group.name),
       ),
-    ),
-  );
-}
+    );
+  }
 
   bool _isUserOnline(String username) {
-    return _peer.knownPeers.keys.any(
-      (ip) => _peer.getDisplayNameForIp(ip) == username,
-    );
+    // Primero: buscar por mapeo directo IP→username
+    for (final ip in _peer.knownPeers.keys) {
+      final mapped = _auth.getUsernameForIp(ip);
+      if (mapped == username) return true;
+    }
+    // Segundo: buscar por displayName (hostname Tailscale)
+    for (final ip in _peer.knownPeers.keys) {
+      if (_peer.getDisplayNameForIp(ip) == username) return true;
+    }
+    // Tercero: buscar por userId mapeado
+    final users = _auth.users.where((u) => u.username == username).toList();
+    if (users.isNotEmpty) {
+      final ip = _peer.ipForUserId(users.first.id);
+      if (ip != null && _peer.knownPeers.containsKey(ip)) return true;
+    }
+    return false;
   }
 
   String? _getIpForUser(String username) {
@@ -378,18 +386,18 @@ void _openPeerChat(String ip, String username) {
   }
 
   void _openOfflineUserChat(String username) {
-  final users = _auth.users.where((u) => u.username == username).toList();
-  if (users.isEmpty) return;
-  Navigator.push(
-    context,
-    MaterialPageRoute(
-      builder: (_) => ChatScreen(
-        recipientId: users.first.id,
-        peerName: '@$username (offline)',
+    final users = _auth.users.where((u) => u.username == username).toList();
+    if (users.isEmpty) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatScreen(
+          recipientId: users.first.id,
+          peerName: '@$username (offline)',
+        ),
       ),
-    ),
-  );
-}
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -862,6 +870,10 @@ void _openPeerChat(String ip, String username) {
         ? kNeon
         : Colors.white38;
 
+    // Buscar el usuario en la lista para obtener su foto
+    final users = _auth.users.where((u) => u.username == name).toList();
+    final user = users.isNotEmpty ? users.first : null;
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: _InteractiveCard(
@@ -880,25 +892,11 @@ void _openPeerChat(String ip, String username) {
             children: [
               Stack(
                 children: [
-                  Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: jColor.withOpacity(0.15),
-                      border: Border.all(color: jColor.withOpacity(0.5)),
-                    ),
-                    child: Center(
-                      child: Text(
-                        name.isNotEmpty ? name[0].toUpperCase() : '?',
-                        style: TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: jColor,
-                        ),
-                      ),
-                    ),
+                  UserAvatar(
+                    user: user,
+                    size: 40,
+                    borderColor: jColor.withOpacity(0.5),
+                    borderWidth: 1.5,
                   ),
                   Positioned(
                     bottom: 0,
@@ -1036,7 +1034,7 @@ void _openPeerChat(String ip, String username) {
     );
   }
 
- Widget _buildPeerCard({required String ip, required String name}) {
+  Widget _buildPeerCard({required String ip, required String name}) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: _InteractiveCard(
@@ -1107,6 +1105,7 @@ void _openPeerChat(String ip, String username) {
       ),
     );
   }
+
   Widget _buildEmptyUsers() {
     return Container(
       margin: const EdgeInsets.all(20),

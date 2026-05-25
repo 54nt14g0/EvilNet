@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
+import '../widgets/user_avatar.dart';
 import '../services/peer_service.dart';
+import 'package:file_picker/file_picker.dart';
+import 'dart:io';
 import 'auth_screen.dart';
 
 const Color kNeon = Color(0xFF00FFB2);
@@ -15,7 +18,8 @@ class ProfileScreen extends StatefulWidget {
   State<ProfileScreen> createState() => _ProfileScreenState();
 }
 
-class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateMixin {
+class _ProfileScreenState extends State<ProfileScreen>
+    with TickerProviderStateMixin {
   final _auth = AuthService();
   final _peer = PeerService();
 
@@ -51,6 +55,7 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
       _correoCtrl.text = u.correo;
     }
   }
+
   Future<void> _confirmLogout() async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -125,11 +130,167 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
     super.dispose();
   }
 
-  Future<void> _save() async {
-    setState(() { _loading = true; _errorMsg = null; _successMsg = null; });
+  Future<void> _pickProfileImage() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      allowMultiple: false,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final path = result.files.first.path;
+    if (path == null) return;
 
-    if (_newPassCtrl.text.isNotEmpty && _newPassCtrl.text != _newPass2Ctrl.text) {
-      setState(() { _loading = false; _errorMsg = 'Las contraseñas nuevas no coinciden'; });
+    final err = await _auth.updateProfile(
+      nombre: _nombreCtrl.text,
+      telefono: _telefonoCtrl.text,
+      edad: _edadCtrl.text,
+      correo: _correoCtrl.text,
+      newProfileImagePath: path,
+    );
+    if (err == null) {
+      await _auth.pushUsersToPeers(_peer.knownPeers.keys.toList());
+      setState(() {});
+    }
+  }
+
+  Future<void> _removeProfileImage() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: kDarkPanel,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(3),
+          side: BorderSide(color: kPink.withOpacity(0.3)),
+        ),
+        title: const Text(
+          'QUITAR FOTO',
+          style: TextStyle(
+            fontFamily: 'monospace',
+            fontSize: 13,
+            color: kPink,
+            letterSpacing: 2,
+          ),
+        ),
+        content: const Text(
+          '¿Quitar tu foto de perfil?',
+          style: TextStyle(
+            fontFamily: 'monospace',
+            fontSize: 12,
+            color: Colors.white54,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text(
+              'CANCELAR',
+              style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              'QUITAR',
+              style: TextStyle(fontFamily: 'monospace', color: kPink),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    final err = await _auth.updateProfile(
+      nombre: _nombreCtrl.text,
+      telefono: _telefonoCtrl.text,
+      edad: _edadCtrl.text,
+      correo: _correoCtrl.text,
+      clearProfileImage: true,
+    );
+    if (err == null) {
+      await _auth.pushUsersToPeers(_peer.knownPeers.keys.toList());
+      setState(() {});
+    }
+  }
+  Widget _buildProfileImageSection() {
+  final hasPhoto = _auth.currentUser?.profileImagePath != null &&
+      File(_auth.currentUser!.profileImagePath!).existsSync();
+
+  return Row(
+    children: [
+      UserAvatar(
+        user: _auth.currentUser,
+        size: 72,
+        borderColor: kNeon.withOpacity(0.3),
+        borderWidth: 1.5,
+      ),
+      const SizedBox(width: 16),
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          GestureDetector(
+            onTap: _pickProfileImage,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                border: Border.all(color: kNeon.withOpacity(0.4)),
+                borderRadius: BorderRadius.circular(2),
+                color: kNeon.withOpacity(0.06),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.camera_alt_outlined, color: kNeon, size: 14),
+                  SizedBox(width: 6),
+                  Text('CAMBIAR FOTO', style: TextStyle(
+                    fontFamily: 'monospace', fontSize: 10,
+                    color: kNeon, letterSpacing: 1,
+                  )),
+                ],
+              ),
+            ),
+          ),
+          if (hasPhoto) ...[
+            const SizedBox(height: 8),
+            GestureDetector(
+              onTap: _removeProfileImage,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  border: Border.all(color: kPink.withOpacity(0.3)),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.delete_outline, color: kPink, size: 14),
+                    SizedBox(width: 6),
+                    Text('QUITAR FOTO', style: TextStyle(
+                      fontFamily: 'monospace', fontSize: 10,
+                      color: kPink, letterSpacing: 1,
+                    )),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    ],
+  );
+}
+
+  Future<void> _save() async {
+    setState(() {
+      _loading = true;
+      _errorMsg = null;
+      _successMsg = null;
+    });
+
+    if (_newPassCtrl.text.isNotEmpty &&
+        _newPassCtrl.text != _newPass2Ctrl.text) {
+      setState(() {
+        _loading = false;
+        _errorMsg = 'Las contraseñas nuevas no coinciden';
+      });
       return;
     }
 
@@ -142,13 +303,19 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
     );
 
     if (err != null) {
-      setState(() { _loading = false; _errorMsg = err; });
+      setState(() {
+        _loading = false;
+        _errorMsg = err;
+      });
       return;
     }
 
     // Propagar cambios a todos los peers
     await _auth.pushUsersToPeers(_peer.knownPeers.keys.toList());
-    setState(() { _loading = false; _successMsg = 'Perfil actualizado correctamente'; });
+    setState(() {
+      _loading = false;
+      _successMsg = 'Perfil actualizado correctamente';
+    });
     _newPassCtrl.clear();
     _newPass2Ctrl.clear();
   }
@@ -159,7 +326,9 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
     if (user == null) {
       return const Scaffold(
         backgroundColor: kDark,
-        body: Center(child: Text('Sin sesión', style: TextStyle(color: kNeon))),
+        body: Center(
+          child: Text('Sin sesión', style: TextStyle(color: kNeon)),
+        ),
       );
     }
 
@@ -170,8 +339,9 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
           Positioned.fill(
             child: AnimatedBuilder(
               animation: _scanCtrl,
-              builder: (_, __) =>
-                  CustomPaint(painter: _ProfileScanlinePainter(_scanCtrl.value)),
+              builder: (_, __) => CustomPaint(
+                painter: _ProfileScanlinePainter(_scanCtrl.value),
+              ),
             ),
           ),
           SafeArea(
@@ -189,10 +359,17 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
                           // Badge jerarquía (solo lectura)
                           _buildJerarquiaBadge(user.jerarquia),
                           const SizedBox(height: 24),
+                          // Foto de perfil
+                          _buildProfileImageSection(),
+                          const SizedBox(height: 24),
 
                           _buildSectionLabel('DATOS PERSONALES'),
                           const SizedBox(height: 12),
-                          _NeonField(controller: _nombreCtrl, label: 'NOMBRE COMPLETO', icon: Icons.badge_outlined),
+                          _NeonField(
+                            controller: _nombreCtrl,
+                            label: 'NOMBRE COMPLETO',
+                            icon: Icons.badge_outlined,
+                          ),
                           const SizedBox(height: 12),
                           _NeonField(
                             controller: _telefonoCtrl,
@@ -234,11 +411,14 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
                             obscure: _obscurePass,
                             suffixIcon: IconButton(
                               icon: Icon(
-                                _obscurePass ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                                _obscurePass
+                                    ? Icons.visibility_off_outlined
+                                    : Icons.visibility_outlined,
                                 color: kNeon.withOpacity(0.5),
                                 size: 18,
                               ),
-                              onPressed: () => setState(() => _obscurePass = !_obscurePass),
+                              onPressed: () =>
+                                  setState(() => _obscurePass = !_obscurePass),
                             ),
                           ),
                           const SizedBox(height: 12),
@@ -249,22 +429,34 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
                             obscure: _obscurePass2,
                             suffixIcon: IconButton(
                               icon: Icon(
-                                _obscurePass2 ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                                _obscurePass2
+                                    ? Icons.visibility_off_outlined
+                                    : Icons.visibility_outlined,
                                 color: kNeon.withOpacity(0.5),
                                 size: 18,
                               ),
-                              onPressed: () => setState(() => _obscurePass2 = !_obscurePass2),
+                              onPressed: () => setState(
+                                () => _obscurePass2 = !_obscurePass2,
+                              ),
                             ),
                           ),
 
                           // Mensajes
                           if (_errorMsg != null) ...[
                             const SizedBox(height: 16),
-                            _buildMessage(_errorMsg!, kPink, Icons.error_outline),
+                            _buildMessage(
+                              _errorMsg!,
+                              kPink,
+                              Icons.error_outline,
+                            ),
                           ],
                           if (_successMsg != null) ...[
                             const SizedBox(height: 16),
-                            _buildMessage(_successMsg!, kNeon, Icons.check_circle_outline),
+                            _buildMessage(
+                              _successMsg!,
+                              kNeon,
+                              Icons.check_circle_outline,
+                            ),
                           ],
 
                           const SizedBox(height: 28),
@@ -275,10 +467,16 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
                                     child: SizedBox(
                                       width: 24,
                                       height: 24,
-                                      child: CircularProgressIndicator(color: kNeon, strokeWidth: 2),
+                                      child: CircularProgressIndicator(
+                                        color: kNeon,
+                                        strokeWidth: 2,
+                                      ),
                                     ),
                                   )
-                                : _NeonButton(label: 'GUARDAR CAMBIOS', onTap: _save),
+                                : _NeonButton(
+                                    label: 'GUARDAR CAMBIOS',
+                                    onTap: _save,
+                                  ),
                           ),
                           const SizedBox(height: 40),
                         ],
@@ -311,10 +509,46 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
                 border: Border.all(color: kNeon.withOpacity(0.3)),
                 borderRadius: BorderRadius.circular(2),
               ),
-              child: const Icon(Icons.arrow_back_ios_new, color: kNeon, size: 14),
+              child: const Icon(
+                Icons.arrow_back_ios_new,
+                color: kNeon,
+                size: 14,
+              ),
             ),
           ),
           const SizedBox(width: 16),
+          // Avatar con botón de edición
+          Stack(
+            children: [
+              UserAvatar(
+                user: _auth.currentUser,
+                size: 52,
+                borderColor: kNeon.withOpacity(0.4),
+                borderWidth: 1.5,
+              ),
+              Positioned(
+                bottom: 0,
+                right: 0,
+                child: GestureDetector(
+                  onTap: _pickProfileImage,
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: kDark,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: kNeon.withOpacity(0.5)),
+                    ),
+                    child: const Icon(
+                      Icons.camera_alt_outlined,
+                      color: kNeon,
+                      size: 10,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -378,10 +612,10 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
     final color = j >= 9
         ? kPink
         : j >= 7
-            ? kPurple
-            : j >= 4
-                ? kNeon
-                : Colors.white38;
+        ? kPurple
+        : j >= 4
+        ? kNeon
+        : Colors.white38;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
@@ -465,7 +699,11 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
           Expanded(
             child: Text(
               msg,
-              style: TextStyle(fontFamily: 'monospace', fontSize: 11, color: color),
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 11,
+                color: color,
+              ),
             ),
           ),
         ],
@@ -499,10 +737,20 @@ class _NeonField extends StatelessWidget {
       controller: controller,
       obscureText: obscure,
       keyboardType: keyboardType,
-      style: const TextStyle(fontFamily: 'monospace', fontSize: 13, color: Colors.white, letterSpacing: 1),
+      style: const TextStyle(
+        fontFamily: 'monospace',
+        fontSize: 13,
+        color: Colors.white,
+        letterSpacing: 1,
+      ),
       decoration: InputDecoration(
         labelText: label,
-        labelStyle: TextStyle(fontFamily: 'monospace', fontSize: 11, letterSpacing: 2, color: kNeon.withOpacity(0.5)),
+        labelStyle: TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 11,
+          letterSpacing: 2,
+          color: kNeon.withOpacity(0.5),
+        ),
         prefixIcon: Icon(icon, color: kNeon.withOpacity(0.4), size: 18),
         suffixIcon: suffixIcon,
         enabledBorder: OutlineInputBorder(
@@ -515,7 +763,10 @@ class _NeonField extends StatelessWidget {
         ),
         filled: true,
         fillColor: Colors.black.withOpacity(0.3),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 14,
+        ),
       ),
       cursorColor: kNeon,
     );
@@ -565,6 +816,7 @@ class _ProfileScanlinePainter extends CustomPainter {
       canvas.drawRect(Rect.fromLTWH(0, y, size.width, 2), p);
     }
   }
+
   @override
   bool shouldRepaint(_ProfileScanlinePainter old) => false;
 }

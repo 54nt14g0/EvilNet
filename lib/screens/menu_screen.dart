@@ -13,6 +13,8 @@ import 'control_panel_screen.dart'; // 🔐 MERGE: Nuevas vistas
 import 'material_screen.dart';
 import '../services/material_service.dart';
 import '../services/study_room_service.dart';
+import '../services/nook_service.dart';
+import 'nook_worlds_screen.dart';
 
 import '../services/universe_service.dart';
 import 'universe_list_screen.dart';
@@ -197,6 +199,7 @@ class _MenuScreenState extends State<MenuScreen>
         // ← AGREGAR: cuando llega un peer nuevo, sincronizar StudyRoom
         final ip = (e.data as Map)['ip'] as String?;
         if (ip != null) StudyRoomService().syncWithNewPeer(ip);
+        if (ip != null) NookService().syncWithNewPeer(ip);
       }
     });
 
@@ -211,6 +214,10 @@ class _MenuScreenState extends State<MenuScreen>
       await UniverseService().startLocal();
       print('✅ [MenuScreen] UniverseService started');
       UniverseService().startSync(peerIps);
+
+      await NookService().startLocal();
+      print('✅ [MenuScreen] NookService started');
+      NookService().startSync(peerIps);
     });
   }
 
@@ -407,7 +414,7 @@ class _MenuScreenState extends State<MenuScreen>
         _navigateTo(const LobbyScreen());
         break;
       case 'Recovecos':
-        _showComingSoon('Recovecos');
+        _navigateTo(const NookWorldsScreen());
         break;
       case 'Material':
         _navigateTo(const MaterialScreen());

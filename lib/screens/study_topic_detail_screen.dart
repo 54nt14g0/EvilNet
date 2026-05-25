@@ -8,10 +8,10 @@ import '../models/study_comment.dart';
 import '../services/study_room_service.dart';
 import '../services/auth_service.dart';
 import '../services/peer_service.dart';
+import '../widgets/user_avatar.dart';
 import '../widgets/quill_image_embed.dart';
 import 'dart:convert';
 import 'study_room_screen.dart'
-
     show
         kSRed,
         kSRedGlow,
@@ -327,10 +327,9 @@ class _StudyTopicDetailScreenState extends State<StudyTopicDetailScreen>
           ),
         ],
       ),
-      floatingActionButton:
-          (_showCommentForm || _editingCommentId != null)
-              ? null
-              : _buildCommentFab(),
+      floatingActionButton: (_showCommentForm || _editingCommentId != null)
+          ? null
+          : _buildCommentFab(),
     );
   }
 
@@ -431,129 +430,134 @@ class _StudyTopicDetailScreenState extends State<StudyTopicDetailScreen>
   }
 
   Widget _buildMeta() {
-  final isAdmin = _myHierarchy >= 9;
-  final hasRestrictions = widget.topic.requiredTopicIds.isNotEmpty ||
-      widget.topic.minHierarchy > 1;
+    final isAdmin = _myHierarchy >= 9;
+    final hasRestrictions =
+        widget.topic.requiredTopicIds.isNotEmpty ||
+        widget.topic.minHierarchy > 1;
 
-  return Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      // Banner visible solo para admins cuando el tema tiene restricciones
-      if (isAdmin && hasRestrictions) ...[
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          margin: const EdgeInsets.only(bottom: 12),
-          decoration: BoxDecoration(
-            color: Colors.orange.withOpacity(0.08),
-            border: Border.all(color: Colors.orange.withOpacity(0.4)),
-            borderRadius: BorderRadius.circular(3),
-          ),
-          child: Row(
-            children: [
-              const Icon(
-                Icons.admin_panel_settings_outlined,
-                color: Colors.orange,
-                size: 13,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  _buildRestrictionSummary(),
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 10,
-                    color: Colors.orange,
-                    height: 1.5,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Banner visible solo para admins cuando el tema tiene restricciones
+        if (isAdmin && hasRestrictions) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            margin: const EdgeInsets.only(bottom: 12),
+            decoration: BoxDecoration(
+              color: Colors.orange.withOpacity(0.08),
+              border: Border.all(color: Colors.orange.withOpacity(0.4)),
+              borderRadius: BorderRadius.circular(3),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.admin_panel_settings_outlined,
+                  color: Colors.orange,
+                  size: 13,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _buildRestrictionSummary(),
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 10,
+                      color: Colors.orange,
+                      height: 1.5,
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
+        ],
+        // Badges normales
+        Wrap(
+          spacing: 8,
+          runSpacing: 6,
+          children: [
+            _MetaBadge(
+              icon: Icons.shield_outlined,
+              label: 'J${widget.topic.minHierarchy}+',
+              color: kSRed,
+            ),
+            if (widget.topic.isSequential)
+              _MetaBadge(
+                icon: Icons.link,
+                label: 'SECUENCIAL',
+                color: Colors.orange,
+              ),
+            if (widget.topic.requiresApproval)
+              _MetaBadge(
+                icon: Icons.verified_outlined,
+                label: 'APROBACIÓN',
+                color: Colors.purple.shade300,
+              ),
+            if (widget.topic.requiredTopicIds.isNotEmpty)
+              _MetaBadge(
+                icon: Icons.lock_clock_outlined,
+                label: '${widget.topic.requiredTopicIds.length} REQUISITO(S)',
+                color: kSTextDim,
+              ),
+            if (widget.topic.unlocksTopicIds.isNotEmpty)
+              _MetaBadge(
+                icon: Icons.lock_open_outlined,
+                label: 'DESBLOQUEA ${widget.topic.unlocksTopicIds.length}',
+                color: Colors.green.shade700,
+              ),
+          ],
         ),
       ],
-      // Badges normales
-      Wrap(
-        spacing: 8,
-        runSpacing: 6,
-        children: [
-          _MetaBadge(
-            icon: Icons.shield_outlined,
-            label: 'J${widget.topic.minHierarchy}+',
-            color: kSRed,
-          ),
-          if (widget.topic.isSequential)
-            _MetaBadge(
-              icon: Icons.link,
-              label: 'SECUENCIAL',
-              color: Colors.orange,
-            ),
-          if (widget.topic.requiresApproval)
-            _MetaBadge(
-              icon: Icons.verified_outlined,
-              label: 'APROBACIÓN',
-              color: Colors.purple.shade300,
-            ),
-          if (widget.topic.requiredTopicIds.isNotEmpty)
-            _MetaBadge(
-              icon: Icons.lock_clock_outlined,
-              label: '${widget.topic.requiredTopicIds.length} REQUISITO(S)',
-              color: kSTextDim,
-            ),
-          if (widget.topic.unlocksTopicIds.isNotEmpty)
-            _MetaBadge(
-              icon: Icons.lock_open_outlined,
-              label: 'DESBLOQUEA ${widget.topic.unlocksTopicIds.length}',
-              color: Colors.green.shade700,
-            ),
-        ],
-      ),
-    ],
-  );
-}
-
-String _buildRestrictionSummary() {
-  final parts = <String>[];
-
-  if (widget.topic.minHierarchy > 1) {
-    parts.add('Visible solo para J${widget.topic.minHierarchy}+');
+    );
   }
 
-  if (widget.topic.requiredTopicIds.isNotEmpty) {
-    final names = widget.topic.requiredTopicIds
-        .map((id) => _service.topics
-            .where((t) => t.id == id)
-            .map((t) => '"${t.title}"')
-            .firstOrNull ?? '"$id"')
-        .join(', ');
-    parts.add('Bloqueado hasta comentar: $names');
+  String _buildRestrictionSummary() {
+    final parts = <String>[];
+
+    if (widget.topic.minHierarchy > 1) {
+      parts.add('Visible solo para J${widget.topic.minHierarchy}+');
+    }
+
+    if (widget.topic.requiredTopicIds.isNotEmpty) {
+      final names = widget.topic.requiredTopicIds
+          .map(
+            (id) =>
+                _service.topics
+                    .where((t) => t.id == id)
+                    .map((t) => '"${t.title}"')
+                    .firstOrNull ??
+                '"$id"',
+          )
+          .join(', ');
+      parts.add('Bloqueado hasta comentar: $names');
+    }
+
+    return '⚠ SOLO VISIBLE PARA TI  ·  ${parts.join('  ·  ')}';
   }
 
-  return '⚠ SOLO VISIBLE PARA TI  ·  ${parts.join('  ·  ')}';
-}
-
- Widget _buildContent() {
-  return Container(
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
-      color: kSPanel,
-      border: Border.all(color: kSBorder),
-      borderRadius: BorderRadius.circular(3),
-    ),
-    child: quill.QuillEditor(
-      controller: _quillCtrl,
-      focusNode: FocusNode(),
-      scrollController: ScrollController(),
-      config: quill.QuillEditorConfig(
-        showCursor: false,
-        autoFocus: false,
-        expands: false,
-        padding: EdgeInsets.zero,
-        embedBuilders: [LocalImageEmbedBuilder()],
+  Widget _buildContent() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: kSPanel,
+        border: Border.all(color: kSBorder),
+        borderRadius: BorderRadius.circular(3),
       ),
-    ),
-  );
-}
+      child: quill.QuillEditor(
+        controller: _quillCtrl,
+        focusNode: FocusNode(),
+        scrollController: ScrollController(),
+        config: quill.QuillEditorConfig(
+          showCursor: false,
+          autoFocus: false,
+          expands: false,
+          padding: EdgeInsets.zero,
+          embedBuilders: [LocalImageEmbedBuilder()],
+        ),
+      ),
+    );
+  }
 
   Widget _buildCommentsSection() {
     final visibleComments = _canApprove
@@ -664,9 +668,7 @@ String _buildRestrictionSummary() {
               canDelete: c.userId == _myUserId || _canApprove,
               isBeingEdited: _editingCommentId == c.id,
               onApprove: _canApprove ? () => _approveComment(c) : null,
-              onEdit: c.userId == _myUserId
-                  ? () => _startEditComment(c)
-                  : null,
+              onEdit: c.userId == _myUserId ? () => _startEditComment(c) : null,
               onDelete: (c.userId == _myUserId || _canApprove)
                   ? () => _confirmDeleteComment(c)
                   : null,
@@ -679,25 +681,25 @@ String _buildRestrictionSummary() {
   }
 
   Widget? _buildCommentFab() {
-  // Solo ocultar si tiene comentario pendiente de aprobación
-  // (no tiene sentido enviar otro mientras espera)
-  if (_hasPending) return null;
+    // Solo ocultar si tiene comentario pendiente de aprobación
+    // (no tiene sentido enviar otro mientras espera)
+    if (_hasPending) return null;
 
-  return FloatingActionButton.extended(
-    onPressed: () => setState(() => _showCommentForm = true),
-    backgroundColor: kSRedDim,
-    label: const Text(
-      'COMENTAR',
-      style: TextStyle(
-        fontFamily: 'monospace',
-        fontSize: 11,
-        color: kSRedGlow,
-        letterSpacing: 2,
+    return FloatingActionButton.extended(
+      onPressed: () => setState(() => _showCommentForm = true),
+      backgroundColor: kSRedDim,
+      label: const Text(
+        'COMENTAR',
+        style: TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 11,
+          color: kSRedGlow,
+          letterSpacing: 2,
+        ),
       ),
-    ),
-    icon: const Icon(Icons.edit_outlined, color: kSRedGlow, size: 16),
-  );
-}
+      icon: const Icon(Icons.edit_outlined, color: kSRedGlow, size: 16),
+    );
+  }
 
   Widget _buildCommentForm() {
     return Container(
@@ -876,9 +878,7 @@ String _buildRestrictionSummary() {
       ),
       decoration: BoxDecoration(
         color: kSPanel,
-        border: Border(
-          top: BorderSide(color: Colors.orange.withOpacity(0.5)),
-        ),
+        border: Border(top: BorderSide(color: Colors.orange.withOpacity(0.5))),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -1071,18 +1071,18 @@ class _CommentCard extends StatelessWidget {
         color: isBeingEdited
             ? Colors.orange.withOpacity(0.05)
             : isPending
-                ? Colors.orange.withOpacity(0.04)
-                : isMe
-                    ? kSRedDim.withOpacity(0.3)
-                    : kSPanel,
+            ? Colors.orange.withOpacity(0.04)
+            : isMe
+            ? kSRedDim.withOpacity(0.3)
+            : kSPanel,
         border: Border.all(
           color: isBeingEdited
               ? Colors.orange.withOpacity(0.5)
               : isPending
-                  ? Colors.orange.withOpacity(0.25)
-                  : isMe
-                      ? kSRed.withOpacity(0.25)
-                      : kSBorder,
+              ? Colors.orange.withOpacity(0.25)
+              : isMe
+              ? kSRed.withOpacity(0.25)
+              : kSBorder,
         ),
         borderRadius: BorderRadius.circular(2),
       ),
@@ -1090,8 +1090,20 @@ class _CommentCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Cabecera
+          // En la cabecera del comentario, reemplaza el Row de la cabecera:
           Row(
             children: [
+              // Avatar pequeño
+              Builder(
+                builder: (_) {
+                  final users = AuthService().users
+                      .where((u) => u.username == comment.username)
+                      .toList();
+                  final user = users.isNotEmpty ? users.first : null;
+                  return UserAvatar(user: user, size: 22);
+                },
+              ),
+              const SizedBox(width: 8),
               Text(
                 '@${comment.username}',
                 style: TextStyle(
@@ -1111,7 +1123,6 @@ class _CommentCard extends StatelessWidget {
                   color: kSTextDim,
                 ),
               ),
-              // FIX 2: badge "editado"
               if (comment.isEdited) ...[
                 const SizedBox(width: 6),
                 const Text(
@@ -1125,7 +1136,6 @@ class _CommentCard extends StatelessWidget {
                 ),
               ],
               const Spacer(),
-              // FIX 2: botones editar/eliminar para el autor
               if (canEdit || canDelete)
                 Row(
                   mainAxisSize: MainAxisSize.min,
@@ -1269,11 +1279,7 @@ class _ActionIconBtn extends StatelessWidget {
   final Color color;
   final VoidCallback? onTap;
 
-  const _ActionIconBtn({
-    required this.icon,
-    required this.color,
-    this.onTap,
-  });
+  const _ActionIconBtn({required this.icon, required this.color, this.onTap});
 
   @override
   Widget build(BuildContext context) {

@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../models/app_user.dart';
 import '../services/peer_service.dart';
+
 import 'chat_service.dart';
 
 const _uuid = Uuid();
@@ -175,7 +176,6 @@ class AuthService {
       final found = _users.where((u) => u.id == savedId);
       if (found.isNotEmpty) {
         _currentUser = found.first;
-        
 
         PeerService().myId = _currentUser!.id;
         await prefs.setString('myId', _currentUser!.id);
@@ -199,7 +199,7 @@ class AuthService {
     if (matches.isEmpty) return 'Usuario o contraseña incorrectos';
 
     _currentUser = matches.first;
-  
+
     registerMyIp(PeerService().myIp);
 
     PeerService().myId = _currentUser!.id;
@@ -251,7 +251,6 @@ class AuthService {
     _version++;
     await _saveLocalUsers();
     _currentUser = newUser;
-    
 
     PeerService().myId = newUser.id;
 
@@ -281,11 +280,27 @@ class AuthService {
     required String edad,
     required String correo,
     String? newPassword,
+    String? newProfileImagePath,
+    bool clearProfileImage = false,
   }) async {
     if (_currentUser == null) return 'No hay sesión activa';
 
     final idx = _users.indexWhere((u) => u.id == _currentUser!.id);
     if (idx == -1) return 'Usuario no encontrado';
+
+    // Copiar imagen a documentos con nombre estable si se provee una nueva
+    String? finalImagePath;
+    if (!clearProfileImage && newProfileImagePath != null) {
+      final file = File(newProfileImagePath);
+      if (await file.exists()) {
+        final dir = await getApplicationDocumentsDirectory();
+        final ext = newProfileImagePath.split('.').last;
+        final fileName = 'profile_${_currentUser!.id}.$ext';
+        final destPath = '${dir.path}/$fileName';
+        await file.copy(destPath);
+        finalImagePath = destPath;
+      }
+    }
 
     final updated = _users[idx].copyWith(
       nombre: nombre.trim(),
@@ -295,6 +310,10 @@ class AuthService {
       passwordMd5: newPassword != null && newPassword.isNotEmpty
           ? AppUser.hashPassword(newPassword)
           : null,
+      profileImagePath: clearProfileImage
+          ? null
+          : (finalImagePath ?? _users[idx].profileImagePath),
+      clearProfileImage: clearProfileImage,
       updatedAt: DateTime.now(),
     );
 
@@ -307,12 +326,12 @@ class AuthService {
   }
 
   // En AuthService.logout(), AGREGAR al final:
- Future<void> logout() async {
-  _currentUser = null;
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.remove(kLoggedUserKey);
-  _authController.add('logged_out');
-}
+  Future<void> logout() async {
+    _currentUser = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(kLoggedUserKey);
+    _authController.add('logged_out');
+  }
 
   // ─── Cambiar jerarquía (solo J10) ─────────────────────────────────────────
 
@@ -442,10 +461,29 @@ class AuthService {
       // ── Petición de lista de usuarios ─────────────────────────────────────
       // FIX: primero enviamos la respuesta, LUEGO cerramos el socket.
       if (type == 'request_users') {
+        // Incluir fotos embebidas en la respuesta
+        final usersJson = <Map<String, dynamic>>[];
+        for (final u in _users) {
+          final uj = u.toJson();
+          if (u.profileImagePath != null) {
+            final f = File(u.profileImagePath!);
+            if (await f.exists()) {
+              final bytes = await f.readAsBytes();
+              final fileName = u.profileImagePath!
+                  .split('/')
+                  .last
+                  .split('\\')
+                  .last;
+              uj['profileImageBase64'] = base64Encode(bytes);
+              uj['profileImageFileName'] = fileName;
+            }
+          }
+          usersJson.add(uj);
+        }
         final response = jsonEncode({
           'type': 'users_response',
           'version': _version,
-          'users': _users.map((u) => u.toJson()).toList(),
+          'users': usersJson,
         });
         socket.add(utf8.encode(response));
         await socket.flush();
@@ -530,24 +568,51 @@ class AuthService {
 
   Future<void> _mergeRemoteUsers(Map<String, dynamic> data) async {
     final remoteVersion = data['version'] as int? ?? 0;
-    final remoteList = (data['users'] as List? ?? [])
-        .map((e) => AppUser.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final remoteList = data['users'] as List? ?? [];
 
     bool changed = false;
-
     final merged = <String, AppUser>{};
     for (final u in _users) {
       merged[u.id] = u;
     }
-    for (final u in remoteList) {
-      if (merged.containsKey(u.id)) {
-        if (u.updatedAt.isAfter(merged[u.id]!.updatedAt)) {
-          merged[u.id] = u;
+
+    for (final rawUser in remoteList) {
+      final uMap = rawUser as Map<String, dynamic>;
+      final remote = AppUser.fromJson(uMap);
+
+      // Guardar imagen de perfil si viene embebida
+      final imageBase64 = uMap['profileImageBase64'] as String?;
+      final imageFileName = uMap['profileImageFileName'] as String?;
+      String? validImagePath = remote.profileImagePath;
+
+      if (imageBase64 != null && imageFileName != null) {
+        try {
+          final dir = await getApplicationDocumentsDirectory();
+          final destPath = '${dir.path}/$imageFileName';
+          await File(destPath).writeAsBytes(base64Decode(imageBase64));
+          validImagePath = destPath;
+        } catch (e) {
+          print('[Auth] Error saving profile image: $e');
+        }
+      } else if (validImagePath != null && !File(validImagePath).existsSync()) {
+        // Intentar ruta local
+        final dir = await getApplicationDocumentsDirectory();
+        final fileName = validImagePath.split('/').last.split('\\').last;
+        final localPath = '${dir.path}/$fileName';
+        validImagePath = File(localPath).existsSync() ? localPath : null;
+      }
+
+      final remoteWithImage = validImagePath != remote.profileImagePath
+          ? remote.copyWith(profileImagePath: validImagePath)
+          : remote;
+
+      if (merged.containsKey(remote.id)) {
+        if (remote.updatedAt.isAfter(merged[remote.id]!.updatedAt)) {
+          merged[remote.id] = remoteWithImage;
           changed = true;
         }
       } else {
-        merged[u.id] = u;
+        merged[remote.id] = remoteWithImage;
         changed = true;
       }
     }
@@ -575,37 +640,66 @@ class AuthService {
   /// Empuja los usuarios a los peers directos y les pide que los reenvíen
   /// a sus propios peers (un salto extra para cubrir peers no conectados).
   Future<void> _pushAndPropagate(List<String> peerIps) async {
-    // Paso 1: empujar a mis peers directos
-    await pushUsersToPeers(peerIps);
+  await pushUsersToPeers(peerIps);
 
-    // Paso 2: pedirles que lo reenvíen a sus peers
-    final payload = jsonEncode({
-      'type': 'users_propagate',
-      'version': _version,
-      'users': _users.map((u) => u.toJson()).toList(),
-      'originIp': PeerService().myIp,
-    });
-
-    for (final ip in peerIps) {
-      try {
-        final socket = await Socket.connect(
-          ip,
-          kAuthPort,
-          timeout: const Duration(seconds: 5),
-        );
-        socket.add(utf8.encode(payload));
-        await socket.flush();
-        await socket.close();
-        await socket.done;
-      } catch (_) {}
+  // Construir payload con fotos para propagación
+  final usersJson = <Map<String, dynamic>>[];
+  for (final u in _users) {
+    final uj = u.toJson();
+    if (u.profileImagePath != null) {
+      final f = File(u.profileImagePath!);
+      if (await f.exists()) {
+        final bytes = await f.readAsBytes();
+        final fileName = u.profileImagePath!.split('/').last.split('\\').last;
+        uj['profileImageBase64'] = base64Encode(bytes);
+        uj['profileImageFileName'] = fileName;
+      }
     }
+    usersJson.add(uj);
   }
 
+  final payload = jsonEncode({
+    'type': 'users_propagate',
+    'version': _version,
+    'users': usersJson,
+    'originIp': PeerService().myIp,
+  });
+
+  for (final ip in peerIps) {
+    try {
+      final socket = await Socket.connect(
+        ip, kAuthPort,
+        timeout: const Duration(seconds: 5),
+      );
+      socket.add(utf8.encode(payload));
+      await socket.flush();
+      await socket.close();
+      await socket.done;
+    } catch (_) {}
+  }
+}
+
   Future<void> pushUsersToPeers(List<String> peerIps) async {
+    // Construir payload con fotos embebidas
+    final usersJson = <Map<String, dynamic>>[];
+    for (final u in _users) {
+      final uj = u.toJson();
+      if (u.profileImagePath != null) {
+        final f = File(u.profileImagePath!);
+        if (await f.exists()) {
+          final bytes = await f.readAsBytes();
+          final fileName = u.profileImagePath!.split('/').last.split('\\').last;
+          uj['profileImageBase64'] = base64Encode(bytes);
+          uj['profileImageFileName'] = fileName;
+        }
+      }
+      usersJson.add(uj);
+    }
+
     final payload = jsonEncode({
       'type': 'users_push',
       'version': _version,
-      'users': _users.map((u) => u.toJson()).toList(),
+      'users': usersJson,
     });
 
     for (final ip in peerIps) {

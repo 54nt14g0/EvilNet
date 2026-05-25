@@ -159,10 +159,12 @@ class ChatService {
     String? recipientId,
   }) async {
     await _editLocally(messageId, newContent, isBroadcast);
-    _controller.add(ChatEvent('message_edited', {
-      'messageId': messageId,
-      'newContent': newContent,
-    }));
+    _controller.add(
+      ChatEvent('message_edited', {
+        'messageId': messageId,
+        'newContent': newContent,
+      }),
+    );
     final packet = {
       'type': 'message_edit',
       'messageId': messageId,
@@ -303,14 +305,20 @@ class ChatService {
       await completer.future;
 
       final all = Uint8List.fromList(chunks);
-      if (all.length < 4) { await socket.close(); return; }
+      if (all.length < 4) {
+        await socket.close();
+        return;
+      }
 
       final headerLen = ByteData.view(all.buffer, 0, 4).getInt32(0, Endian.big);
-      if (all.length < 4 + headerLen) { await socket.close(); return; }
+      if (all.length < 4 + headerLen) {
+        await socket.close();
+        return;
+      }
 
-      final header = jsonDecode(
-        utf8.decode(all.sublist(4, 4 + headerLen)),
-      ) as Map<String, dynamic>;
+      final header =
+          jsonDecode(utf8.decode(all.sublist(4, 4 + headerLen)))
+              as Map<String, dynamic>;
 
       await socket.close();
 
@@ -323,13 +331,50 @@ class ChatService {
         case 'message_delete':
           await _handleDeletePacket(header);
           break;
+        case 'request_broadcast_history':
+          await _handleBroadcastHistoryRequest(socket, all, headerLen);
+          return;
         default:
           await _handleIncomingMessage(header, all, headerLen);
       }
     } catch (e) {
       print('[ChatService] Connection error: $e');
-      try { await socket.close(); } catch (_) {}
+      try {
+        await socket.close();
+      } catch (_) {}
     }
+  }
+
+  Future<void> _handleBroadcastHistoryRequest(
+    Socket socket,
+    Uint8List all,
+    int headerLen,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final list = prefs.getStringList(kBroadcastKey) ?? [];
+
+    // Parsear para enviar como lista limpia
+    final messages = list
+        .map((s) {
+          try {
+            return jsonDecode(s) as Map<String, dynamic>;
+          } catch (_) {
+            return null;
+          }
+        })
+        .whereType<Map<String, dynamic>>()
+        .toList();
+
+    final responseBody = jsonEncode({
+      'type': 'broadcast_history_response',
+      'messages': messages,
+    });
+    final respBytes = utf8.encode(responseBody);
+    final lenBytes = ByteData(4)..setInt32(0, respBytes.length, Endian.big);
+    socket.add(lenBytes.buffer.asUint8List());
+    socket.add(respBytes);
+    await socket.flush();
+    await socket.close();
   }
 
   Future<void> _handleIncomingMessage(
@@ -347,9 +392,7 @@ class ChatService {
     if (header['senderId'] == myId) return;
 
     final isMe = false;
-    final type = MessageType.values.byName(
-      header['type'] as String? ?? 'text',
-    );
+    final type = MessageType.values.byName(header['type'] as String? ?? 'text');
 
     String content = header['content'] as String? ?? '';
 
@@ -388,10 +431,12 @@ class ChatService {
     await _editLocally(messageId, newContent, true);
     await _editLocally(messageId, newContent, false);
 
-    _controller.add(ChatEvent('message_edited', {
-      'messageId': messageId,
-      'newContent': newContent,
-    }));
+    _controller.add(
+      ChatEvent('message_edited', {
+        'messageId': messageId,
+        'newContent': newContent,
+      }),
+    );
   }
 
   Future<void> _handleDeletePacket(Map<String, dynamic> header) async {
@@ -584,6 +629,90 @@ class ChatService {
       return AuthService().users.firstWhere((u) => u.id == id);
     } catch (_) {
       return null;
+    }
+  }
+
+  // ─── Sync de broadcast histórico con peers ────────────────────────────────
+
+  /// Pide el historial broadcast a un peer y hace merge local.
+  Future<void> syncBroadcastWithPeer(String ip) async {
+    try {
+      final socket = await Socket.connect(
+        ip,
+        kChatPort,
+        timeout: const Duration(seconds: 8),
+      );
+      final headerBytes = utf8.encode(
+        jsonEncode({'type': 'request_broadcast_history', 'senderId': _myId}),
+      );
+      final lenBytes = ByteData(4)..setInt32(0, headerBytes.length, Endian.big);
+      socket.add(lenBytes.buffer.asUint8List());
+      socket.add(headerBytes);
+      await socket.flush();
+      await socket.close();
+
+      final chunks = <int>[];
+      await for (final chunk in socket) {
+        chunks.addAll(chunk);
+      }
+      if (chunks.isEmpty) return;
+
+      final all = Uint8List.fromList(chunks);
+      if (all.length < 4) return;
+      final respHeaderLen = ByteData.view(
+        all.buffer,
+        0,
+        4,
+      ).getInt32(0, Endian.big);
+      if (all.length < 4 + respHeaderLen) return;
+
+      final response =
+          jsonDecode(utf8.decode(all.sublist(4, 4 + respHeaderLen)))
+              as Map<String, dynamic>;
+
+      if (response['type'] != 'broadcast_history_response') return;
+
+      final messages = response['messages'] as List? ?? [];
+      final myId = _myId;
+      final prefs = await SharedPreferences.getInstance();
+      final existing = prefs.getStringList(kBroadcastKey) ?? [];
+
+      // Obtener IDs existentes para no duplicar
+      final existingIds = existing
+          .map((s) {
+            try {
+              return (jsonDecode(s) as Map)['id'] as String?;
+            } catch (_) {
+              return null;
+            }
+          })
+          .whereType<String>()
+          .toSet();
+
+      bool changed = false;
+      for (final raw in messages) {
+        try {
+          final j = raw as Map<String, dynamic>;
+          final id = j['id'] as String?;
+          if (id == null || existingIds.contains(id)) continue;
+          // Marcar isMe correctamente
+          j['isMe'] = false; // se recalcula al leer
+          existing.add(jsonEncode(j));
+          existingIds.add(id);
+          changed = true;
+
+          // Emitir el mensaje para que la UI lo muestre si está abierta
+          final isMe = j['senderId'] == myId;
+          final msg = Message.fromJson(j, isMe);
+          _controller.add(ChatEvent('message', msg));
+        } catch (_) {}
+      }
+
+      if (changed) {
+        await prefs.setStringList(kBroadcastKey, existing);
+      }
+    } catch (e) {
+      print('[ChatService] syncBroadcastWithPeer($ip) failed: $e');
     }
   }
 
