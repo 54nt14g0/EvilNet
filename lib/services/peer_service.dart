@@ -46,6 +46,8 @@ class PeerService {
   final Map<String, DateTime> knownPeers = {};
   final Map<String, String> peerNames = {};
   final Map<String, String> _ipToUsername = {};
+  // Rastrea la última sincronización exitosa con cada peer
+  final Map<String, DateTime> _lastSync = {};
 
   final _controller = StreamController<PeerEvent>.broadcast();
   Stream<PeerEvent> get events => _controller.stream;
@@ -77,6 +79,7 @@ class PeerService {
     myName = prefs.getString('myName') ?? 'Usuario';
     await prefs.setString('myId', myId);
     await _loadUserData();
+    await _loadKnownPeers(); // ← NUEVO
 
     myIp = await _getTailscaleIp();
     print('🔌 [PeerService] Starting server on port $kPort...');
@@ -90,27 +93,120 @@ class PeerService {
       rethrow;
     }
 
-    // DESPUÉS:
-    _discoverPeers();
-    Timer.periodic(const Duration(seconds: 10), (_) => _discoverPeers());
+    // Intentar conectar a peers conocidos inmediatamente (funciona en Android)
+    _connectToKnownPeers();
 
-    // Pull activo: al arrancar, pedir el video a todos los peers conocidos.
-    // Cubre el caso donde este peer estaba offline cuando el admin subió el video.
-    Future.delayed(const Duration(seconds: 5), () async {
-      final myVideoPath = await getBackgroundVideoPath();
-      // Solo hacer pull si YO no tengo video — si ya lo tengo, no necesito pedirlo
-      if (myVideoPath != null) return;
-      for (final ip in List.from(knownPeers.keys)) {
-        try {
-          await _syncBackgroundVideoWithPeer(ip);
-          // Si ya obtuve el video, no necesito seguir
-          final path = await getBackgroundVideoPath();
-          if (path != null) return;
-        } catch (_) {}
-      }
-    });
+    // Descubrimiento via API Tailscale (funciona en Windows)
+    _discoverPeers();
+    Timer.periodic(const Duration(seconds: 30), (_) => _discoverPeers());
+    // Re-intentar peers conocidos periódicamente
+    Timer.periodic(const Duration(seconds: 20), (_) => _connectToKnownPeers());
   }
 
+  // ─── Persistencia de peers conocidos ─────────────────────────────────────────
+
+  Future<void> _loadKnownPeers() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getStringList('known_peer_ips') ?? [];
+    for (final ip in saved) {
+      if (ip != myIp && !knownPeers.containsKey(ip)) {
+        knownPeers[ip] = DateTime.now();
+      }
+    }
+    print('[PeerService] Loaded ${saved.length} known peers from storage');
+  }
+
+  Future<void> _saveKnownPeers() async {
+    final prefs = await SharedPreferences.getInstance();
+    final ips = knownPeers.keys.where((ip) => ip != myIp).toList();
+    await prefs.setStringList('known_peer_ips', ips);
+  }
+
+  Future<void> _connectToKnownPeers() async {
+    final ips = List<String>.from(knownPeers.keys);
+    for (final ip in ips) {
+      if (ip == myIp) continue;
+      try {
+        final socket = await Socket.connect(
+          ip,
+          kPort,
+          timeout: const Duration(seconds: 4),
+        );
+        final headerBytes = utf8.encode(
+          jsonEncode({
+            'type': 'peer_announce',
+            'senderIp': myIp,
+            'senderName': myName,
+            'senderId': myId,
+          }),
+        );
+        final lenBytes = ByteData(4)
+          ..setInt32(0, headerBytes.length, Endian.big);
+        socket.add(lenBytes.buffer.asUint8List());
+        socket.add(headerBytes);
+        await socket.flush();
+        await socket.close();
+        await socket.done;
+
+        knownPeers[ip] = DateTime.now();
+
+        // Sincronizar si nunca se ha hecho o si han pasado más de 2 minutos
+        final lastSync = _lastSync[ip];
+        final needsSync =
+            lastSync == null ||
+            DateTime.now().difference(lastSync).inMinutes >= 2;
+
+        if (needsSync) {
+          _lastSync[ip] = DateTime.now();
+          peerNames[ip] = peerNames[ip] ?? ip;
+          _controller.add(
+            PeerEvent('peer_online', {'ip': ip, 'name': peerNames[ip]}),
+          );
+          _triggerSync(ip);
+        }
+      } catch (_) {
+        // Peer offline, ignorar
+      }
+    }
+  }
+
+  void _onPeerDiscovered(String ip, String name, {bool isNew = false}) {
+    peerNames[ip] = name;
+    knownPeers[ip] = DateTime.now();
+    _saveKnownPeers();
+
+    final lastSync = _lastSync[ip];
+    final needsSync =
+        isNew ||
+        lastSync == null ||
+        DateTime.now().difference(lastSync).inMinutes >= 2;
+
+    if (needsSync) {
+      _lastSync[ip] = DateTime.now();
+      _controller.add(PeerEvent('peer_online', {'ip': ip, 'name': name}));
+      _triggerSync(ip);
+    }
+  }
+
+  void _triggerSync(String ip) {
+    // Lanzar todas las sincronizaciones en paralelo sin bloquear
+    Future.microtask(() async {
+      await AuthService().syncWithNewPeer(ip);
+    });
+    Future.microtask(() async {
+      await ChatService().syncBroadcastWithPeer(ip);
+    });
+    Future.microtask(() async {
+      await StudyRoomService().syncWithNewPeer(ip);
+    });
+    Future.microtask(() async {
+      await UniverseService().syncWithNewPeer(ip);
+    });
+    Future.microtask(() async {
+      await NookService().syncWithNewPeer(ip);
+    });
+    _syncBackgroundVideoWithRetries(ip);
+  }
   // ─── Envío a grupo ────────────────────────────────────────────────────────
 
   // ─── Nombre de usuario ────────────────────────────────────────────────────
@@ -126,7 +222,7 @@ class PeerService {
   Future<void> _discoverPeers() async {
     try {
       final client = HttpClient();
-      client.connectionTimeout = const Duration(seconds: 5);
+      client.connectionTimeout = const Duration(seconds: 8);
       final request = await client.getUrl(
         Uri.parse('https://api.tailscale.com/api/v2/tailnet/-/devices'),
       );
@@ -137,8 +233,8 @@ class PeerService {
       final response = await request.close();
       final body = await response.transform(utf8.decoder).join();
       final data = jsonDecode(body) as Map<String, dynamic>;
-
       final devices = data['devices'] as List? ?? [];
+
       for (final device in devices) {
         final addresses = device['addresses'] as List? ?? [];
         final name = device['hostname'] as String? ?? 'Desconocido';
@@ -157,29 +253,14 @@ class PeerService {
 
           if (isOnline) {
             final isNew = !knownPeers.containsKey(ipStr);
-            knownPeers[ipStr] = DateTime.now();
-            peerNames[ipStr] = name;
-
-            // DESPUÉS:
-            if (isNew) {
-              _controller.add(
-                PeerEvent('peer_online', {'ip': ipStr, 'name': name}),
-              );
-              final username = AuthService().getUsernameForIp(ipStr);
-              if (username != ipStr) {
-                _ipToUsername[ipStr] = username;
-              }
-              AuthService().syncWithNewPeer(ipStr);
-              StudyRoomService().syncWithNewPeer(ipStr);
-              UniverseService().syncWithNewPeer(ipStr);
-              NookService().syncWithNewPeer(ipStr);
-              ChatService().syncBroadcastWithPeer(ipStr); // ← AGREGAR
-              _syncBackgroundVideoWithRetries(ipStr);
-            }
+            _onPeerDiscovered(ipStr, name, isNew: isNew);
           }
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      print('[PeerService] _discoverPeers API failed: $e');
+      // Si la API falla (Android), _connectToKnownPeers() ya cubre el descubrimiento
+    }
   }
 
   // ─── Sincronización video de fondo ───────────────────────────────────────
@@ -430,6 +511,40 @@ class PeerService {
       socket.add(respBytes);
       await socket.flush();
       await socket.close();
+      return;
+    }
+    // ── Anuncio de peer ─────────────────────────────────────────────────────────
+    if (packetType == 'peer_announce') {
+      await socket.close();
+      final senderIp = header['senderIp'] as String?;
+      final senderName = header['senderName'] as String? ?? 'Desconocido';
+      if (senderIp != null && senderIp != myIp) {
+        // Siempre procesar el anuncio — _onPeerDiscovered decide si sincronizar
+        _onPeerDiscovered(senderIp, senderName, isNew: false);
+
+        // Responder con nuestro anuncio solo si no lo hemos hecho recientemente
+        try {
+          final sock2 = await Socket.connect(
+            senderIp,
+            kPort,
+            timeout: const Duration(seconds: 4),
+          );
+          final hb = utf8.encode(
+            jsonEncode({
+              'type': 'peer_announce',
+              'senderIp': myIp,
+              'senderName': myName,
+              'senderId': myId,
+            }),
+          );
+          final lb = ByteData(4)..setInt32(0, hb.length, Endian.big);
+          sock2.add(lb.buffer.asUint8List());
+          sock2.add(hb);
+          await sock2.flush();
+          await sock2.close();
+          await sock2.done;
+        } catch (_) {}
+      }
       return;
     }
 

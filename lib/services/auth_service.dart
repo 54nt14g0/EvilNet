@@ -274,56 +274,71 @@ class AuthService {
 
   // ─── Editar perfil ────────────────────────────────────────────────────────
 
-  Future<String?> updateProfile({
-    required String nombre,
-    required String telefono,
-    required String edad,
-    required String correo,
-    String? newPassword,
-    String? newProfileImagePath,
-    bool clearProfileImage = false,
-  }) async {
-    if (_currentUser == null) return 'No hay sesión activa';
+ Future<String?> updateProfile({
+  required String nombre,
+  required String telefono,
+  required String edad,
+  required String correo,
+  String? newPassword,
+  String? newProfileImagePath,
+  bool clearProfileImage = false,
+}) async {
+  if (_currentUser == null) return 'No hay sesión activa';
+  final idx = _users.indexWhere((u) => u.id == _currentUser!.id);
+  if (idx == -1) return 'Usuario no encontrado';
 
-    final idx = _users.indexWhere((u) => u.id == _currentUser!.id);
-    if (idx == -1) return 'Usuario no encontrado';
+  String? finalImagePath = _users[idx].profileImagePath;
 
-    // Copiar imagen a documentos con nombre estable si se provee una nueva
-    String? finalImagePath;
-    if (!clearProfileImage && newProfileImagePath != null) {
-      final file = File(newProfileImagePath);
-      if (await file.exists()) {
-        final dir = await getApplicationDocumentsDirectory();
-        final ext = newProfileImagePath.split('.').last;
-        final fileName = 'profile_${_currentUser!.id}.$ext';
-        final destPath = '${dir.path}/$fileName';
-        await file.copy(destPath);
-        finalImagePath = destPath;
+  if (clearProfileImage) {
+    finalImagePath = null;
+  } else if (newProfileImagePath != null) {
+    try {
+      final sourceFile = File(newProfileImagePath);
+      if (!await sourceFile.exists()) return 'No se pudo leer la imagen';
+      final dir = await getApplicationDocumentsDirectory();
+      final ext = newProfileImagePath.split('.').last.toLowerCase();
+      final fileName = 'profile_${_currentUser!.id}.$ext';
+      final destPath = '${dir.path}/$fileName';
+      // Eliminar archivo anterior si existe
+      final destFile = File(destPath);
+      if (await destFile.exists()) {
+        await destFile.delete();
       }
+      await sourceFile.copy(destPath);
+      finalImagePath = destPath;
+    } catch (e) {
+      print('[Auth] Error copying profile image: $e');
+      return 'Error al guardar la imagen';
     }
-
-    final updated = _users[idx].copyWith(
-      nombre: nombre.trim(),
-      telefono: telefono.trim(),
-      edad: edad.trim(),
-      correo: correo.trim(),
-      passwordMd5: newPassword != null && newPassword.isNotEmpty
-          ? AppUser.hashPassword(newPassword)
-          : null,
-      profileImagePath: clearProfileImage
-          ? null
-          : (finalImagePath ?? _users[idx].profileImagePath),
-      clearProfileImage: clearProfileImage,
-      updatedAt: DateTime.now(),
-    );
-
-    _users[idx] = updated;
-    _currentUser = updated;
-    _version++;
-    await _saveLocalUsers();
-    _authController.add('users_updated');
-    return null;
   }
+
+  final updated = _users[idx].copyWith(
+    nombre: nombre.trim(),
+    telefono: telefono.trim(),
+    edad: edad.trim(),
+    correo: correo.trim(),
+    passwordMd5: newPassword != null && newPassword.isNotEmpty
+        ? AppUser.hashPassword(newPassword)
+        : null,
+    profileImagePath: finalImagePath,
+    clearProfileImage: clearProfileImage,
+    updatedAt: DateTime.now(),
+  );
+
+  _users[idx] = updated;
+  _currentUser = updated;
+  _version++;
+  await _saveLocalUsers();
+  _authController.add('users_updated');
+
+  // Propagar a peers inmediatamente
+  final peerIps = PeerService().knownPeers.keys.toList();
+  if (peerIps.isNotEmpty) {
+    unawaited(_pushAndPropagate(peerIps));
+  }
+
+  return null;
+}
 
   // En AuthService.logout(), AGREGAR al final:
   Future<void> logout() async {
@@ -566,77 +581,92 @@ class AuthService {
     } catch (_) {}
   }
 
-  Future<void> _mergeRemoteUsers(Map<String, dynamic> data) async {
-    final remoteVersion = data['version'] as int? ?? 0;
-    final remoteList = data['users'] as List? ?? [];
+ Future<void> _mergeRemoteUsers(Map<String, dynamic> data) async {
+  final remoteVersion = data['version'] as int? ?? 0;
+  final remoteList = data['users'] as List? ?? [];
 
-    bool changed = false;
-    final merged = <String, AppUser>{};
-    for (final u in _users) {
-      merged[u.id] = u;
-    }
-
-    for (final rawUser in remoteList) {
-      final uMap = rawUser as Map<String, dynamic>;
-      final remote = AppUser.fromJson(uMap);
-
-      // Guardar imagen de perfil si viene embebida
-      final imageBase64 = uMap['profileImageBase64'] as String?;
-      final imageFileName = uMap['profileImageFileName'] as String?;
-      String? validImagePath = remote.profileImagePath;
-
-      if (imageBase64 != null && imageFileName != null) {
-        try {
-          final dir = await getApplicationDocumentsDirectory();
-          final destPath = '${dir.path}/$imageFileName';
-          await File(destPath).writeAsBytes(base64Decode(imageBase64));
-          validImagePath = destPath;
-        } catch (e) {
-          print('[Auth] Error saving profile image: $e');
-        }
-      } else if (validImagePath != null && !File(validImagePath).existsSync()) {
-        // Intentar ruta local
-        final dir = await getApplicationDocumentsDirectory();
-        final fileName = validImagePath.split('/').last.split('\\').last;
-        final localPath = '${dir.path}/$fileName';
-        validImagePath = File(localPath).existsSync() ? localPath : null;
-      }
-
-      final remoteWithImage = validImagePath != remote.profileImagePath
-          ? remote.copyWith(profileImagePath: validImagePath)
-          : remote;
-
-      if (merged.containsKey(remote.id)) {
-        if (remote.updatedAt.isAfter(merged[remote.id]!.updatedAt)) {
-          merged[remote.id] = remoteWithImage;
-          changed = true;
-        }
-      } else {
-        merged[remote.id] = remoteWithImage;
-        changed = true;
-      }
-    }
-
-    if (!changed && remoteVersion <= _version) return;
-
-    _users = merged.values.toList()
-      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-
-    if (remoteVersion > _version) _version = remoteVersion;
-    _ensureSeedAdmin();
-
-    if (_currentUser != null) {
-      final updated = _users.where((u) => u.id == _currentUser!.id);
-      if (updated.isNotEmpty) {
-        _currentUser = updated.first;
-        PeerService().setMyHierarchy(_currentUser!.jerarquia);
-      }
-    }
-
-    await _saveLocalUsers();
-    _authController.add('users_updated');
+  bool changed = false;
+  final merged = <String, AppUser>{};
+  for (final u in _users) {
+    merged[u.id] = u;
   }
 
+  for (final rawUser in remoteList) {
+    final uMap = rawUser as Map<String, dynamic>;
+    final remote = AppUser.fromJson(uMap);
+
+    // Guardar imagen de perfil si viene embebida
+    final imageBase64 = uMap['profileImageBase64'] as String?;
+    final imageFileName = uMap['profileImageFileName'] as String?;
+    String? validImagePath;
+
+    if (imageBase64 != null && imageFileName != null) {
+      try {
+        final dir = await getApplicationDocumentsDirectory();
+        // Siempre sobreescribir con la versión remota más reciente
+        final destPath = '${dir.path}/$imageFileName';
+        final bytes = base64Decode(imageBase64);
+        await File(destPath).writeAsBytes(bytes, flush: true);
+        validImagePath = destPath;
+        print('[Auth] Saved/updated profile image: $destPath');
+      } catch (e) {
+        print('[Auth] Error saving profile image: $e');
+      }
+    } else if (remote.profileImagePath != null) {
+      // Intentar ruta local
+      final dir = await getApplicationDocumentsDirectory();
+      final fileName = remote.profileImagePath!
+          .split('/')
+          .last
+          .split('\\')
+          .last;
+      final localPath = '${dir.path}/$fileName';
+      validImagePath =
+          File(localPath).existsSync() ? localPath : null;
+    }
+
+    final remoteWithImage = remote.copyWith(
+      profileImagePath: validImagePath,
+      clearProfileImage: validImagePath == null,
+    );
+
+    if (merged.containsKey(remote.id)) {
+      // Siempre ganar el updatedAt más reciente
+      if (remote.updatedAt.isAfter(merged[remote.id]!.updatedAt)) {
+        merged[remote.id] = remoteWithImage;
+        changed = true;
+      } else if (validImagePath != null &&
+          merged[remote.id]!.profileImagePath != validImagePath) {
+        // Actualizar solo la imagen aunque el resto sea igual
+        merged[remote.id] = merged[remote.id]!
+            .copyWith(profileImagePath: validImagePath);
+        changed = true;
+      }
+    } else {
+      merged[remote.id] = remoteWithImage;
+      changed = true;
+    }
+  }
+
+  if (!changed && remoteVersion <= _version) return;
+
+  _users = merged.values.toList()
+    ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+
+  if (remoteVersion > _version) _version = remoteVersion;
+  _ensureSeedAdmin();
+
+  if (_currentUser != null) {
+    final updated = _users.where((u) => u.id == _currentUser!.id);
+    if (updated.isNotEmpty) {
+      _currentUser = updated.first;
+      PeerService().setMyHierarchy(_currentUser!.jerarquia);
+    }
+  }
+
+  await _saveLocalUsers();
+  _authController.add('users_updated');
+}
   /// Empuja los usuarios a los peers directos y les pide que los reenvíen
   /// a sus propios peers (un salto extra para cubrir peers no conectados).
   Future<void> _pushAndPropagate(List<String> peerIps) async {

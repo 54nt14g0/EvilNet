@@ -636,85 +636,102 @@ class ChatService {
 
   /// Pide el historial broadcast a un peer y hace merge local.
   Future<void> syncBroadcastWithPeer(String ip) async {
-    try {
-      final socket = await Socket.connect(
-        ip,
-        kChatPort,
-        timeout: const Duration(seconds: 8),
-      );
-      final headerBytes = utf8.encode(
-        jsonEncode({'type': 'request_broadcast_history', 'senderId': _myId}),
-      );
-      final lenBytes = ByteData(4)..setInt32(0, headerBytes.length, Endian.big);
-      socket.add(lenBytes.buffer.asUint8List());
-      socket.add(headerBytes);
-      await socket.flush();
-      await socket.close();
+  try {
+    final socket = await Socket.connect(
+      ip, kChatPort,
+      timeout: const Duration(seconds: 8),
+    );
+    final headerBytes = utf8.encode(
+      jsonEncode({
+        'type': 'request_broadcast_history',
+        'senderId': _myId,
+      }),
+    );
+    final lenBytes = ByteData(4)
+      ..setInt32(0, headerBytes.length, Endian.big);
+    socket.add(lenBytes.buffer.asUint8List());
+    socket.add(headerBytes);
+    await socket.flush();
+    await socket.close();
 
-      final chunks = <int>[];
-      await for (final chunk in socket) {
-        chunks.addAll(chunk);
-      }
-      if (chunks.isEmpty) return;
-
-      final all = Uint8List.fromList(chunks);
-      if (all.length < 4) return;
-      final respHeaderLen = ByteData.view(
-        all.buffer,
-        0,
-        4,
-      ).getInt32(0, Endian.big);
-      if (all.length < 4 + respHeaderLen) return;
-
-      final response =
-          jsonDecode(utf8.decode(all.sublist(4, 4 + respHeaderLen)))
-              as Map<String, dynamic>;
-
-      if (response['type'] != 'broadcast_history_response') return;
-
-      final messages = response['messages'] as List? ?? [];
-      final myId = _myId;
-      final prefs = await SharedPreferences.getInstance();
-      final existing = prefs.getStringList(kBroadcastKey) ?? [];
-
-      // Obtener IDs existentes para no duplicar
-      final existingIds = existing
-          .map((s) {
-            try {
-              return (jsonDecode(s) as Map)['id'] as String?;
-            } catch (_) {
-              return null;
-            }
-          })
-          .whereType<String>()
-          .toSet();
-
-      bool changed = false;
-      for (final raw in messages) {
-        try {
-          final j = raw as Map<String, dynamic>;
-          final id = j['id'] as String?;
-          if (id == null || existingIds.contains(id)) continue;
-          // Marcar isMe correctamente
-          j['isMe'] = false; // se recalcula al leer
-          existing.add(jsonEncode(j));
-          existingIds.add(id);
-          changed = true;
-
-          // Emitir el mensaje para que la UI lo muestre si está abierta
-          final isMe = j['senderId'] == myId;
-          final msg = Message.fromJson(j, isMe);
-          _controller.add(ChatEvent('message', msg));
-        } catch (_) {}
-      }
-
-      if (changed) {
-        await prefs.setStringList(kBroadcastKey, existing);
-      }
-    } catch (e) {
-      print('[ChatService] syncBroadcastWithPeer($ip) failed: $e');
+    // Leer respuesta
+    final chunks = <int>[];
+    await for (final chunk in socket) {
+      chunks.addAll(chunk);
     }
+    if (chunks.isEmpty) return;
+
+    final all = Uint8List.fromList(chunks);
+    if (all.length < 4) return;
+
+    final respHeaderLen =
+        ByteData.view(all.buffer, 0, 4).getInt32(0, Endian.big);
+    if (all.length < 4 + respHeaderLen) return;
+
+    final response =
+        jsonDecode(utf8.decode(all.sublist(4, 4 + respHeaderLen)))
+            as Map<String, dynamic>;
+
+    if (response['type'] != 'broadcast_history_response') return;
+
+    final messages = response['messages'] as List? ?? [];
+    final myId = _myId;
+    final prefs = await SharedPreferences.getInstance();
+    final existing = prefs.getStringList(kBroadcastKey) ?? [];
+
+    final existingIds = existing
+        .map((s) {
+          try {
+            return (jsonDecode(s) as Map)['id'] as String?;
+          } catch (_) {
+            return null;
+          }
+        })
+        .whereType<String>()
+        .toSet();
+
+    bool changed = false;
+    final newMessages = <Message>[];
+
+    for (final raw in messages) {
+      try {
+        final j = Map<String, dynamic>.from(raw as Map);
+        final id = j['id'] as String?;
+        if (id == null || existingIds.contains(id)) continue;
+        existing.add(jsonEncode(j));
+        existingIds.add(id);
+        changed = true;
+
+        final isMe = j['senderId'] == myId;
+        newMessages.add(Message.fromJson(j, isMe));
+      } catch (_) {}
+    }
+
+    if (changed) {
+      // Ordenar por timestamp antes de guardar
+      existing.sort((a, b) {
+        try {
+          final ta = DateTime.parse(
+              (jsonDecode(a) as Map)['timestamp'] as String);
+          final tb = DateTime.parse(
+              (jsonDecode(b) as Map)['timestamp'] as String);
+          return ta.compareTo(tb);
+        } catch (_) {
+          return 0;
+        }
+      });
+      await prefs.setStringList(kBroadcastKey, existing);
+
+      // Emitir mensajes nuevos ordenados
+      newMessages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      for (final msg in newMessages) {
+        _controller.add(ChatEvent('message', msg));
+      }
+    }
+  } catch (e) {
+    print('[ChatService] syncBroadcastWithPeer($ip) failed: $e');
   }
+}
 
   void dispose() {
     _server?.close();
