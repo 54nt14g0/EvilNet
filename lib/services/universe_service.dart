@@ -26,7 +26,7 @@ class UniverseService {
   final Map<String, Universe> _universes = {};
   final Map<String, UniverseCentralTopic> _centralTopics = {};
   final Map<String, UniverseIdea> _ideas = {};
-
+  Timer? _saveDebounce;
   int _version = 0;
   ServerSocket? _server;
   Timer? _syncTimer;
@@ -50,7 +50,10 @@ class UniverseService {
   // ─── Inicio ───────────────────────────────────────────────────────────────
 
   Future<void> startLocal() async {
-    if (_started) { _emit(); return; }
+    if (_started) {
+      _emit();
+      return;
+    }
     _started = true;
     await _loadLocal();
     await _startServer();
@@ -86,8 +89,12 @@ class UniverseService {
   Future<void> _loadLocal() async {
     try {
       final file = await _dataFile();
-      if (!await file.exists()) { _version = 0; return; }
-      final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      if (!await file.exists()) {
+        _version = 0;
+        return;
+      }
+      final data =
+          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
       _version = data['version'] as int? ?? 0;
 
       _universes.clear();
@@ -116,22 +123,34 @@ class UniverseService {
   }
 
   Future<void> _saveLocal() async {
-    final file = await _dataFile();
-    await file.writeAsString(jsonEncode({
-      'version': _version,
-      'updatedAt': DateTime.now().toIso8601String(),
-      'universes': _universes.values.map((u) => u.toJson()).toList(),
-      'centralTopics': _centralTopics.values.map((t) => t.toJson()).toList(),
-      'ideas': _ideas.values.map((i) => i.toJson()).toList(),
-    }));
+    _saveDebounce?.cancel();
+    _saveDebounce = Timer(const Duration(milliseconds: 400), () async {
+      try {
+        final file = await _dataFile();
+        await file.writeAsString(
+          jsonEncode({
+            'version': _version,
+            'updatedAt': DateTime.now().toIso8601String(),
+            'universes': _universes.values.map((u) => u.toJson()).toList(),
+            'centralTopics': _centralTopics.values
+                .map((t) => t.toJson())
+                .toList(),
+            'ideas': _ideas.values.map((i) => i.toJson()).toList(),
+          }),
+        );
+      } catch (e) {
+        print('[Universe] _saveLocal error: $e');
+      }
+    });
   }
-
   // ─── Servidor ─────────────────────────────────────────────────────────────
 
   Future<void> _startServer() async {
     try {
       _server = await ServerSocket.bind(
-        InternetAddress.anyIPv4, kUniversePort, shared: true,
+        InternetAddress.anyIPv4,
+        kUniversePort,
+        shared: true,
       );
       _server!.listen(_handleConnection);
       print('🔴 [Universe] Server on port $kUniversePort');
@@ -143,13 +162,17 @@ class UniverseService {
   void _handleConnection(Socket socket) async {
     try {
       final chunks = <int>[];
-      await for (final chunk in socket) { chunks.addAll(chunk); }
+      await for (final chunk in socket) {
+        chunks.addAll(chunk);
+      }
       if (chunks.isEmpty) return;
 
       Map<String, dynamic>? packet;
       try {
         packet = jsonDecode(utf8.decode(chunks)) as Map<String, dynamic>;
-      } catch (_) { return; }
+      } catch (_) {
+        return;
+      }
 
       final type = packet['type'] as String?;
 
@@ -216,11 +239,15 @@ class UniverseService {
           final file = File('${dir.path}/$fileName');
           if (await file.exists()) {
             final bytes = await file.readAsBytes();
-            socket.add(utf8.encode(jsonEncode({
-              'type': 'cover_image_response',
-              'fileName': fileName,
-              'imageBase64': base64Encode(bytes),
-            })));
+            socket.add(
+              utf8.encode(
+                jsonEncode({
+                  'type': 'cover_image_response',
+                  'fileName': fileName,
+                  'imageBase64': base64Encode(bytes),
+                }),
+              ),
+            );
             await socket.flush();
           }
           break;
@@ -235,7 +262,9 @@ class UniverseService {
   // ─── Receive helpers ──────────────────────────────────────────────────────
 
   Future<void> _receiveUniverseUpsert(Map<String, dynamic> packet) async {
-    final universe = Universe.fromJson(packet['universe'] as Map<String, dynamic>);
+    final universe = Universe.fromJson(
+      packet['universe'] as Map<String, dynamic>,
+    );
     final imageBase64 = packet['imageBase64'] as String?;
     final imageFileName = packet['imageFileName'] as String?;
 
@@ -314,19 +343,26 @@ class UniverseService {
   // ─── Sincronización ───────────────────────────────────────────────────────
 
   Future<void> _syncWithPeers(List<String> peerIps) async {
-    for (final ip in peerIps) { await _requestDataFrom(ip); }
+    for (final ip in peerIps) {
+      await _requestDataFrom(ip);
+    }
   }
 
   Future<void> _requestDataFrom(String ip) async {
     try {
-      final socket = await Socket.connect(ip, kUniversePort,
-          timeout: const Duration(seconds: 5));
+      final socket = await Socket.connect(
+        ip,
+        kUniversePort,
+        timeout: const Duration(seconds: 5),
+      );
       socket.add(utf8.encode(jsonEncode({'type': 'request_data'})));
       await socket.flush();
       await socket.close();
 
       final chunks = <int>[];
-      await for (final chunk in socket) { chunks.addAll(chunk); }
+      await for (final chunk in socket) {
+        chunks.addAll(chunk);
+      }
       if (chunks.isEmpty) return;
 
       final data = jsonDecode(utf8.decode(chunks)) as Map<String, dynamic>;
@@ -376,7 +412,10 @@ class UniverseService {
         if (f.existsSync()) {
           final bytes = f.readAsBytesSync();
           final fileName = imgPath.split('/').last.split('\\').last;
-          imagePayloads.add({'fileName': fileName, 'base64': base64Encode(bytes)});
+          imagePayloads.add({
+            'fileName': fileName,
+            'base64': base64Encode(bytes),
+          });
         }
       }
       if (imagePayloads.isNotEmpty) ij['images'] = imagePayloads;
@@ -416,10 +455,15 @@ class UniverseService {
 
       if (local == null || remote.updatedAt.isAfter(local.updatedAt)) {
         _universes[remote.id] = Universe(
-          id: remote.id, name: remote.name, description: remote.description,
-          coverImagePath: validCoverPath, creatorId: remote.creatorId,
-          minHierarchy: remote.minHierarchy, passwordHash: remote.passwordHash,
-          createdAt: remote.createdAt, updatedAt: remote.updatedAt,
+          id: remote.id,
+          name: remote.name,
+          description: remote.description,
+          coverImagePath: validCoverPath,
+          creatorId: remote.creatorId,
+          minHierarchy: remote.minHierarchy,
+          passwordHash: remote.passwordHash,
+          createdAt: remote.createdAt,
+          updatedAt: remote.updatedAt,
         );
         changed = true;
       }
@@ -445,8 +489,10 @@ class UniverseService {
 
       if (local == null || remote.updatedAt.isAfter(local.updatedAt)) {
         _centralTopics[remote.universeId] = UniverseCentralTopic(
-          universeId: remote.universeId, title: remote.title,
-          description: remote.description, imagePath: validImagePath,
+          universeId: remote.universeId,
+          title: remote.title,
+          description: remote.description,
+          imagePath: validImagePath,
           updatedAt: remote.updatedAt,
         );
         changed = true;
@@ -480,7 +526,10 @@ class UniverseService {
 
     final remoteVersion = data['version'] as int? ?? 0;
     if (remoteVersion > _version) _version = remoteVersion;
-    if (changed) { await _saveLocal(); _emit(); }
+    if (changed) {
+      await _saveLocal();
+      _emit();
+    }
   }
 
   // ─── Recovery de imágenes ─────────────────────────────────────────────────
@@ -497,7 +546,9 @@ class UniverseService {
         final recovered = await _fetchImageFromPeer(ip, fileName);
         if (recovered != null) {
           _universes[u.id] = u.copyWith(coverImagePath: recovered);
-          await _saveLocal(); _emit(); break;
+          await _saveLocal();
+          _emit();
+          break;
         }
       }
     }
@@ -510,7 +561,9 @@ class UniverseService {
         final recovered = await _fetchImageFromPeer(ip, fileName);
         if (recovered != null) {
           _centralTopics[t.universeId] = t.copyWith(imagePath: recovered);
-          await _saveLocal(); _emit(); break;
+          await _saveLocal();
+          _emit();
+          break;
         }
       }
     }
@@ -518,16 +571,23 @@ class UniverseService {
 
   Future<String?> _fetchImageFromPeer(String ip, String fileName) async {
     try {
-      final socket = await Socket.connect(ip, kUniversePort,
-          timeout: const Duration(seconds: 10));
-      socket.add(utf8.encode(jsonEncode({
-        'type': 'request_cover_image', 'fileName': fileName,
-      })));
+      final socket = await Socket.connect(
+        ip,
+        kUniversePort,
+        timeout: const Duration(seconds: 10),
+      );
+      socket.add(
+        utf8.encode(
+          jsonEncode({'type': 'request_cover_image', 'fileName': fileName}),
+        ),
+      );
       await socket.flush();
       await socket.close();
 
       final chunks = <int>[];
-      await for (final chunk in socket) { chunks.addAll(chunk); }
+      await for (final chunk in socket) {
+        chunks.addAll(chunk);
+      }
       if (chunks.isEmpty) return null;
 
       final response = jsonDecode(utf8.decode(chunks)) as Map<String, dynamic>;
@@ -540,7 +600,9 @@ class UniverseService {
       final destPath = '${dir.path}/$fileName';
       await File(destPath).writeAsBytes(base64Decode(b64));
       return destPath;
-    } catch (_) { return null; }
+    } catch (_) {
+      return null;
+    }
   }
 
   // ─── Broadcast ────────────────────────────────────────────────────────────
@@ -549,8 +611,11 @@ class UniverseService {
     final payload = utf8.encode(jsonEncode(packet));
     for (final ip in List.from(PeerService().knownPeers.keys)) {
       try {
-        final socket = await Socket.connect(ip, kUniversePort,
-            timeout: const Duration(seconds: 5));
+        final socket = await Socket.connect(
+          ip,
+          kUniversePort,
+          timeout: const Duration(seconds: 5),
+        );
         socket.add(payload);
         await socket.flush();
         await socket.close();
@@ -573,7 +638,11 @@ class UniverseService {
       final f = File(universe.coverImagePath!);
       if (await f.exists()) {
         imageBase64 = base64Encode(await f.readAsBytes());
-        imageFileName = universe.coverImagePath!.split('/').last.split('\\').last;
+        imageFileName = universe.coverImagePath!
+            .split('/')
+            .last
+            .split('\\')
+            .last;
       }
     }
 
@@ -587,7 +656,10 @@ class UniverseService {
 
   Future<void> deleteUniverse(String universeId) async {
     await _deleteUniverseLocal(universeId);
-    await _broadcastPacket({'type': 'universe_delete', 'universeId': universeId});
+    await _broadcastPacket({
+      'type': 'universe_delete',
+      'universeId': universeId,
+    });
   }
 
   Future<void> _deleteUniverseLocal(String universeId) async {
@@ -651,11 +723,17 @@ class UniverseService {
     }
 
     final idea = UniverseIdea(
-      id: _uuid.v4(), universeId: universeId,
-      authorId: authorId, authorUsername: authorUsername,
-      text: text, imagePaths: savedPaths,
-      x: x, y: y, ratings: {},
-      createdAt: DateTime.now(), updatedAt: DateTime.now(),
+      id: _uuid.v4(),
+      universeId: universeId,
+      authorId: authorId,
+      authorUsername: authorUsername,
+      text: text,
+      imagePaths: savedPaths,
+      x: x,
+      y: y,
+      ratings: {},
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
     );
 
     _ideas[idea.id] = idea;
@@ -692,7 +770,8 @@ class UniverseService {
   }) async {
     final idea = _ideas[ideaId];
     if (idea == null) return;
-    if (idea.authorId != requestingUserId && requestingUserHierarchy < 9) return;
+    if (idea.authorId != requestingUserId && requestingUserHierarchy < 9)
+      return;
     await _deleteIdeaLocal(ideaId);
     await _broadcastPacket({'type': 'idea_delete', 'ideaId': ideaId});
   }
@@ -711,7 +790,10 @@ class UniverseService {
     await _saveLocal();
     _emit();
     await _broadcastPacket({
-      'type': 'idea_move', 'ideaId': ideaId, 'x': x, 'y': y,
+      'type': 'idea_move',
+      'ideaId': ideaId,
+      'x': x,
+      'y': y,
     });
   }
 
@@ -725,12 +807,18 @@ class UniverseService {
     if (rating < 1 || rating > 10) return;
     final newRatings = Map<String, int>.from(idea.ratings);
     newRatings[userId] = rating;
-    _ideas[ideaId] = idea.copyWith(ratings: newRatings, updatedAt: DateTime.now());
+    _ideas[ideaId] = idea.copyWith(
+      ratings: newRatings,
+      updatedAt: DateTime.now(),
+    );
     _version++;
     await _saveLocal();
     _emit();
     await _broadcastPacket({
-      'type': 'idea_rate', 'ideaId': ideaId, 'userId': userId, 'rating': rating,
+      'type': 'idea_rate',
+      'ideaId': ideaId,
+      'userId': userId,
+      'rating': rating,
     });
   }
 
@@ -741,6 +829,7 @@ class UniverseService {
 
   void dispose() {
     _syncTimer?.cancel();
+    _saveDebounce?.cancel();
     _server?.close();
     _controller.close();
   }

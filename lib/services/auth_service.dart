@@ -710,42 +710,51 @@ class AuthService {
 }
 
   Future<void> pushUsersToPeers(List<String> peerIps) async {
-    // Construir payload con fotos embebidas
-    final usersJson = <Map<String, dynamic>>[];
-    for (final u in _users) {
-      final uj = u.toJson();
-      if (u.profileImagePath != null) {
-        final f = File(u.profileImagePath!);
-        if (await f.exists()) {
+  if (peerIps.isEmpty) return;
+
+  // Construir payload una sola vez fuera del loop
+  final usersJson = <Map<String, dynamic>>[];
+  for (final u in _users) {
+    final uj = u.toJson();
+    if (u.profileImagePath != null) {
+      final f = File(u.profileImagePath!);
+      if (await f.exists()) {
+        try {
           final bytes = await f.readAsBytes();
           final fileName = u.profileImagePath!.split('/').last.split('\\').last;
           uj['profileImageBase64'] = base64Encode(bytes);
           uj['profileImageFileName'] = fileName;
-        }
+        } catch (_) {}
       }
-      usersJson.add(uj);
     }
+    usersJson.add(uj);
+  }
 
-    final payload = jsonEncode({
-      'type': 'users_push',
-      'version': _version,
-      'users': usersJson,
-    });
+  final payload = jsonEncode({
+    'type': 'users_push',
+    'version': _version,
+    'users': usersJson,
+  });
+  final payloadBytes = utf8.encode(payload);
 
-    for (final ip in peerIps) {
+  // Enviar a todos los peers en paralelo con timeout agresivo
+  await Future.wait(
+    peerIps.map((ip) async {
       try {
         final socket = await Socket.connect(
           ip,
           kAuthPort,
-          timeout: const Duration(seconds: 5),
+          timeout: const Duration(seconds: 4),
         );
-        socket.add(utf8.encode(payload));
+        socket.add(payloadBytes);
         await socket.flush();
         await socket.close();
         await socket.done;
       } catch (_) {}
-    }
-  }
+    }),
+    eagerError: false,
+  );
+}
 
   Future<void> syncWithNewPeer(String ip) async {
     await _requestUsersFrom(ip);

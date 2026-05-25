@@ -38,39 +38,47 @@ class _LobbyScreenState extends State<LobbyScreen>
   late AnimationController _pulseCtrl;
   late AnimationController _scanCtrl;
   final _auth = AuthService();
+  final Map<String, bool> _onlineCache = {};
 
-  @override
-  void initState() {
-    super.initState();
-    _initAudio();
-    _pulseCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 2000),
-    )..repeat(reverse: true);
-    _scanCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 4),
-    )..repeat();
+ @override
+void initState() {
+  super.initState();
+  _initAudio();
+  _pulseCtrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 2000),
+  )..repeat(reverse: true);
+  _scanCtrl = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 4),
+  )..repeat();
 
-    // Escuchar cambios de peers (conexiones nuevas)
-    _peer.events.listen((e) {
-      if (!mounted) return;
-      if (e.type == 'peer_online') {
-        // Cuando llega un peer nuevo, sincronizar usuarios
-        final ip = (e.data as Map)['ip'] as String?;
-        if (ip != null) {
-          _auth.syncWithNewPeer(ip);
-        }
+  _refreshOnlineCache();
+
+  _peer.events.listen((e) {
+    if (!mounted) return;
+    if (e.type == 'peer_online') {
+      final ip = (e.data as Map)['ip'] as String?;
+      if (ip != null) {
+        _auth.syncWithNewPeer(ip);
       }
-      setState(() {});
-    });
+    }
+    _refreshOnlineCache();
+    setState(() {});
+  });
 
-    // Escuchar cambios de AuthService (usuarios nuevos, actualizaciones)
-    _auth.events.listen((e) {
-      if (!mounted) return;
-      setState(() {}); // Refrescar lista de usuarios
-    });
+  _auth.events.listen((e) {
+    if (!mounted) return;
+    _refreshOnlineCache();
+    setState(() {});
+  });
+}
+  void _refreshOnlineCache() {
+  _onlineCache.clear();
+  for (final u in _auth.users) {
+    _onlineCache[u.username] = _isUserOnline(u.username);
   }
+}
 
   @override
   void dispose() {
@@ -612,7 +620,7 @@ class _LobbyScreenState extends State<LobbyScreen>
           SliverList(
             delegate: SliverChildBuilderDelegate((_, i) {
               final user = allUsers[i];
-              final online = _isUserOnline(user.username);
+              final online = _onlineCache[user.username] ?? false;
               final ip = _getIpForUser(user.username);
               return _buildUserCard(
                 ip: ip ?? user.username,

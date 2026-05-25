@@ -166,7 +166,6 @@ class _MenuScreenState extends State<MenuScreen>
 
     try {
       await _peer.start();
-      // Arrancar ChatService
       await ChatService().start();
       print('✅ [MenuScreen] PeerService started on ${_peer.myIp}');
     } catch (e) {
@@ -176,48 +175,39 @@ class _MenuScreenState extends State<MenuScreen>
     setState(() => _initialized = true);
     _loadVideo();
 
-    // ← AGREGAR: Iniciar StudyRoomService en background
-    Future.microtask(() async {
-      await StudyRoomService().startLocal();
-      print('✅ [MenuScreen] StudyRoomService started');
-      final peerIps = _peer.knownPeers.keys.toList();
-      StudyRoomService().startSync(peerIps);
-    });
+    // Iniciar todos los servicios en paralelo, sin bloquear la UI
+    unawaited(
+      Future.wait([
+        StudyRoomService().startLocal(),
+        UniverseService().startLocal(),
+        NookService().startLocal(),
+      ]).then((_) {
+        print('✅ [MenuScreen] All background services started');
+        final peerIps = _peer.knownPeers.keys.toList();
+        StudyRoomService().startSync(peerIps);
+        UniverseService().startSync(peerIps);
+        // NookService ya sincroniza via peer_online event, no duplicar
+        if (peerIps.isNotEmpty) {
+          for (final ip in peerIps) {
+            NookService().syncWithNewPeer(ip);
+          }
+        }
+      }),
+    );
 
-    // Escuchar eventos del peer service
     _peer.events.listen((e) {
-      print('📩 [MenuScreen] Received event: ${e.type}');
       if (!mounted) return;
-
       if (e.type == 'background_video_updated') {
-        print('🎬 [MenuScreen] Loading background video: ${e.data}');
         _loadVideo(path: e.data as String);
       } else if (e.type == 'background_video_cleared') {
-        print('🚫 [MenuScreen] Clearing background video');
         _clearVideo();
       } else if (e.type == 'peer_online') {
-        // ← AGREGAR: cuando llega un peer nuevo, sincronizar StudyRoom
         final ip = (e.data as Map)['ip'] as String?;
-        if (ip != null) StudyRoomService().syncWithNewPeer(ip);
-        if (ip != null) NookService().syncWithNewPeer(ip);
+        if (ip != null) {
+          StudyRoomService().syncWithNewPeer(ip);
+          NookService().syncWithNewPeer(ip);
+        }
       }
-    });
-
-    print('✅ [MenuScreen] Event listener registered');
-    Future.microtask(() async {
-      await StudyRoomService().startLocal();
-      print('✅ [MenuScreen] StudyRoomService started');
-      final peerIps = _peer.knownPeers.keys.toList();
-      StudyRoomService().startSync(peerIps);
-
-      // ← AGREGAR
-      await UniverseService().startLocal();
-      print('✅ [MenuScreen] UniverseService started');
-      UniverseService().startSync(peerIps);
-
-      await NookService().startLocal();
-      print('✅ [MenuScreen] NookService started');
-      NookService().startSync(peerIps);
     });
   }
 

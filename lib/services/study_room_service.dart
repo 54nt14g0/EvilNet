@@ -32,6 +32,7 @@ class StudyRoomService {
   final Map<String, StudyTopic> _topics = {};
   final Map<String, StudyComment> _comments = {};
   final Map<String, UserProgress> _progress = {};
+  Timer? _saveDebounce;
 
   int _version = 0;
   ServerSocket? _server;
@@ -374,16 +375,23 @@ class StudyRoomService {
   }
 
   Future<void> _saveLocal() async {
-    final file = await _dataFile();
-    final data = {
-      'version': _version,
-      'updatedAt': DateTime.now().toIso8601String(),
-      'topics': _topics.values.map((t) => t.toJson()).toList(),
-      'comments': _comments.values.map((c) => c.toJson()).toList(),
-      'progress': _progress.values.map((p) => p.toJson()).toList(),
-    };
-    await file.writeAsString(jsonEncode(data));
-  }
+  _saveDebounce?.cancel();
+  _saveDebounce = Timer(const Duration(milliseconds: 400), () async {
+    try {
+      final file = await _dataFile();
+      final data = {
+        'version': _version,
+        'updatedAt': DateTime.now().toIso8601String(),
+        'topics': _topics.values.map((t) => t.toJson()).toList(),
+        'comments': _comments.values.map((c) => c.toJson()).toList(),
+        'progress': _progress.values.map((p) => p.toJson()).toList(),
+      };
+      await file.writeAsString(jsonEncode(data));
+    } catch (e) {
+      print('[StudyRoom] _saveLocal error: $e');
+    }
+  });
+}
 
   // ─── Servidor ─────────────────────────────────────────────────────────────
 
@@ -1513,6 +1521,7 @@ class StudyRoomService {
 
   void dispose() {
     _syncTimer?.cancel();
+    _saveDebounce?.cancel();
     _syncTimer = null;
     _server?.close();
     _controller.close();
