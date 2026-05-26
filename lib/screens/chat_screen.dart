@@ -13,15 +13,20 @@ import '../services/auth_service.dart';
 import '../services/chat_service.dart';
 import '../services/peer_service.dart';
 
-const Color kNeon     = Color(0xFF00FFB2);
-const Color kPink     = Color(0xFFFF2D78);
-const Color kDark     = Color(0xFF020A06);
-const Color kDarkPanel = Color(0xFF050F0A);
+// ─── Paleta Matrix Terminal ───────────────────────────────────────────────────
+const Color kMatrix        = Color(0xFF00FF41);
+const Color kMatrixDim     = Color(0xFF00BB30);
+const Color kMatrixDark    = Color(0xFF003B0C);
+const Color kPink          = Color(0xFFFF2D78);
+const Color kPurple        = Color(0xFF9B00FF);
+const Color kDark          = Color(0xFF000000);
+const Color kDarkPanel     = Color(0xFF010801);
+const Color kCard          = Color(0xFF010F03);
+const Color kBorder        = Color(0xFF003B0C);
+const Color kTextPrimary   = Color(0xFFCCFFD6);
+const Color kTextSecondary = Color(0xFF3D7A47);
 
 class ChatScreen extends StatefulWidget {
-  // Para chat privado: pasar recipientId (userId)
-  // Para broadcast: recipientId == null y groupId == null
-  // Para grupo: groupId != null
   final String? recipientId;
   final String? groupId;
   final String peerName;
@@ -37,16 +42,20 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
-  final _chat  = ChatService();
-  final _auth  = AuthService();
-  final _peer  = PeerService();
-  final _ctrl  = TextEditingController();
+class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
+  final _chat   = ChatService();
+  final _auth   = AuthService();
+  final _peer   = PeerService();
+  final _ctrl   = TextEditingController();
   final _scroll = ScrollController();
 
   StreamSubscription<ChatEvent>? _sub;
   List<Message> _messages = [];
   bool _initialized = false;
+
+  late AnimationController _scanCtrl;
+  late AnimationController _glowCtrl;
+  late AnimationController _pulseCtrl;
 
   bool get _isBroadcast => widget.recipientId == null && widget.groupId == null;
   bool get _isGroup     => widget.groupId != null;
@@ -55,11 +64,26 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+
+    _scanCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 5),
+    )..repeat();
+
+    _glowCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1400),
+    )..repeat(reverse: true);
+
+    _pulseCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+
     _init();
   }
 
   Future<void> _init() async {
-    // Esperar usuario logueado
     int tries = 0;
     while (_auth.currentUser == null && tries++ < 30) {
       await Future.delayed(const Duration(milliseconds: 100));
@@ -75,70 +99,60 @@ class _ChatScreenState extends State<ChatScreen> {
 
     if (mounted) setState(() => _initialized = true);
     _scrollToBottom();
-
     _sub = _chat.events.listen(_onChatEvent);
   }
 
- void _onChatEvent(ChatEvent event) {
-  if (!mounted) return;
-  switch (event.type) {
-    case 'message':
-      final msg = event.data as Message;
-      if (!_isForThisChat(msg)) return;
-      if (_messages.any((m) => m.id == msg.id)) return;
-      setState(() => _messages.add(msg));
-      _scrollToBottom();
-      break;
+  void _onChatEvent(ChatEvent event) {
+    if (!mounted) return;
+    switch (event.type) {
+      case 'message':
+        final msg = event.data as Message;
+        if (!_isForThisChat(msg)) return;
+        if (_messages.any((m) => m.id == msg.id)) return;
+        setState(() => _messages.add(msg));
+        _scrollToBottom();
+        break;
 
-    case 'message_edited':
-      final data = event.data as Map<String, dynamic>;
-      final id = data['messageId'] as String;
-      final newContent = data['newContent'] as String;
-      setState(() {
-        final idx = _messages.indexWhere((m) => m.id == id);
-        if (idx != -1) {
-          // Reemplazar mensaje completo para forzar rebuild del widget
-          final old = _messages[idx];
-          _messages[idx] = Message(
-            id: old.id,
-            senderId: old.senderId,
-            senderUsername: old.senderUsername,
-            senderIp: old.senderIp,
-            type: old.type,
-            content: newContent,
-            fileName: old.fileName,
-            fileSize: old.fileSize,
-            timestamp: old.timestamp,
-            isMe: old.isMe,
-            groupId: old.groupId,
-            recipientId: old.recipientId,
-            recipientUsername: old.recipientUsername,
-            isEdited: old.isEdited,
-            isBackgroundVideo: old.isBackgroundVideo,
-          );
-        } else {
-          // El mensaje no está en la lista aún (llegó por sync mientras
-          // el chat estaba cerrado y se abrió después). No hacer nada,
-          // se cargará correctamente cuando se abra el chat.
-        }
-      });
-      break;
+      case 'message_edited':
+        final data = event.data as Map<String, dynamic>;
+        final id = data['messageId'] as String;
+        final newContent = data['newContent'] as String;
+        setState(() {
+          final idx = _messages.indexWhere((m) => m.id == id);
+          if (idx != -1) {
+            final old = _messages[idx];
+            _messages[idx] = Message(
+              id: old.id,
+              senderId: old.senderId,
+              senderUsername: old.senderUsername,
+              senderIp: old.senderIp,
+              type: old.type,
+              content: newContent,
+              fileName: old.fileName,
+              fileSize: old.fileSize,
+              timestamp: old.timestamp,
+              isMe: old.isMe,
+              groupId: old.groupId,
+              recipientId: old.recipientId,
+              recipientUsername: old.recipientUsername,
+              isEdited: true,
+              isBackgroundVideo: old.isBackgroundVideo,
+            );
+          }
+        });
+        break;
 
-    case 'message_deleted':
-      final id = event.data as String;
-      setState(() => _messages.removeWhere((m) => m.id == id));
-      break;
+      case 'message_deleted':
+        final id = event.data as String;
+        setState(() => _messages.removeWhere((m) => m.id == id));
+        break;
+    }
   }
-}
+
   bool _isForThisChat(Message msg) {
     final myId = _auth.currentUser?.id ?? '';
-    if (_isBroadcast) {
-      return msg.recipientId == null && msg.groupId == null;
-    }
-    if (_isGroup) {
-      return msg.groupId == widget.groupId;
-    }
-    // Privado
+    if (_isBroadcast) return msg.recipientId == null && msg.groupId == null;
+    if (_isGroup) return msg.groupId == widget.groupId;
     if (msg.groupId != null) return false;
     if (msg.senderId == myId && msg.recipientId == widget.recipientId) return true;
     if (msg.senderId == widget.recipientId && msg.recipientId == myId) return true;
@@ -163,7 +177,6 @@ class _ChatScreenState extends State<ChatScreen> {
     final text = _ctrl.text.trim();
     if (text.isEmpty) return;
     _ctrl.clear();
-
     if (_isBroadcast) {
       await _chat.sendBroadcast(text);
     } else if (_isGroup) {
@@ -190,7 +203,6 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_isBroadcast) {
       await _chat.sendBroadcastFile(path, type);
     } else if (_isGroup) {
-      // Para grupos con archivo reutilizamos broadcast por ahora
       await _chat.sendBroadcastFile(path, type);
     } else {
       await _chat.sendPrivateFile(widget.recipientId!, path, type);
@@ -210,78 +222,100 @@ class _ChatScreenState extends State<ChatScreen> {
     showModalBottomSheet(
       context: context,
       backgroundColor: kDarkPanel,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
-      ),
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (msg.type == MessageType.text)
-              ListTile(
-                leading: const Icon(Icons.copy, color: kNeon, size: 18),
-                title: const Text('Copiar texto',
-                    style: TextStyle(fontFamily: 'monospace', color: Colors.white)),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+      builder: (_) => Container(
+        decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: kMatrix.withOpacity(0.4))),
+        ),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header del sheet
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: Text(
+                  '> MSG_OPTIONS.exe',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    color: kMatrixDim,
+                    letterSpacing: 2,
+                  ),
+                ),
+              ),
+              Container(height: 1, color: kMatrixDark),
+              const SizedBox(height: 4),
+
+              if (msg.type == MessageType.text)
+                _SheetOption(
+                  icon: Icons.copy_outlined,
+                  label: 'COPY_TEXT',
+                  color: kMatrix,
+                  onTap: () {
+                    Navigator.pop(context);
+                    Clipboard.setData(ClipboardData(text: msg.content));
+                  },
+                ),
+
+              if (_canEdit(msg))
+                _SheetOption(
+                  icon: Icons.edit_outlined,
+                  label: 'EDIT_MSG',
+                  color: kMatrix,
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showEditDialog(msg);
+                  },
+                ),
+
+              if (msg.type != MessageType.text) ...[
+                _SheetOption(
+                  icon: Icons.open_in_new_outlined,
+                  label: 'OPEN_FILE',
+                  color: kMatrix,
+                  onTap: () { Navigator.pop(context); _openFile(msg); },
+                ),
+                _SheetOption(
+                  icon: Icons.share_outlined,
+                  label: 'SHARE_FILE',
+                  color: kMatrix,
+                  onTap: () { Navigator.pop(context); _shareFile(msg); },
+                ),
+                _SheetOption(
+                  icon: Icons.download_outlined,
+                  label: 'SAVE_TO_DEVICE',
+                  color: kMatrix,
+                  onTap: () { Navigator.pop(context); _saveFile(msg); },
+                ),
+              ],
+
+              _SheetOption(
+                icon: Icons.delete_outline,
+                label: 'DELETE_FOR_ME',
+                color: kTextSecondary,
                 onTap: () {
                   Navigator.pop(context);
-                  Clipboard.setData(ClipboardData(text: msg.content));
+                  _chat.deleteForMe(msg.id, _isBroadcast);
+                  setState(() => _messages.removeWhere((m) => m.id == msg.id));
                 },
               ),
 
-            if (_canEdit(msg))
-              ListTile(
-                leading: const Icon(Icons.edit, color: kNeon, size: 18),
-                title: const Text('Editar mensaje',
-                    style: TextStyle(fontFamily: 'monospace', color: Colors.white)),
-                onTap: () {
-                  Navigator.pop(context);
-                  _showEditDialog(msg);
-                },
-              ),
+              if (_canDeleteForEveryone(msg))
+                _SheetOption(
+                  icon: Icons.delete_forever_outlined,
+                  label: 'DELETE_FOR_ALL',
+                  color: kPink,
+                  onTap: () {
+                    Navigator.pop(context);
+                    _confirmDeleteForEveryone(msg);
+                  },
+                ),
 
-            if (msg.type != MessageType.text) ...[
-              ListTile(
-                leading: const Icon(Icons.open_in_new, color: kNeon, size: 18),
-                title: const Text('Abrir archivo',
-                    style: TextStyle(fontFamily: 'monospace', color: Colors.white)),
-                onTap: () { Navigator.pop(context); _openFile(msg); },
-              ),
-              ListTile(
-                leading: const Icon(Icons.share, color: kNeon, size: 18),
-                title: const Text('Compartir',
-                    style: TextStyle(fontFamily: 'monospace', color: Colors.white)),
-                onTap: () { Navigator.pop(context); _shareFile(msg); },
-              ),
-              ListTile(
-                leading: const Icon(Icons.download, color: kNeon, size: 18),
-                title: const Text('Guardar en dispositivo',
-                    style: TextStyle(fontFamily: 'monospace', color: Colors.white)),
-                onTap: () { Navigator.pop(context); _saveFile(msg); },
-              ),
+              const SizedBox(height: 8),
             ],
-
-            ListTile(
-              leading: const Icon(Icons.delete_outline, color: Colors.white38, size: 18),
-              title: const Text('Eliminar para mí',
-                  style: TextStyle(fontFamily: 'monospace', color: Colors.white60)),
-              onTap: () {
-                Navigator.pop(context);
-                _chat.deleteForMe(msg.id, _isBroadcast);
-                setState(() => _messages.removeWhere((m) => m.id == msg.id));
-              },
-            ),
-
-            if (_canDeleteForEveryone(msg))
-              ListTile(
-                leading: const Icon(Icons.delete_forever, color: kPink, size: 18),
-                title: const Text('Eliminar para todos',
-                    style: TextStyle(fontFamily: 'monospace', color: kPink)),
-                onTap: () {
-                  Navigator.pop(context);
-                  _confirmDeleteForEveryone(msg);
-                },
-              ),
-          ],
+          ),
         ),
       ),
     );
@@ -291,36 +325,47 @@ class _ChatScreenState extends State<ChatScreen> {
     final ctrl = TextEditingController(text: msg.content);
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: kDarkPanel,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(4),
-          side: BorderSide(color: kNeon.withOpacity(0.3)),
-        ),
-        title: const Text('EDITAR MENSAJE',
-            style: TextStyle(fontFamily: 'monospace', color: Colors.white)),
+      builder: (_) => _TerminalDialog(
+        title: 'EDIT_MSG.exe',
         content: TextField(
           controller: ctrl,
-          style: const TextStyle(fontFamily: 'monospace', color: Colors.white),
+          style: const TextStyle(
+            fontFamily: 'monospace',
+            color: kMatrix,
+            fontSize: 13,
+          ),
+          cursorColor: kMatrix,
           maxLines: 4,
           autofocus: true,
           decoration: InputDecoration(
             filled: true,
-            fillColor: Colors.white.withOpacity(0.05),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(2),
-              borderSide: BorderSide(color: kNeon.withOpacity(0.3)),
+            fillColor: kMatrixDark.withOpacity(0.3),
+            hintText: 'nuevo contenido...',
+            hintStyle: TextStyle(
+              fontFamily: 'monospace',
+              color: kTextSecondary.withOpacity(0.5),
+              fontSize: 12,
+            ),
+            enabledBorder: const OutlineInputBorder(
+              borderRadius: BorderRadius.zero,
+              borderSide: BorderSide(color: kBorder),
+            ),
+            focusedBorder: const OutlineInputBorder(
+              borderRadius: BorderRadius.zero,
+              borderSide: BorderSide(color: kMatrix),
             ),
           ),
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancelar',
-                style: TextStyle(fontFamily: 'monospace', color: Colors.white38)),
+          _TerminalButton(
+            label: 'CANCEL',
+            color: kTextSecondary,
+            onTap: () => Navigator.pop(context),
           ),
-          ElevatedButton(
-            onPressed: () async {
+          _TerminalButton(
+            label: 'SAVE',
+            color: kMatrix,
+            onTap: () async {
               final newContent = ctrl.text.trim();
               if (newContent.isEmpty || newContent == msg.content) {
                 Navigator.pop(context);
@@ -335,12 +380,6 @@ class _ChatScreenState extends State<ChatScreen> {
                 recipientId: widget.recipientId,
               );
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: kNeon.withOpacity(0.15),
-              foregroundColor: kNeon,
-            ),
-            child: const Text('GUARDAR',
-                style: TextStyle(fontFamily: 'monospace')),
           ),
         ],
       ),
@@ -350,38 +389,33 @@ class _ChatScreenState extends State<ChatScreen> {
   void _confirmDeleteForEveryone(Message msg) {
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: kDarkPanel,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(4),
-          side: BorderSide(color: kPink.withOpacity(0.3)),
-        ),
-        title: const Text('¿ELIMINAR PARA TODOS?',
-            style: TextStyle(fontFamily: 'monospace', color: kPink)),
+      builder: (_) => _TerminalDialog(
+        title: 'DELETE_FOR_ALL.exe',
+        accentColor: kPink,
         content: const Text(
-          'Esta acción no se puede deshacer.',
-          style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
+          '> WARNING: Esta acción no se puede deshacer.\n> Todos los peers perderán este mensaje.',
+          style: TextStyle(
+            fontFamily: 'monospace',
+            color: kTextSecondary,
+            fontSize: 12,
+          ),
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancelar',
-                style: TextStyle(fontFamily: 'monospace', color: Colors.white38)),
+          _TerminalButton(
+            label: 'ABORT',
+            color: kTextSecondary,
+            onTap: () => Navigator.pop(context),
           ),
-          ElevatedButton(
-            onPressed: () async {
+          _TerminalButton(
+            label: 'CONFIRM',
+            color: kPink,
+            onTap: () async {
               Navigator.pop(context);
               await _chat.deleteForEveryone(
                 messageId: msg.id,
                 isBroadcast: _isBroadcast,
               );
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: kPink.withOpacity(0.15),
-              foregroundColor: kPink,
-            ),
-            child: const Text('ELIMINAR',
-                style: TextStyle(fontFamily: 'monospace')),
           ),
         ],
       ),
@@ -394,10 +428,14 @@ class _ChatScreenState extends State<ChatScreen> {
     if (msg.type == MessageType.text) return;
     final file = File(msg.content);
     if (!file.existsSync()) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Archivo no disponible localmente',
-            style: TextStyle(fontFamily: 'monospace')),
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text(
+          '> ERROR: Archivo no disponible localmente',
+          style: TextStyle(fontFamily: 'monospace', fontSize: 11),
+        ),
         backgroundColor: kDarkPanel,
+        behavior: SnackBarBehavior.floating,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
       ));
       return;
     }
@@ -444,37 +482,65 @@ class _ChatScreenState extends State<ChatScreen> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Guardado en $dest',
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 11)),
+        content: Text(
+          '> SAVED: $dest',
+          style: const TextStyle(fontFamily: 'monospace', fontSize: 10),
+        ),
         backgroundColor: kDarkPanel,
-        duration: const Duration(seconds: 3),
+        behavior: SnackBarBehavior.floating,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
       ));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Error: $e',
-            style: const TextStyle(fontFamily: 'monospace')),
+        content: Text(
+          '> ERROR: $e',
+          style: const TextStyle(fontFamily: 'monospace', fontSize: 10),
+        ),
         backgroundColor: kDarkPanel,
       ));
     }
   }
 
-  // ─── Limpiar chat ─────────────────────────────────────────────────────────
+  // ─── Chat options ─────────────────────────────────────────────────────────
 
   void _showChatOptions() {
     showModalBottomSheet(
       context: context,
       backgroundColor: kDarkPanel,
-      builder: (_) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            leading: const Icon(Icons.delete_sweep, color: kPink, size: 18),
-            title: const Text('Limpiar chat',
-                style: TextStyle(fontFamily: 'monospace', color: kPink)),
-            onTap: () { Navigator.pop(context); _confirmClear(); },
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+      builder: (_) => Container(
+        decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: kPink.withOpacity(0.4))),
+        ),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: Text(
+                  '> CHAT_OPTIONS.exe',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    color: kMatrixDim,
+                    letterSpacing: 2,
+                  ),
+                ),
+              ),
+              Container(height: 1, color: kMatrixDark),
+              const SizedBox(height: 4),
+              _SheetOption(
+                icon: Icons.delete_sweep_outlined,
+                label: 'CLEAR_CHAT',
+                color: kPink,
+                onTap: () { Navigator.pop(context); _confirmClear(); },
+              ),
+              const SizedBox(height: 8),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -482,20 +548,27 @@ class _ChatScreenState extends State<ChatScreen> {
   void _confirmClear() {
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: kDarkPanel,
-        title: const Text('¿LIMPIAR CHAT?',
-            style: TextStyle(fontFamily: 'monospace', color: kPink)),
-        content: const Text('Solo en tu dispositivo.',
-            style: TextStyle(fontFamily: 'monospace', color: Colors.white38)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancelar',
-                style: TextStyle(fontFamily: 'monospace', color: Colors.white38)),
+      builder: (_) => _TerminalDialog(
+        title: 'CLEAR_CHAT.exe',
+        accentColor: kPink,
+        content: const Text(
+          '> WARNING: Solo en tu dispositivo.\n> Los mensajes del peer no se eliminan.',
+          style: TextStyle(
+            fontFamily: 'monospace',
+            color: kTextSecondary,
+            fontSize: 12,
           ),
-          ElevatedButton(
-            onPressed: () async {
+        ),
+        actions: [
+          _TerminalButton(
+            label: 'ABORT',
+            color: kTextSecondary,
+            onTap: () => Navigator.pop(context),
+          ),
+          _TerminalButton(
+            label: 'CLEAR',
+            color: kPink,
+            onTap: () async {
               Navigator.pop(context);
               if (_isBroadcast) {
                 await _chat.clearBroadcast();
@@ -506,180 +579,429 @@ class _ChatScreenState extends State<ChatScreen> {
               }
               setState(() => _messages.clear());
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: kPink.withOpacity(0.15),
-              foregroundColor: kPink,
-            ),
-            child: const Text('LIMPIAR',
-                style: TextStyle(fontFamily: 'monospace')),
           ),
         ],
       ),
     );
   }
 
-  // ─── Build ────────────────────────────────────────────────────────────────
+  // ─── Build principal ──────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+    final isMobile = size.width < 600;
+
     return Scaffold(
       backgroundColor: kDark,
-      body: SafeArea(
-        child: Column(
-          children: [
-            _buildAppBar(),
-            if (!_initialized)
-              const Expanded(
-                child: Center(child: CircularProgressIndicator(color: kNeon)),
-              )
-            else
-              Expanded(
-                child: ListView.builder(
-                  controller: _scroll,
-                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-                  itemCount: _messages.length,
-                  itemBuilder: (_, i) => _MessageBubble(
-                    msg: _messages[i],
-                    onLongPress: () => _showOptions(_messages[i]),
-                    onTapFile: () => _openFile(_messages[i]),
-                  ),
-                ),
-              ),
-            _buildInputBar(),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAppBar() {
-    final isGroup = _isGroup;
-    final isBroadcast = _isBroadcast;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 12, 16, 12),
-      decoration: BoxDecoration(
-        color: kDarkPanel,
-        border: Border(bottom: BorderSide(color: kNeon.withOpacity(0.2))),
-      ),
-      child: Row(
+      body: Stack(
         children: [
-          GestureDetector(
-            onTap: () => Navigator.pop(context),
-            child: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                border: Border.all(color: kNeon.withOpacity(0.3)),
-                borderRadius: BorderRadius.circular(2),
+          // Scanlines de fondo
+          Positioned.fill(
+            child: AnimatedBuilder(
+              animation: _scanCtrl,
+              builder: (_, __) => CustomPaint(
+                painter: _ChatScanlinePainter(_scanCtrl.value),
               ),
-              child: const Icon(Icons.arrow_back_ios_new, color: kNeon, size: 14),
             ),
           ),
-          const SizedBox(width: 12),
-          Icon(
-            isBroadcast || isGroup ? Icons.hub : Icons.person,
-            color: kNeon.withOpacity(0.6),
-            size: 18,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
+          SafeArea(
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  widget.peerName.toUpperCase(),
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                    letterSpacing: 2,
+                _buildAppBar(isMobile),
+                if (!_initialized)
+                  const Expanded(
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CircularProgressIndicator(
+                            color: kMatrix,
+                            strokeWidth: 1,
+                          ),
+                          SizedBox(height: 12),
+                          Text(
+                            '> LOADING_MESSAGES...',
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 11,
+                              color: kMatrixDim,
+                              letterSpacing: 2,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                else
+                  Expanded(
+                    child: _messages.isEmpty
+                        ? _buildEmptyChat()
+                        : ListView.builder(
+                            controller: _scroll,
+                            padding: EdgeInsets.fromLTRB(
+                              isMobile ? 10 : 16,
+                              12,
+                              isMobile ? 10 : 16,
+                              8,
+                            ),
+                            itemCount: _messages.length,
+                            itemBuilder: (_, i) {
+                              final msg = _messages[i];
+                              final prevMsg = i > 0 ? _messages[i - 1] : null;
+                              final showDateSep = prevMsg == null ||
+                                  !_sameDay(
+                                      prevMsg.timestamp, msg.timestamp);
+                              return Column(
+                                children: [
+                                  if (showDateSep)
+                                    _buildDateSeparator(msg.timestamp),
+                                  _MessageBubble(
+                                    msg: msg,
+                                    isMobile: isMobile,
+                                    onLongPress: () => _showOptions(msg),
+                                    onTapFile: () => _openFile(msg),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
                   ),
-                ),
-                Text(
-                  isBroadcast
-                      ? 'CANAL GLOBAL · BROADCAST'
-                      : isGroup
-                          ? 'GRUPO'
-                          : 'PRIVADO',
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 10,
-                    color: Colors.white38,
-                  ),
-                ),
+                _buildInputBar(isMobile),
               ],
             ),
-          ),
-          IconButton(
-            icon: Icon(Icons.more_vert, color: kNeon.withOpacity(0.7), size: 18),
-            onPressed: _showChatOptions,
-            padding: const EdgeInsets.all(8),
-            constraints: const BoxConstraints(),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildInputBar() {
+  bool _sameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  Widget _buildDateSeparator(DateTime dt) {
+    final now = DateTime.now();
+    String label;
+    if (_sameDay(dt, now)) {
+      label = 'HOY';
+    } else if (_sameDay(dt, now.subtract(const Duration(days: 1)))) {
+      label = 'AYER';
+    } else {
+      label =
+          '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: Container(
+              height: 1,
+              color: kMatrixDark,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Text(
+              '── $label ──',
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 9,
+                color: kTextSecondary,
+                letterSpacing: 2,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Container(
+              height: 1,
+              color: kMatrixDark,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyChat() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.terminal_outlined,
+            size: 40,
+            color: kMatrix.withOpacity(0.3),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            '> NO_MESSAGES_YET',
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 12,
+              color: kMatrixDim,
+              letterSpacing: 3,
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Escribe el primer mensaje...',
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 10,
+              color: kTextSecondary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAppBar(bool isMobile) {
+    return AnimatedBuilder(
+      animation: _glowCtrl,
+      builder: (_, __) {
+        final glow = 0.4 + _glowCtrl.value * 0.6;
+        final channelType = _isBroadcast
+            ? 'BROADCAST'
+            : _isGroup
+                ? 'GROUP'
+                : 'PRIVATE';
+
+        return Container(
+          padding: EdgeInsets.symmetric(
+            horizontal: isMobile ? 10 : 16,
+            vertical: isMobile ? 10 : 12,
+          ),
+          decoration: BoxDecoration(
+            color: kDarkPanel,
+            border: Border(
+              bottom: BorderSide(color: kMatrix.withOpacity(0.4)),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: kMatrix.withOpacity(0.06 * glow),
+                blurRadius: 16,
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              // Back
+              GestureDetector(
+                onTap: () => Navigator.pop(context),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: kMatrix.withOpacity(0.5)),
+                    color: kMatrixDark.withOpacity(0.3),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.arrow_back_ios_new,
+                          color: kMatrix, size: 12),
+                      const SizedBox(width: 4),
+                      const Text(
+                        'ESC',
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 10,
+                          color: kMatrix,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+
+              // Info del chat
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.peerName.toUpperCase(),
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: isMobile ? 13 : 15,
+                        fontWeight: FontWeight.bold,
+                        color: kTextPrimary,
+                        letterSpacing: 2,
+                        shadows: [
+                          Shadow(
+                            color: kMatrix.withOpacity(0.5 * glow),
+                            blurRadius: 8,
+                          ),
+                        ],
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Row(
+                      children: [
+                        AnimatedBuilder(
+                          animation: _pulseCtrl,
+                          builder: (_, __) => Container(
+                            width: 6,
+                            height: 6,
+                            margin: const EdgeInsets.only(right: 6),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: kMatrix,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: kMatrix.withOpacity(
+                                      0.6 + _pulseCtrl.value * 0.4),
+                                  blurRadius: 6,
+                                  spreadRadius: 1,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        Text(
+                          channelType,
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 9,
+                            color: kTextSecondary,
+                            letterSpacing: 2,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              // Opciones
+              GestureDetector(
+                onTap: _showChatOptions,
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                        color: kMatrix.withOpacity(0.3)),
+                  ),
+                  child: const Icon(
+                    Icons.more_vert,
+                    color: kMatrixDim,
+                    size: 16,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildInputBar(bool isMobile) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(8, 6, 8, 10),
+      padding: EdgeInsets.fromLTRB(
+        isMobile ? 8 : 12,
+        6,
+        isMobile ? 8 : 12,
+        isMobile ? 10 : 12,
+      ),
       decoration: BoxDecoration(
         color: kDarkPanel,
-        border: Border(top: BorderSide(color: kNeon.withOpacity(0.15))),
+        border: Border(
+          top: BorderSide(color: kMatrix.withOpacity(0.3)),
+        ),
       ),
       child: Row(
         children: [
-          IconButton(
-            icon: Icon(Icons.attach_file, color: kNeon.withOpacity(0.6)),
-            onPressed: _sendFile,
+          // Attach
+          GestureDetector(
+            onTap: _sendFile,
+            child: Container(
+              padding: const EdgeInsets.all(9),
+              margin: const EdgeInsets.only(right: 8),
+              decoration: BoxDecoration(
+                border: Border.all(color: kMatrixDark),
+                color: kMatrixDark.withOpacity(0.3),
+              ),
+              child: const Icon(
+                Icons.attach_file,
+                color: kMatrixDim,
+                size: 16,
+              ),
+            ),
           ),
+
+          // Input
           Expanded(
             child: TextField(
               controller: _ctrl,
               style: const TextStyle(
                 fontFamily: 'monospace',
-                color: Colors.white,
+                color: kMatrix,
                 fontSize: 13,
               ),
+              cursorColor: kMatrix,
               decoration: InputDecoration(
-                hintText: '> escribir mensaje...',
-                hintStyle: const TextStyle(
+                hintText: '>> escribir...',
+                hintStyle: TextStyle(
                   fontFamily: 'monospace',
-                  color: Colors.white24,
-                  fontSize: 13,
+                  color: kTextSecondary.withOpacity(0.6),
+                  fontSize: 12,
                 ),
                 filled: true,
-                fillColor: Colors.white.withOpacity(0.04),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(2),
-                  borderSide: BorderSide(color: kNeon.withOpacity(0.2)),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(2),
-                  borderSide: BorderSide(color: kNeon.withOpacity(0.15)),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(2),
-                  borderSide: BorderSide(color: kNeon.withOpacity(0.5)),
-                ),
+                fillColor: kCard,
                 isDense: true,
-                contentPadding: const EdgeInsets.all(10),
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 10),
+                enabledBorder: const OutlineInputBorder(
+                  borderRadius: BorderRadius.zero,
+                  borderSide: BorderSide(color: kBorder),
+                ),
+                focusedBorder: const OutlineInputBorder(
+                  borderRadius: BorderRadius.zero,
+                  borderSide: BorderSide(color: kMatrix),
+                ),
               ),
               onSubmitted: (_) => _sendText(),
             ),
           ),
-          const SizedBox(width: 4),
+
+          // Send
           GestureDetector(
             onTap: _sendText,
-            child: Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: kNeon.withOpacity(0.1),
-                border: Border.all(color: kNeon.withOpacity(0.4)),
-                borderRadius: BorderRadius.circular(2),
+            child: AnimatedBuilder(
+              animation: _glowCtrl,
+              builder: (_, __) => Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 9),
+                margin: const EdgeInsets.only(left: 8),
+                decoration: BoxDecoration(
+                  border: Border.all(
+                      color: kMatrix.withOpacity(0.7)),
+                  color: kMatrixDark.withOpacity(0.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: kMatrix.withOpacity(
+                          0.15 + _glowCtrl.value * 0.1),
+                      blurRadius: 8,
+                    ),
+                  ],
+                ),
+                child: const Text(
+                  'TX',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    color: kMatrix,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1,
+                  ),
+                ),
               ),
-              child: const Icon(Icons.send, color: kNeon, size: 18),
             ),
           ),
         ],
@@ -692,122 +1014,183 @@ class _ChatScreenState extends State<ChatScreen> {
     _sub?.cancel();
     _ctrl.dispose();
     _scroll.dispose();
+    _scanCtrl.dispose();
+    _glowCtrl.dispose();
+    _pulseCtrl.dispose();
     super.dispose();
   }
 }
 
-// ─── Burbuja de mensaje ───────────────────────────────────────────────────────
+// ─── Burbuja de mensaje estilo terminal ───────────────────────────────────────
+
 class _MessageBubble extends StatelessWidget {
   final Message msg;
+  final bool isMobile;
   final VoidCallback? onLongPress;
   final VoidCallback? onTapFile;
 
   const _MessageBubble({
     required this.msg,
+    required this.isMobile,
     this.onLongPress,
     this.onTapFile,
   });
 
   @override
-Widget build(BuildContext context) {
-  final isMe = msg.isMe;
-  final displayName = isMe
-      ? (msg.senderUsername.isNotEmpty ? msg.senderUsername : 'TÚ')
-      : (msg.senderUsername.isNotEmpty ? msg.senderUsername : msg.senderIp);
+  Widget build(BuildContext context) {
+    final isMe = msg.isMe;
+    final users = AuthService().users
+        .where((u) => u.username == msg.senderUsername)
+        .toList();
+    final user = users.isNotEmpty ? users.first : null;
 
-  // Buscar usuario para el avatar
-  final users = AuthService().users
-      .where((u) => u.username == msg.senderUsername)
-      .toList();
-  final user = users.isNotEmpty ? users.first : null;
+    final prefix = isMe ? '>>' : '<<';
+    final prefixColor = isMe ? kMatrix : kPurple;
+    final borderColor = isMe
+        ? kMatrix.withOpacity(0.35)
+        : kPurple.withOpacity(0.25);
+    final bgColor = isMe
+        ? kMatrix.withOpacity(0.05)
+        : kPurple.withOpacity(0.04);
 
-  return GestureDetector(
-    onLongPress: onLongPress,
-    child: Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(
-        mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          if (!isMe) ...[
-            UserAvatar(user: user, size: 28),
-            const SizedBox(width: 6),
-          ],
-          Container(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-            constraints: BoxConstraints(
-              maxWidth: MediaQuery.of(context).size.width * 0.72,
-            ),
-            decoration: BoxDecoration(
-              color: isMe
-                  ? kNeon.withOpacity(0.12)
-                  : Colors.white.withOpacity(0.05),
-              border: Border.all(
-                color: isMe ? kNeon.withOpacity(0.3) : Colors.white12,
-              ),
-              borderRadius: BorderRadius.only(
-                topLeft: const Radius.circular(4),
-                topRight: const Radius.circular(4),
-                bottomLeft: Radius.circular(isMe ? 4 : 0),
-                bottomRight: Radius.circular(isMe ? 0 : 4),
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment:
-                  isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-              children: [
-                Text(
-                  displayName.toUpperCase(),
-                  style: TextStyle(
-                    fontFamily: 'monospace', fontSize: 9,
-                    color: isMe ? kNeon : kNeon.withOpacity(0.6),
-                    letterSpacing: 1, fontWeight: FontWeight.bold,
-                  ),
+    return GestureDetector(
+      onLongPress: onLongPress,
+      child: Padding(
+        padding: EdgeInsets.symmetric(vertical: isMobile ? 3 : 4),
+        child: Row(
+          mainAxisAlignment:
+              isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            // Avatar izquierdo (otros)
+            if (!isMe) ...[
+              _buildAvatar(user, isMe: false),
+              SizedBox(width: isMobile ? 6 : 8),
+            ],
+
+            // Burbuja
+            Flexible(
+              child: Container(
+                constraints: BoxConstraints(
+                  maxWidth: MediaQuery.of(context).size.width *
+                      (isMobile ? 0.75 : 0.65),
                 ),
-                const SizedBox(height: 4),
-                _buildContent(context),
-                const SizedBox(height: 4),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
+                decoration: BoxDecoration(
+                  color: bgColor,
+                  border: Border.all(color: borderColor),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (msg.isEdited) ...[
-                      Text('editado', style: TextStyle(
-                        fontFamily: 'monospace', fontSize: 8,
-                        color: isMe
-                            ? kNeon.withOpacity(0.35)
-                            : Colors.white.withOpacity(0.2),
-                        fontStyle: FontStyle.italic,
-                      )),
-                      const SizedBox(width: 4),
-                    ],
-                    Text(
-                      '${msg.timestamp.hour.toString().padLeft(2, '0')}:'
-                      '${msg.timestamp.minute.toString().padLeft(2, '0')}',
-                      style: TextStyle(
-                        fontFamily: 'monospace', fontSize: 9,
-                        color: isMe ? kNeon.withOpacity(0.4) : Colors.white24,
+                    // Header terminal
+                    Container(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: isMobile ? 8 : 10,
+                        vertical: 4,
                       ),
+                      decoration: BoxDecoration(
+                        color: isMe
+                            ? kMatrix.withOpacity(0.08)
+                            : kPurple.withOpacity(0.08),
+                        border: Border(
+                          bottom: BorderSide(color: borderColor),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            prefix,
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 10,
+                              color: prefixColor,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            msg.senderUsername.isNotEmpty
+                                ? msg.senderUsername.toUpperCase()
+                                : (isMe ? 'TÚ' : msg.senderIp),
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 9,
+                              color: prefixColor,
+                              letterSpacing: 1,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const Spacer(),
+                          Text(
+                            '${msg.timestamp.hour.toString().padLeft(2, '0')}:${msg.timestamp.minute.toString().padLeft(2, '0')}',
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 9,
+                              color: kTextSecondary,
+                            ),
+                          ),
+                          if (msg.isEdited) ...[
+                            const SizedBox(width: 4),
+                            const Text(
+                              '[E]',
+                              style: TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 8,
+                                color: kTextSecondary,
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+
+                    // Contenido
+                    Padding(
+                      padding: EdgeInsets.all(isMobile ? 8 : 10),
+                      child: _buildContent(context),
                     ),
                   ],
                 ),
-              ],
+              ),
             ),
-          ),
-          if (isMe) ...[
-            const SizedBox(width: 6),
-            UserAvatar.me(size: 28),
+
+            // Avatar derecho (yo)
+            if (isMe) ...[
+              SizedBox(width: isMobile ? 6 : 8),
+              _buildAvatar(user, isMe: true),
+            ],
           ],
-        ],
+        ),
       ),
-    ),
-  );
-}
+    );
+  }
+
+  Widget _buildAvatar(dynamic user, {required bool isMe}) {
+    final size = isMobile ? 34.0 : 40.0;
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: isMe
+              ? kMatrix.withOpacity(0.5)
+              : kPurple.withOpacity(0.4),
+        ),
+      ),
+      child: UserAvatar(
+        user: user,
+        size: size,
+        borderColor: Colors.transparent,
+      ),
+    );
+  }
 
   Widget _buildContent(BuildContext context) {
     const textStyle = TextStyle(
       fontFamily: 'monospace',
-      color: Colors.white,
+      color: kTextPrimary,
       fontSize: 13,
+      height: 1.4,
     );
 
     switch (msg.type) {
@@ -819,33 +1202,68 @@ Widget build(BuildContext context) {
         if (file.existsSync()) {
           return GestureDetector(
             onTap: onTapFile,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: Image.file(
-                file,
-                height: 180,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) =>
-                    _fileChip(Icons.image_outlined, msg.fileName ?? 'imagen'),
-              ),
+            child: Stack(
+              children: [
+                ClipRect(
+                  child: Image.file(
+                    file,
+                    height: 180,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => _fileChip(
+                      Icons.image_outlined,
+                      msg.fileName ?? 'imagen',
+                    ),
+                  ),
+                ),
+                Positioned(
+                  bottom: 6,
+                  right: 6,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 2),
+                    color: kDark.withOpacity(0.7),
+                    child: const Text(
+                      'TAP_TO_OPEN',
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 8,
+                        color: kMatrix,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           );
         }
-        return _fileChip(Icons.image_outlined, msg.fileName ?? 'imagen',
-            unavailable: true);
+        return _fileChip(
+          Icons.image_outlined,
+          msg.fileName ?? 'imagen',
+          unavailable: true,
+        );
 
       default:
         final available = File(msg.content).existsSync();
         IconData icon;
         switch (msg.type) {
-          case MessageType.video: icon = Icons.movie_outlined; break;
-          case MessageType.audio: icon = Icons.graphic_eq; break;
-          default: icon = Icons.attach_file;
+          case MessageType.video:
+            icon = Icons.movie_outlined;
+            break;
+          case MessageType.audio:
+            icon = Icons.graphic_eq;
+            break;
+          default:
+            icon = Icons.attach_file;
         }
         return GestureDetector(
           onTap: available ? onTapFile : null,
-          child: _fileChip(icon, msg.fileName ?? 'archivo',
-              tappable: available, unavailable: !available),
+          child: _fileChip(
+            icon,
+            msg.fileName ?? 'archivo',
+            tappable: available,
+            unavailable: !available,
+          ),
         );
     }
   }
@@ -857,36 +1275,225 @@ Widget build(BuildContext context) {
     bool unavailable = false,
   }) {
     final color = unavailable
-        ? Colors.white24
+        ? kTextSecondary
         : tappable
-            ? kNeon
-            : kNeon.withOpacity(0.8);
+            ? kMatrix
+            : kMatrixDim;
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        border: Border.all(color: color.withOpacity(0.3)),
-        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withOpacity(0.4)),
+        color: color.withOpacity(0.05),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 16, color: color),
+          Icon(icon, size: 14, color: color),
           const SizedBox(width: 8),
           Flexible(
             child: Text(
               name,
               style: TextStyle(
-                  fontFamily: 'monospace', color: color, fontSize: 12),
+                fontFamily: 'monospace',
+                color: color,
+                fontSize: 11,
+              ),
               overflow: TextOverflow.ellipsis,
             ),
           ),
+          if (tappable) ...[
+            const SizedBox(width: 8),
+            Text(
+              '[OPEN]',
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 9,
+                color: color.withOpacity(0.7),
+              ),
+            ),
+          ],
           if (unavailable) ...[
             const SizedBox(width: 8),
-            const Icon(Icons.cloud_off, size: 12, color: Colors.white24),
+            const Icon(Icons.cloud_off, size: 11, color: kTextSecondary),
           ],
         ],
       ),
     );
   }
+}
+
+// ─── Widgets compartidos ──────────────────────────────────────────────────────
+
+class _SheetOption extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _SheetOption({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      onTap: onTap,
+      dense: true,
+      leading: Icon(icon, color: color, size: 16),
+      title: Text(
+        '> $label',
+        style: TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 12,
+          color: color,
+          letterSpacing: 1,
+        ),
+      ),
+    );
+  }
+}
+
+class _TerminalDialog extends StatelessWidget {
+  final String title;
+  final Widget content;
+  final List<Widget> actions;
+  final Color accentColor;
+
+  const _TerminalDialog({
+    required this.title,
+    required this.content,
+    required this.actions,
+    this.accentColor = kMatrix,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: kDarkPanel,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border.all(color: accentColor.withOpacity(0.5)),
+        ),
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(
+                  '> ',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    color: accentColor,
+                    fontSize: 13,
+                  ),
+                ),
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 13,
+                    color: accentColor,
+                    letterSpacing: 2,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Container(height: 1, color: accentColor.withOpacity(0.3)),
+            const SizedBox(height: 16),
+            content,
+            const SizedBox(height: 20),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: actions
+                  .map((a) => Padding(
+                        padding: const EdgeInsets.only(left: 8),
+                        child: a,
+                      ))
+                  .toList(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TerminalButton extends StatelessWidget {
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _TerminalButton({
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          border: Border.all(color: color.withOpacity(0.6)),
+          color: color.withOpacity(0.08),
+        ),
+        child: Text(
+          '[$label]',
+          style: TextStyle(
+            fontFamily: 'monospace',
+            fontSize: 11,
+            color: color,
+            letterSpacing: 1,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Scanlines painter ────────────────────────────────────────────────────────
+
+class _ChatScanlinePainter extends CustomPainter {
+  final double t;
+  _ChatScanlinePainter(this.t);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final linePaint = Paint()
+      ..color = const Color(0xFF00FF41).withOpacity(0.018);
+    for (double y = 0; y < size.height; y += 4) {
+      canvas.drawRect(Rect.fromLTWH(0, y, size.width, 1.5), linePaint);
+    }
+
+    final scanY = (t * size.height * 1.2) % (size.height + 60) - 30;
+    final scanPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          Colors.transparent,
+          const Color(0xFF00FF41).withOpacity(0.025),
+          const Color(0xFF00FF41).withOpacity(0.04),
+          const Color(0xFF00FF41).withOpacity(0.025),
+          Colors.transparent,
+        ],
+      ).createShader(
+          Rect.fromLTWH(0, scanY.toDouble(), size.width, 60));
+    canvas.drawRect(
+        Rect.fromLTWH(0, scanY.toDouble(), size.width, 60), scanPaint);
+  }
+
+  @override
+  bool shouldRepaint(_ChatScanlinePainter old) => old.t != t;
 }
