@@ -165,12 +165,13 @@ class _NookCanvasScreenState extends State<NookCanvasScreen>
 
   // ─── Guardar ─────────────────────────────────────────────────────────────
 
-  Future<void> _saveCanvas() async {
-    if (_nook == null) return;
-    await _service.upsertNook(_nook!);
-    setState(() => _isDirty = false);
-    _showMsg('Canvas guardado ✓');
-  }
+ Future<void> _saveCanvas() async {
+  if (_nook == null) return;
+  await _service.upsertNook(_nook!);
+  if (!mounted) return; // ← este guard faltaba
+  setState(() => _isDirty = false);
+  _showMsg('Canvas guardado ✓');
+}
 
   void _showMsg(String msg) {
     if (!mounted) return;
@@ -872,13 +873,13 @@ List<Widget> _buildElements(double scale) {
   Widget _buildRiddleInput(
     NookElement el, double w, double h, double scale) {
   final solved = _isRiddleSolved(el.id);
-  // Usar colores guardados o defaults
   final bgColor = el.textColor != null
       ? Color(el.textColor!).withOpacity(0.85)
       : Colors.black.withOpacity(0.65);
   final textColor = el.buttonColor != null
       ? Color(el.buttonColor!)
       : Colors.white70;
+  final fontSize = (el.fontSize ?? 12) * scale;
 
   _riddleControllers.putIfAbsent(el.id, () => TextEditingController());
   final ctrl = _riddleControllers[el.id]!;
@@ -897,23 +898,32 @@ List<Widget> _buildElements(double scale) {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(el.riddleQuestion ?? '',
-              style: TextStyle(
+          Flexible(
+            child: SingleChildScrollView(
+              child: Text(
+                el.riddleQuestion ?? '',
+                style: TextStyle(
                   fontFamily: 'monospace',
-                  fontSize: 12 * scale,
+                  fontSize: fontSize,
                   color: textColor,
-                  height: 1.3)),
+                  height: 1.3,
+                ),
+              ),
+            ),
+          ),
           SizedBox(height: 4 * scale),
           Row(children: [
-            Icon(Icons.check_circle,
-                color: Colors.green, size: 14 * scale),
+            Icon(Icons.check_circle, color: Colors.green, size: 14 * scale),
             SizedBox(width: 4 * scale),
-            Text('¡RESUELTO!',
-                style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 10 * scale,
-                    color: Colors.green,
-                    letterSpacing: 1)),
+            Text(
+              '¡RESUELTO!',
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 10 * scale,
+                color: Colors.green,
+                letterSpacing: 1,
+              ),
+            ),
           ]),
         ],
       ),
@@ -933,19 +943,22 @@ List<Widget> _buildElements(double scale) {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // Pregunta scrolleable para textos largos
         Flexible(
-          child: Text(
-            el.riddleQuestion ?? '',
-            style: TextStyle(
+          child: SingleChildScrollView(
+            child: Text(
+              el.riddleQuestion ?? '',
+              style: TextStyle(
                 fontFamily: 'monospace',
-                fontSize: 12 * scale,
+                fontSize: fontSize,
                 color: textColor,
-                height: 1.3),
-            overflow: TextOverflow.ellipsis,
-            maxLines: 2,
+                height: 1.3,
+              ),
+            ),
           ),
         ),
         SizedBox(height: 6 * scale),
+        // Input de respuesta
         Row(
           children: [
             Expanded(
@@ -954,30 +967,29 @@ List<Widget> _buildElements(double scale) {
                 child: TextField(
                   controller: ctrl,
                   style: TextStyle(
-                      fontFamily: 'monospace',
-                      color: Colors.white,
-                      fontSize: 12 * scale),
+                    fontFamily: 'monospace',
+                    color: Colors.white,
+                    fontSize: 12 * scale,
+                  ),
                   decoration: InputDecoration(
                     contentPadding: EdgeInsets.symmetric(
-                        horizontal: 8 * scale,
-                        vertical: 4 * scale),
+                      horizontal: 8 * scale,
+                      vertical: 4 * scale,
+                    ),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(4),
-                      borderSide: BorderSide(
-                          color: kNW1.withOpacity(0.3)),
+                      borderSide: BorderSide(color: kNW1.withOpacity(0.3)),
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(4),
-                      borderSide: BorderSide(
-                          color: kNW1.withOpacity(0.3)),
+                      borderSide: BorderSide(color: kNW1.withOpacity(0.3)),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(4),
                       borderSide: const BorderSide(color: kNW2),
                     ),
                     hintText: '...',
-                    hintStyle:
-                        const TextStyle(color: Colors.white24),
+                    hintStyle: const TextStyle(color: Colors.white24),
                     filled: true,
                     fillColor: Colors.black26,
                   ),
@@ -990,20 +1002,23 @@ List<Widget> _buildElements(double scale) {
               onTap: () => _checkRiddle(el, ctrl.text),
               child: Container(
                 padding: EdgeInsets.symmetric(
-                    horizontal: 10 * scale,
-                    vertical: 6 * scale),
+                  horizontal: 10 * scale,
+                  vertical: 6 * scale,
+                ),
                 decoration: BoxDecoration(
                   color: kNW1.withOpacity(0.25),
-                  border:
-                      Border.all(color: kNW1.withOpacity(0.5)),
+                  border: Border.all(color: kNW1.withOpacity(0.5)),
                   borderRadius: BorderRadius.circular(4),
                 ),
-                child: Text('OK',
-                    style: TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 10 * scale,
-                        color: kNW2,
-                        letterSpacing: 1)),
+                child: Text(
+                  'OK',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 10 * scale,
+                    color: kNW2,
+                    letterSpacing: 1,
+                  ),
+                ),
               ),
             ),
           ],
@@ -1541,18 +1556,16 @@ List<Widget> _buildElements(double scale) {
   Future<void> _editRiddleDialog(NookElement el) async {
   final qCtrl = TextEditingController(text: el.riddleQuestion);
   final aCtrl = TextEditingController(text: el.riddleAnswer);
+  double fontSize = el.fontSize ?? 12;
   Color bgColor = el.textColor != null
       ? Color(el.textColor!)
       : Colors.black.withOpacity(0.65);
   Color questionColor = el.buttonColor != null
       ? Color(el.buttonColor!)
       : Colors.white70;
-  // ID del portal que este acertijo desbloquea (si hay uno configurado)
-  String? linkedButtonId = el.unlocksButtonId?.isNotEmpty == true
-      ? el.unlocksButtonId
-      : null;
+  String? linkedButtonId =
+      el.unlocksButtonId?.isNotEmpty == true ? el.unlocksButtonId : null;
 
-  // Portales disponibles en el canvas para vincular
   final buttons = _nook!.elements
       .where((e) => e.type == NookElementType.linkButton)
       .toList();
@@ -1573,7 +1586,7 @@ List<Widget> _buildElements(double scale) {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ── Pregunta ─────────────────────────────────────────
+              // ── Pregunta ──────────────────────────────────────────
               const Text(
                 'PREGUNTA',
                 style: TextStyle(
@@ -1585,7 +1598,7 @@ List<Widget> _buildElements(double scale) {
               const SizedBox(height: 6),
               TextField(
                 controller: qCtrl,
-                maxLines: 3,
+                maxLines: 5,
                 autofocus: true,
                 style: const TextStyle(
                     fontFamily: 'monospace', color: Colors.white),
@@ -1600,6 +1613,48 @@ List<Widget> _buildElements(double scale) {
                           BorderSide(color: kNW1.withOpacity(0.3))),
                   focusedBorder: const OutlineInputBorder(
                       borderSide: BorderSide(color: kNW2)),
+                ),
+              ),
+              const SizedBox(height: 14),
+
+              // ── Tamaño de fuente ──────────────────────────────────
+              Text(
+                'TAMAÑO DE FUENTE: ${fontSize.round()}pt',
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 9,
+                  color: Colors.white38,
+                  letterSpacing: 2,
+                ),
+              ),
+              Slider(
+                value: fontSize,
+                min: 8,
+                max: 48,
+                divisions: 40,
+                activeColor: kNW2,
+                inactiveColor: kNW2.withOpacity(0.2),
+                onChanged: (v) => setSt(() => fontSize = v),
+              ),
+              // Preview del texto con el tamaño elegido
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.black26,
+                  border: Border.all(color: kNW1.withOpacity(0.2)),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  qCtrl.text.isEmpty
+                      ? 'Preview del acertijo...'
+                      : qCtrl.text,
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: fontSize,
+                    color: questionColor,
+                    height: 1.3,
+                  ),
                 ),
               ),
               const SizedBox(height: 14),
@@ -1651,7 +1706,7 @@ List<Widget> _buildElements(double scale) {
               ),
               const SizedBox(height: 16),
 
-              // ── Color de fondo del widget ─────────────────────────
+              // ── Color de fondo ────────────────────────────────────
               const Text(
                 'COLOR DE FONDO',
                 style: TextStyle(
@@ -1714,7 +1769,7 @@ List<Widget> _buildElements(double scale) {
               ),
               const SizedBox(height: 14),
 
-              // ── Color del texto de la pregunta ────────────────────
+              // ── Color de texto ────────────────────────────────────
               const Text(
                 'COLOR DE TEXTO',
                 style: TextStyle(
@@ -1818,8 +1873,7 @@ List<Widget> _buildElements(double scale) {
                       isExpanded: true,
                       dropdownColor: kNWPanel,
                       style: const TextStyle(
-                          fontFamily: 'monospace',
-                          color: Colors.white),
+                          fontFamily: 'monospace', color: Colors.white),
                       items: [
                         const DropdownMenuItem(
                           value: null,
@@ -1866,30 +1920,28 @@ List<Widget> _buildElements(double scale) {
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: kNW1),
             onPressed: () {
-              // Guardar el acertijo actualizado
               final updatedRiddle = el.copyWith(
                 riddleQuestion: qCtrl.text,
                 riddleAnswer: aCtrl.text,
+                fontSize: fontSize,
                 textColor: bgColor.value,
                 buttonColor: questionColor.value,
                 unlocksButtonId: linkedButtonId ?? '',
               );
               _updateElement(updatedRiddle);
 
-              // Si se vinculó un portal, actualizar su requiredRiddleId
               if (linkedButtonId != null) {
                 final btn = _nook!.elements
                     .firstWhere((e) => e.id == linkedButtonId);
-                _updateElement(
-                    btn.copyWith(requiredRiddleId: el.id));
+                _updateElement(btn.copyWith(requiredRiddleId: el.id));
               } else {
-                // Si se desvinculó, limpiar el requiredRiddleId del portal anterior
-                final prevBtn = _nook!.elements.where((e) =>
-                    e.type == NookElementType.linkButton &&
-                    e.requiredRiddleId == el.id).toList();
+                final prevBtn = _nook!.elements
+                    .where((e) =>
+                        e.type == NookElementType.linkButton &&
+                        e.requiredRiddleId == el.id)
+                    .toList();
                 for (final b in prevBtn) {
-                  _updateElement(b.copyWith(
-                      clearRequiredRiddle: true));
+                  _updateElement(b.copyWith(clearRequiredRiddle: true));
                 }
               }
               Navigator.pop(context);
@@ -1903,7 +1955,6 @@ List<Widget> _buildElements(double scale) {
     ),
   );
 }
-
   // ─── Toolbar de edición ───────────────────────────────────────────────────
 
   Widget _buildEditToolbar() {

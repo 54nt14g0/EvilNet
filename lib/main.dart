@@ -17,37 +17,89 @@ void main() async {
 
 Future<void> _setupFirewall() async {
   final rules = {
+    'EvilNet Auth':        '9001',
     'EvilNet PeerService': '45000',
-    'EvilNet StudyRoom': '45001',
-    'EvilNet Material': '45002',
-    'EvilNet Chat': '45003',
-    'EvilNet Universe' : '45004',
-    'EvilNet Nooks': '45005',
+    'EvilNet StudyRoom':   '45001',
+    'EvilNet Material':    '45002',
+    'EvilNet Chat':        '45003',
+    'EvilNet Universe':    '45004',
+    'EvilNet Nooks':       '45005',
   };
-  // Construir un script de PowerShell que agregue todas las reglas
-  final scriptLines = rules.entries
-      .map(
-        (e) =>
-            '''
-if (-not (Get-NetFirewallRule -DisplayName '${e.key}' -ErrorAction SilentlyContinue)) {
-  New-NetFirewallRule -DisplayName '${e.key}' -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${e.value}
-  Write-Host 'Added: ${e.key}'
+
+  final scriptLines = StringBuffer();
+
+  for (final entry in rules.entries) {
+    scriptLines.writeln('''
+\$exists = Get-NetFirewallRule -DisplayName '${entry.key}' -ErrorAction SilentlyContinue
+if (-not \$exists) {
+  New-NetFirewallRule `
+    -DisplayName '${entry.key}' `
+    -Direction Inbound `
+    -Action Allow `
+    -Protocol TCP `
+    -LocalPort ${entry.value} `
+    -Profile Any `
+    -InterfaceType Any | Out-Null
+  Write-Host '✅ Creada regla: ${entry.key} puerto ${entry.value}'
 } else {
-  Write-Host 'Exists: ${e.key}'
+  Write-Host '⏭️ Ya existe: ${entry.key}'
 }
-''',
-      )
-      .join('\n');
+''');
+  }
+
+  // Al final del script, marcar que terminó
+  scriptLines.writeln('Write-Host "FIREWALL_DONE"');
 
   try {
-    // Ejecutar PowerShell elevado
-    final result = await Process.run('powershell', [
-      '-Command',
-      'Start-Process powershell -Verb RunAs -Wait -ArgumentList \'-Command $scriptLines\'',
-    ], runInShell: true);
-    print('[Firewall] Setup result: ${result.stdout}');
+    final tempDir = Directory.systemTemp;
+    final scriptFile = File('${tempDir.path}\\evilnet_fw.ps1');
+    await scriptFile.writeAsString(scriptLines.toString());
+
+    // Verificar si ya tenemos permisos (primera vez vs subsecuentes arranques)
+    final checkResult = await Process.run(
+      'powershell',
+      [
+        '-ExecutionPolicy', 'Bypass',
+        '-Command',
+        'Get-NetFirewallRule -DisplayName "EvilNet Auth" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Enabled',
+      ],
+      runInShell: true,
+    );
+
+    final alreadyConfigured = checkResult.stdout.toString().trim().isNotEmpty;
+
+    if (alreadyConfigured) {
+      print('[Firewall] ✅ Reglas ya existen, saltando configuración');
+      if (await scriptFile.exists()) await scriptFile.delete();
+      return;
+    }
+
+    // Primera vez: necesitamos elevar permisos
+    print('[Firewall] 🔧 Configurando reglas por primera vez...');
+
+    final result = await Process.run(
+      'powershell',
+      [
+        '-ExecutionPolicy', 'Bypass',
+        '-Command',
+        // -Wait asegura que esperamos a que el proceso elevado termine
+        'Start-Process powershell -Verb RunAs -Wait '
+        '-ArgumentList \'-ExecutionPolicy Bypass -NonInteractive -File "${scriptFile.path}"\'',
+      ],
+      runInShell: true,
+    );
+
+    final stdout = result.stdout.toString().trim();
+    final stderr = result.stderr.toString().trim();
+
+    if (stdout.isNotEmpty) print('[Firewall] stdout: $stdout');
+    if (stderr.isNotEmpty) print('[Firewall] stderr: $stderr');
+
+    if (await scriptFile.exists()) await scriptFile.delete();
+
+    print('[Firewall] ✅ Configuración completada');
   } catch (e) {
-    print('[Firewall] Could not setup firewall: $e');
+    print('[Firewall] ❌ Error: $e');
   }
 }
 

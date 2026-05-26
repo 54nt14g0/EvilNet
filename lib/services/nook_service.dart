@@ -14,6 +14,25 @@ import 'peer_service.dart';
 const int kNookPort = 45005;
 const _uuid = Uuid();
 
+// ─── Protocolo de mensajes ────────────────────────────────────────────────────
+// Cada mensaje TCP tiene el formato:
+//   [4 bytes big-endian = longitud del header JSON]
+//   [header JSON]
+//   [bytes extra opcionales]
+//
+// Tipos de mensaje (campo 'type' en el header):
+//   Cliente → Servidor:
+//     'request_meta'   → pide el snapshot de worlds+nooks (solo nombres de archivo)
+//     'request_file'   → pide un archivo por nombre
+//     'push_meta'      → empuja un world o nook (broadcast)
+//     'delete_world'   → elimina un world
+//     'delete_nook'    → elimina un nook
+//
+//   Servidor → Cliente:
+//     'meta_response'  → responde worlds+nooks con fileNames (sin rutas absolutas)
+//     'file_response'  → bytes del archivo pedido
+//     'file_not_found' → el archivo no existe en este peer
+
 class NookEvent {
   final String type;
   final dynamic data;
@@ -84,16 +103,20 @@ class NookService {
 
   Future<void> startSync(List<String> peerIps) async {
     if (peerIps.isNotEmpty) {
-      await _syncWithPeers(peerIps);
+      for (final ip in peerIps) {
+        await _syncWithPeer(ip);
+      }
     }
     _syncTimer ??= Timer.periodic(const Duration(seconds: 30), (_) async {
       final peers = List<String>.from(PeerService().knownPeers.keys);
-      if (peers.isNotEmpty) await _syncWithPeers(peers);
+      for (final ip in peers) {
+        await _syncWithPeer(ip);
+      }
     });
   }
 
   Future<void> syncWithNewPeer(String ip) async {
-    await _requestDataFrom(ip);
+    await _syncWithPeer(ip);
   }
 
   // ─── Persistencia ─────────────────────────────────────────────────────────
@@ -123,63 +146,58 @@ class NookService {
         _nooks[nook.id] = nook;
       }
 
-      await _repairFilePaths();
+      // Validar que las rutas guardadas siguen existiendo
+      await _validateLocalPaths();
     } catch (e) {
       print('[NookService] _loadLocal error: $e');
     }
   }
 
-  Future<void> _repairFilePaths() async {
-    final dir = await getApplicationDocumentsDirectory();
+  /// Verifica que cada ruta guardada apunte a un archivo real.
+  /// Si no existe, pone la ruta en null para que se recupere al sincronizar.
+  Future<void> _validateLocalPaths() async {
     bool changed = false;
 
     for (final entry in _worlds.entries) {
       final w = entry.value;
-      if (w.coverImagePath == null) continue;
-      if (await File(w.coverImagePath!).exists()) continue;
-      final fn = _basename(w.coverImagePath!);
-      final local = '${dir.path}/$fn';
-      if (await File(local).exists()) {
-        _worlds[entry.key] = w.copyWith(coverImagePath: local);
+      if (w.coverImagePath != null && !await File(w.coverImagePath!).exists()) {
+        _worlds[entry.key] = w.copyWith(clearCover: true);
         changed = true;
       }
     }
 
     for (final entry in _nooks.entries) {
-      final nook = entry.value;
-      final fixedElements = <NookElement>[];
+      final n = entry.value;
       bool nookChanged = false;
-      for (final el in nook.elements) {
+
+      String? musicPath = n.musicPath;
+      if (musicPath != null && !await File(musicPath).exists()) {
+        musicPath = null;
+        nookChanged = true;
+      }
+
+      final fixedEls = <NookElement>[];
+      for (final el in n.elements) {
         NookElement fixed = el;
         if (el.imagePath != null && !await File(el.imagePath!).exists()) {
-          final local = '${dir.path}/${_basename(el.imagePath!)}';
-          if (await File(local).exists()) {
-            fixed = el.copyWith(imagePath: local);
-            nookChanged = true;
-          }
+          fixed = fixed.copyWith(clearImage: true);
+          nookChanged = true;
         }
         if (el.buttonImagePath != null &&
             !await File(el.buttonImagePath!).exists()) {
-          final local = '${dir.path}/${_basename(el.buttonImagePath!)}';
-          if (await File(local).exists()) {
-            fixed = fixed.copyWith(buttonImagePath: local);
-            nookChanged = true;
-          }
+          fixed = fixed.copyWith(clearButtonImage: true);
+          nookChanged = true;
         }
-        fixedElements.add(fixed);
-      }
-      if (nookChanged) {
-        _nooks[entry.key] = nook.copyWith(elements: fixedElements);
-        changed = true;
+        fixedEls.add(fixed);
       }
 
-      final n2 = _nooks[entry.key]!;
-      if (n2.musicPath != null && !await File(n2.musicPath!).exists()) {
-        final local = '${dir.path}/${_basename(n2.musicPath!)}';
-        if (await File(local).exists()) {
-          _nooks[entry.key] = n2.copyWith(musicPath: local);
-          changed = true;
-        }
+      if (nookChanged) {
+        _nooks[entry.key] = n.copyWith(
+          clearMusic: musicPath == null,
+          musicPath: musicPath,
+          elements: fixedEls,
+        );
+        changed = true;
       }
     }
 
@@ -187,44 +205,41 @@ class NookService {
   }
 
   Future<void> _saveLocal() async {
-  _saveDebounce?.cancel();
-  _saveDebounce = Timer(const Duration(milliseconds: 400), () async {
-    try {
-      final file = await _dataFile();
-      final data = {
-        'version': _version,
-        'updatedAt': DateTime.now().toIso8601String(),
-        'worlds': _worlds.values.map((w) => w.toJson()).toList(),
-        'nooks': _nooks.values.map((n) => n.toJson()).toList(),
-      };
-      await file.writeAsString(jsonEncode(data));
-    } catch (e) {
-      print('[NookService] _saveLocal error: $e');
-    }
-  });
-}
-
-  // ─── Helpers ──────────────────────────────────────────────────────────────
-
-  String _basename(String path) =>
-      path.split('/').last.split('\\').last;
-
-  /// Escribe un paquete con length-prefix de 4 bytes (big-endian).
-  /// Formato: [4 bytes longitud header][header JSON][bytes opcionales]
-  Uint8List _encodePacket(Map<String, dynamic> header,
-      [Uint8List? extraBytes]) {
-    final headerBytes = utf8.encode(jsonEncode(header));
-    final lenBytes = ByteData(4)
-      ..setInt32(0, headerBytes.length, Endian.big);
-    final parts = <int>[
-      ...lenBytes.buffer.asUint8List(),
-      ...headerBytes,
-      if (extraBytes != null) ...extraBytes,
-    ];
-    return Uint8List.fromList(parts);
+    _saveDebounce?.cancel();
+    _saveDebounce = Timer(const Duration(milliseconds: 400), () async {
+      try {
+        final file = await _dataFile();
+        final data = {
+          'version': _version,
+          'updatedAt': DateTime.now().toIso8601String(),
+          'worlds': _worlds.values.map((w) => w.toJson()).toList(),
+          'nooks': _nooks.values.map((n) => n.toJson()).toList(),
+        };
+        await file.writeAsString(jsonEncode(data));
+      } catch (e) {
+        print('[NookService] _saveLocal error: $e');
+      }
+    });
   }
 
-  /// Lee todos los bytes de un socket hasta que se cierre.
+  // ─── Helpers de protocolo ─────────────────────────────────────────────────
+
+  String _basename(String path) => path.split('/').last.split('\\').last;
+
+  /// Escribe [header] codificado como JSON precedido por su longitud (4 bytes
+  /// big-endian), seguido opcionalmente de [extra] bytes sin cabecera.
+  Uint8List _encodePacket(Map<String, dynamic> header, [Uint8List? extra]) {
+    final headerBytes = utf8.encode(jsonEncode(header));
+    final lenBuf = ByteData(4)..setInt32(0, headerBytes.length, Endian.big);
+    final out = <int>[
+      ...lenBuf.buffer.asUint8List(),
+      ...headerBytes,
+      if (extra != null) ...extra,
+    ];
+    return Uint8List.fromList(out);
+  }
+
+  /// Lee todos los bytes de un socket hasta que el peer cierra su lado.
   Future<Uint8List> _readAll(Socket socket) async {
     final chunks = <int>[];
     await for (final chunk in socket) {
@@ -233,17 +248,18 @@ class NookService {
     return Uint8List.fromList(chunks);
   }
 
-  /// Decodifica un paquete con length-prefix.
-  /// Retorna (header, extraBytes) donde extraBytes puede estar vacío.
+  /// Decodifica un paquete con formato [len(4)][header JSON][extra?].
   ({Map<String, dynamic> header, Uint8List extra}) _decodePacket(
       Uint8List bytes) {
-    if (bytes.length < 4) throw Exception('Packet too short');
+    if (bytes.length < 4) throw Exception('Packet too short (${bytes.length})');
     final headerLen =
         ByteData.view(bytes.buffer, 0, 4).getInt32(0, Endian.big);
-    if (bytes.length < 4 + headerLen) throw Exception('Packet truncated');
-    final headerBytes = bytes.sublist(4, 4 + headerLen);
+    if (bytes.length < 4 + headerLen) {
+      throw Exception('Packet truncated: need ${4 + headerLen}, got ${bytes.length}');
+    }
     final header =
-        jsonDecode(utf8.decode(headerBytes)) as Map<String, dynamic>;
+        jsonDecode(utf8.decode(bytes.sublist(4, 4 + headerLen)))
+            as Map<String, dynamic>;
     final extra = bytes.length > 4 + headerLen
         ? bytes.sublist(4 + headerLen)
         : Uint8List(0);
@@ -267,614 +283,510 @@ class NookService {
   }
 
   void _handleConnection(Socket socket) async {
-  try {
-    final raw = await _readAll(socket);
-    if (raw.isEmpty) return;
-
-    Map<String, dynamic> header;
-    Uint8List extra;
     try {
-      final decoded = _decodePacket(raw);
-      header = decoded.header;
-      extra = decoded.extra;
-    } catch (_) {
-      header = jsonDecode(utf8.decode(raw)) as Map<String, dynamic>;
-      extra = Uint8List(0);
-    }
-
-    final type = header['type'] as String?;
-
-    switch (type) {
-      case 'request_data':
-        await _respondFullPayload(socket);
-        return; // socket ya cerrado dentro de _respondFullPayload
-
-      case 'request_file':
-        await _handleFileRequest(socket, header);
+      final raw = await _readAll(socket);
+      if (raw.isEmpty) {
+        await socket.close();
         return;
+      }
 
-      case 'full_push':
-        await socket.close();
-        await _mergeFullPayload(header);
-        break;
+      final decoded = _decodePacket(raw);
+      final type = decoded.header['type'] as String? ?? '';
 
-      case 'world_upsert':
-        await socket.close();
-        await _mergeWorldPacket(header, extra);
-        break;
+      switch (type) {
+        // ── El cliente pide el snapshot de metadatos ──────────────────────
+        case 'request_meta':
+          await _serveMetadata(socket);
+          break;
 
-      case 'world_delete':
-        await socket.close();
-        final wid = header['worldId'] as String?;
-        if (wid != null) await _deleteWorldLocal(wid);
-        break;
+        // ── El cliente pide un archivo por nombre ─────────────────────────
+        case 'request_file':
+          await _serveFile(socket, decoded.header);
+          break;
 
-      case 'nook_upsert':
-        await socket.close();
-        await _mergeNookPacket(header, extra);
-        break;
+        // ── Otro peer nos empuja un cambio ────────────────────────────────
+        case 'push_meta':
+          await socket.close();
+          await _handlePushMeta(decoded.header);
+          break;
 
-      case 'nook_delete':
-        await socket.close();
-        final nid = header['nookId'] as String?;
-        if (nid != null) await _deleteNookLocal(nid);
-        break;
+        case 'delete_world':
+          await socket.close();
+          final wid = decoded.header['worldId'] as String?;
+          if (wid != null) await _deleteWorldLocal(wid);
+          break;
 
-      default:
+        case 'delete_nook':
+          await socket.close();
+          final nid = decoded.header['nookId'] as String?;
+          if (nid != null) await _deleteNookLocal(nid);
+          break;
+
+        default:
+          await socket.close();
+      }
+    } catch (e) {
+      print('[NookService] _handleConnection error: $e');
+      try {
         await socket.close();
+      } catch (_) {}
     }
-  } catch (e) {
-    print('[NookService] Connection error: $e');
-  } finally {
-    try { await socket.close(); } catch (_) {}
-  }
-}
-
-/// Responde con los bytes de un archivo pedido por nombre.
-Future<void> _handleFileRequest(
-  Socket socket,
-  Map<String, dynamic> header,
-) async {
-  final fileName = header['fileName'] as String?;
-  if (fileName == null) {
-    try { await socket.close(); } catch (_) {}
-    return;
   }
 
-  try {
-    final dir = await getApplicationDocumentsDirectory();
-    final file = File('${dir.path}/$fileName');
+  // ─── Servir metadatos ─────────────────────────────────────────────────────
 
-    if (!await file.exists()) {
-      // Buscar también en rutas conocidas de worlds y nooks
-      String? foundPath;
-      for (final w in _worlds.values) {
-        if (w.coverImagePath != null &&
-            _basename(w.coverImagePath!) == fileName) {
-          if (await File(w.coverImagePath!).exists()) {
-            foundPath = w.coverImagePath;
-            break;
-          }
+  /// Responde con un snapshot de worlds + nooks.
+  /// Las rutas absolutas se convierten a solo el nombre de archivo (basename)
+  /// para que el receptor no dependa del sistema de archivos del emisor.
+  Future<void> _serveMetadata(Socket socket) async {
+    try {
+      final worldsJson = _worlds.values.map((w) {
+        final j = w.toJson();
+        if (w.coverImagePath != null) {
+          j['coverFileName'] = _basename(w.coverImagePath!);
         }
-      }
-      if (foundPath == null) {
-        for (final n in _nooks.values) {
-          if (n.musicPath != null && _basename(n.musicPath!) == fileName) {
-            if (await File(n.musicPath!).exists()) {
-              foundPath = n.musicPath;
-              break;
-            }
-          }
-          for (final el in n.elements) {
-            for (final path in [el.imagePath, el.buttonImagePath]) {
-              if (path != null && _basename(path) == fileName) {
-                if (await File(path).exists()) {
-                  foundPath = path;
-                  break;
-                }
-              }
-            }
-            if (foundPath != null) break;
-          }
-          if (foundPath != null) break;
-        }
-      }
+        j.remove('coverImagePath'); // no enviar rutas absolutas
+        return j;
+      }).toList();
 
+      final nooksJson = _nooks.values.map((n) {
+        final j = n.toJson();
+        if (n.musicPath != null) {
+          j['musicFileName'] = _basename(n.musicPath!);
+        }
+        j.remove('musicPath');
+
+        // Elementos: solo nombres de archivo
+        final elsJson = n.elements.map((el) {
+          final ej = el.toJson();
+          if (el.imagePath != null) {
+            ej['imageFileName'] = _basename(el.imagePath!);
+          }
+          ej.remove('imagePath');
+          if (el.buttonImagePath != null) {
+            ej['buttonImageFileName'] = _basename(el.buttonImagePath!);
+          }
+          ej.remove('buttonImagePath');
+          return ej;
+        }).toList();
+        j['elements'] = elsJson;
+
+        return j;
+      }).toList();
+
+      final response = _encodePacket({
+        'type': 'meta_response',
+        'version': _version,
+        'worlds': worldsJson,
+        'nooks': nooksJson,
+      });
+
+      socket.add(response);
+      await socket.flush();
+      await socket.close();
+      print('[NookService] meta_response sent: ${_worlds.length}W ${_nooks.length}N');
+    } catch (e) {
+      print('[NookService] _serveMetadata error: $e');
+      try {
+        await socket.close();
+      } catch (_) {}
+    }
+  }
+
+  // ─── Servir archivo ───────────────────────────────────────────────────────
+
+  /// Busca [fileName] en el directorio de documentos y en todas las rutas
+  /// conocidas, y envía los bytes al cliente.
+  Future<void> _serveFile(
+      Socket socket, Map<String, dynamic> header) async {
+    final fileName = header['fileName'] as String?;
+    if (fileName == null || fileName.isEmpty) {
+      final pkt = _encodePacket({'type': 'file_not_found', 'fileName': ''});
+      socket.add(pkt);
+      await socket.flush();
+      await socket.close();
+      return;
+    }
+
+    try {
+      final foundPath = await _findFile(fileName);
       if (foundPath == null) {
-        final responseHeader = _encodePacket({'type': 'file_not_found'});
-        socket.add(responseHeader);
+        print('[NookService] file_not_found: $fileName');
+        final pkt =
+            _encodePacket({'type': 'file_not_found', 'fileName': fileName});
+        socket.add(pkt);
         await socket.flush();
         await socket.close();
         return;
       }
 
       final bytes = await File(foundPath).readAsBytes();
-      final responseHeaderBytes = _encodePacket({'type': 'file_response'});
-      socket.add(responseHeaderBytes);
+      final hdr = _encodePacket({
+        'type': 'file_response',
+        'fileName': fileName,
+        'size': bytes.length,
+      });
+      socket.add(hdr);
       socket.add(bytes);
       await socket.flush();
       await socket.close();
-      return;
-    }
-
-    final bytes = await file.readAsBytes();
-    final responseHeaderBytes = _encodePacket({'type': 'file_response'});
-    socket.add(responseHeaderBytes);
-    socket.add(bytes);
-    await socket.flush();
-    await socket.close();
-  } catch (e) {
-    print('[NookService] _handleFileRequest error: $e');
-    try { await socket.close(); } catch (_) {}
-  }
-}
-
-  // ─── Sincronización ───────────────────────────────────────────────────────
-
-  Future<void> _syncWithPeers(List<String> peerIps) async {
-    for (final ip in peerIps) {
-      await _requestDataFrom(ip);
+      print('[NookService] Served $fileName (${bytes.length} bytes)');
+    } catch (e) {
+      print('[NookService] _serveFile error ($fileName): $e');
+      try {
+        final pkt =
+            _encodePacket({'type': 'file_not_found', 'fileName': fileName});
+        socket.add(pkt);
+        await socket.flush();
+        await socket.close();
+      } catch (_) {}
     }
   }
 
-  Future<void> _requestDataFrom(String ip) async {
-  print('[NookService] Requesting data from $ip');
-  try {
-    final socket = await Socket.connect(
-      ip,
-      kNookPort,
-      timeout: const Duration(seconds: 10),
-    );
-
-    final reqBytes = _encodePacket({'type': 'request_data'});
-    socket.add(reqBytes);
-    await socket.flush();
-
-    // Leer respuesta SIN cerrar el lado de escritura primero
-    // El servidor cierra cuando termina de enviar
-    final chunks = <int>[];
-    await for (final chunk in socket) {
-      chunks.addAll(chunk);
-    }
-    await socket.close();
-
-    print('[NookService] Received ${chunks.length} bytes from $ip');
-    if (chunks.isEmpty) return;
-
-    final raw = Uint8List.fromList(chunks);
-    final decoded = _decodePacket(raw);
-    await _mergeFullPayload(decoded.header);
-
-    // Después del merge, pedir archivos faltantes uno por uno
-    await _recoverMissingFiles(ip);
-  } catch (e) {
-    print('[NookService] _requestDataFrom($ip) failed: $e');
-  }
-}
-
-  /// Construye y envía el payload completo al socket que lo pidió.
- Future<void> _respondFullPayload(Socket socket) async {
-  try {
-    final payload = await _buildFullPayload();
-    final encoded = _encodePacket(payload);
-    socket.add(encoded);
-    await socket.flush();
-    await socket.close();
-  } catch (e) {
-    print('[NookService] _respondFullPayload error: $e');
-    try { await socket.close(); } catch (_) {}
-  }
-}
- Future<Map<String, dynamic>> _buildFullPayload() async {
-  final worldsJson = <Map<String, dynamic>>[];
-  for (final w in _worlds.values) {
-    final wj = w.toJson();
-    if (w.coverImagePath != null) {
-      final f = File(w.coverImagePath!);
-      if (f.existsSync()) {
-        try {
-          final bytes = await f.readAsBytes();
-          // Siempre incluir portadas de mundos, son críticas para la UI
-          wj['coverBase64'] = base64Encode(bytes);
-          wj['coverFileName'] = _basename(w.coverImagePath!);
-        } catch (_) {}
-      }
-    }
-    worldsJson.add(wj);
-  }
-
-  final nooksJson = <Map<String, dynamic>>[];
-  for (final n in _nooks.values) {
-    final nj = n.toJson();
-
-    // Música: solo enviar nombre, se pedirá por separado
-    if (n.musicPath != null) {
-      nj['musicFileName'] = _basename(n.musicPath!);
-    }
-
-    // Imágenes de elementos: incluir todas
-    final elFiles = <Map<String, String>>[];
-    for (final el in n.elements) {
-      for (final path in [el.imagePath, el.buttonImagePath]) {
-        if (path == null) continue;
-        final f = File(path);
-        if (!f.existsSync()) continue;
-        try {
-          final bytes = await f.readAsBytes();
-          elFiles.add({
-            'fileName': _basename(path),
-            'base64': base64Encode(bytes),
-          });
-        } catch (_) {}
-      }
-    }
-    if (elFiles.isNotEmpty) nj['elementFiles'] = elFiles;
-    nooksJson.add(nj);
-  }
-
-  return {
-    'type': 'full_push',
-    'version': _version,
-    'worlds': worldsJson,
-    'nooks': nooksJson,
-  };
-}
-
-/// Pide un archivo específico por nombre a un peer.
-/// Retorna la ruta local donde se guardó, o null si falló.
-Future<String?> _requestFileFromPeer(String ip, String fileName) async {
-  try {
-    final socket = await Socket.connect(
-      ip,
-      kNookPort,
-      timeout: const Duration(seconds: 30),
-    );
-    final reqBytes = _encodePacket({
-      'type': 'request_file',
-      'fileName': fileName,
-    });
-    socket.add(reqBytes);
-    await socket.flush();
-
-    final chunks = <int>[];
-    await for (final chunk in socket) {
-      chunks.addAll(chunk);
-    }
-    await socket.close();
-
-    if (chunks.isEmpty) return null;
-
-    final raw = Uint8List.fromList(chunks);
-    if (raw.length < 4) return null;
-
-    final headerLen = ByteData.view(raw.buffer, 0, 4).getInt32(0, Endian.big);
-    if (raw.length < 4 + headerLen) return null;
-
-    final header = jsonDecode(
-      utf8.decode(raw.sublist(4, 4 + headerLen)),
-    ) as Map<String, dynamic>;
-
-    if (header['type'] != 'file_response') return null;
-
-    final fileBytes = raw.sublist(4 + headerLen);
-    if (fileBytes.isEmpty) return null;
-
+  /// Busca un archivo por su basename en todas las ubicaciones conocidas.
+  Future<String?> _findFile(String fileName) async {
     final dir = await getApplicationDocumentsDirectory();
-    final dest = '${dir.path}/$fileName';
-    await File(dest).writeAsBytes(fileBytes);
-    print('[NookService] Recovered file from $ip: $fileName');
-    return dest;
-  } catch (e) {
-    print('[NookService] _requestFileFromPeer($ip, $fileName) failed: $e');
+
+    // 1. Directorio de documentos (ubicación canónica)
+    final canonical = File('${dir.path}/$fileName');
+    if (await canonical.exists()) return canonical.path;
+
+    // 2. Rutas absolutas guardadas en worlds
+    for (final w in _worlds.values) {
+      if (w.coverImagePath != null &&
+          _basename(w.coverImagePath!) == fileName &&
+          await File(w.coverImagePath!).exists()) {
+        return w.coverImagePath;
+      }
+    }
+
+    // 3. Rutas absolutas guardadas en nooks
+    for (final n in _nooks.values) {
+      if (n.musicPath != null &&
+          _basename(n.musicPath!) == fileName &&
+          await File(n.musicPath!).exists()) {
+        return n.musicPath;
+      }
+      for (final el in n.elements) {
+        if (el.imagePath != null &&
+            _basename(el.imagePath!) == fileName &&
+            await File(el.imagePath!).exists()) {
+          return el.imagePath;
+        }
+        if (el.buttonImagePath != null &&
+            _basename(el.buttonImagePath!) == fileName &&
+            await File(el.buttonImagePath!).exists()) {
+          return el.buttonImagePath;
+        }
+      }
+    }
+
     return null;
   }
-}
 
-/// Detecta archivos faltantes localmente y los pide al peer.
-Future<void> _recoverMissingFiles(String ip) async {
-  final dir = await getApplicationDocumentsDirectory();
-  bool changed = false;
+  // ─── Sincronización con un peer ───────────────────────────────────────────
 
-  // Portadas de mundos
-  for (final entry in _worlds.entries) {
-    final w = entry.value;
-    if (w.coverImagePath == null) continue;
-    if (await File(w.coverImagePath!).exists()) continue;
-    final fn = _basename(w.coverImagePath!);
-    final recovered = await _requestFileFromPeer(ip, fn);
-    if (recovered != null) {
-      _worlds[entry.key] = w.copyWith(coverImagePath: recovered);
-      changed = true;
-    }
-  }
+  /// Sincroniza completamente con un peer:
+  /// 1. Pide metadatos
+  /// 2. Mergea
+  /// 3. Descarga archivos faltantes uno por uno
+  Future<void> _syncWithPeer(String ip) async {
+    print('[NookService] _syncWithPeer($ip) START');
+    try {
+      // ── Fase 1: metadatos ──────────────────────────────────────────────
+      final meta = await _requestMeta(ip);
+      if (meta == null) return;
 
-  // Música de nooks
-  for (final entry in _nooks.entries) {
-    final n = entry.value;
-    if (n.musicPath == null) continue;
-    if (await File(n.musicPath!).exists()) continue;
-    final fn = _basename(n.musicPath!);
-    final recovered = await _requestFileFromPeer(ip, fn);
-    if (recovered != null) {
-      _nooks[entry.key] = n.copyWith(musicPath: recovered);
-      changed = true;
-    }
-  }
-
-  // Imágenes de elementos de nooks
-  for (final entry in _nooks.entries) {
-    final n = entry.value;
-    final fixedElements = <NookElement>[];
-    bool nookChanged = false;
-    for (final el in n.elements) {
-      NookElement fixed = el;
-      if (el.imagePath != null && !await File(el.imagePath!).exists()) {
-        final fn = _basename(el.imagePath!);
-        final recovered = await _requestFileFromPeer(ip, fn);
-        if (recovered != null) {
-          fixed = fixed.copyWith(imagePath: recovered);
-          nookChanged = true;
-        }
+      final changed = await _mergeMeta(meta);
+      if (changed) {
+        _emit();
       }
-      if (el.buttonImagePath != null &&
-          !await File(el.buttonImagePath!).exists()) {
-        final fn = _basename(el.buttonImagePath!);
-        final recovered = await _requestFileFromPeer(ip, fn);
-        if (recovered != null) {
-          fixed = fixed.copyWith(buttonImagePath: recovered);
-          nookChanged = true;
-        }
+
+      // ── Fase 2: archivos faltantes ─────────────────────────────────────
+      final missing = await _collectMissingFiles();
+      if (missing.isNotEmpty) {
+        print('[NookService] Downloading ${missing.length} missing files from $ip');
+        await _downloadMissingFiles(ip, missing);
       }
-      fixedElements.add(fixed);
-    }
-    if (nookChanged) {
-      _nooks[entry.key] = n.copyWith(elements: fixedElements);
-      changed = true;
+    } catch (e) {
+      print('[NookService] _syncWithPeer($ip) error: $e');
     }
   }
 
-  if (changed) {
-    await _saveLocal();
-    _emit();
-  }
-}
+  /// Abre una conexión, envía 'request_meta', lee la respuesta completa y
+  /// la devuelve como Map. Devuelve null en caso de error.
+  Future<Map<String, dynamic>?> _requestMeta(String ip) async {
+    Socket? socket;
+    try {
+      socket = await Socket.connect(
+        ip,
+        kNookPort,
+        timeout: const Duration(seconds: 10),
+      );
 
- Future<void> _mergeFullPayload(Map<String, dynamic> data) async {
-  bool changed = false;
-  final dir = await getApplicationDocumentsDirectory();
+      // Enviar request
+      final req = _encodePacket({'type': 'request_meta'});
+      socket.add(req);
+      await socket.flush();
 
-  for (final w in (data['worlds'] as List? ?? [])) {
-    final wMap = w as Map<String, dynamic>;
-    final remote = NookWorld.fromJson(wMap);
-    final local = _worlds[remote.id];
-    if (local != null && !remote.updatedAt.isAfter(local.updatedAt)) continue;
+      // Señalar fin de escritura (half-close) y leer respuesta
+      await socket.close(); // cierra solo el lado de escritura en Dart
+      final raw = await _readAll(socket);
 
-    String? coverPath = remote.coverImagePath;
-    final b64 = wMap['coverBase64'] as String?;
-    final fn = wMap['coverFileName'] as String?;
+      if (raw.isEmpty) {
+        print('[NookService] _requestMeta($ip): empty response');
+        return null;
+      }
 
-    if (b64 != null && fn != null) {
+      final decoded = _decodePacket(raw);
+      if (decoded.header['type'] != 'meta_response') {
+        print('[NookService] _requestMeta($ip): unexpected type ${decoded.header['type']}');
+        return null;
+      }
+
+      print('[NookService] Got meta from $ip: '
+          '${(decoded.header['worlds'] as List?)?.length ?? 0}W '
+          '${(decoded.header['nooks'] as List?)?.length ?? 0}N');
+      return decoded.header;
+    } catch (e) {
+      print('[NookService] _requestMeta($ip) failed: $e');
+      return null;
+    } finally {
       try {
-        final bytes = base64Decode(b64);
-        final dest = '${dir.path}/$fn';
-        await File(dest).writeAsBytes(bytes);
-        coverPath = dest;
-      } catch (e) {
-        print('[NookService] Failed to save cover: $e');
-      }
-    } else if (fn != null) {
-      final localPath = '${dir.path}/$fn';
-      coverPath = await File(localPath).exists() ? localPath : null;
-    } else if (coverPath != null) {
-      final localPath = '${dir.path}/${_basename(coverPath)}';
-      coverPath = await File(localPath).exists() ? localPath : null;
+        socket?.destroy();
+      } catch (_) {}
     }
-
-    _worlds[remote.id] = remote.copyWith(coverImagePath: coverPath);
-    changed = true;
   }
 
-  for (final n in (data['nooks'] as List? ?? [])) {
-    final nMap = n as Map<String, dynamic>;
-    final remote = Nook.fromJson(nMap);
-    final local = _nooks[remote.id];
-    if (local != null && !remote.updatedAt.isAfter(local.updatedAt)) continue;
-
-    // Música
-    String? musicPath = remote.musicPath;
-    final mb64 = nMap['musicBase64'] as String?;
-    final mfn = nMap['musicFileName'] as String?;
-
-    if (mb64 != null && mfn != null) {
-      try {
-        final bytes = base64Decode(mb64);
-        final dest = '${dir.path}/$mfn';
-        await File(dest).writeAsBytes(bytes);
-        musicPath = dest;
-      } catch (e) {
-        print('[NookService] Failed to save music: $e');
-      }
-    } else if (mfn != null) {
-      final localPath = '${dir.path}/$mfn';
-      musicPath = await File(localPath).exists() ? localPath : null;
-    } else if (musicPath != null) {
-      final localPath = '${dir.path}/${_basename(musicPath)}';
-      musicPath = await File(localPath).exists() ? localPath : null;
-    }
-
-    // Imágenes de elementos
-    final elFiles = nMap['elementFiles'] as List?;
-    final fileMap = <String, String>{};
-    if (elFiles != null) {
-      for (final ef in elFiles) {
-        final efMap = ef as Map<String, dynamic>;
-        final fn2 = efMap['fileName'] as String;
-        final b642 = efMap['base64'] as String?;
-        if (b642 != null) {
-          try {
-            final bytes = base64Decode(b642);
-            final dest = '${dir.path}/$fn2';
-            await File(dest).writeAsBytes(bytes);
-            fileMap[fn2] = dest;
-          } catch (e) {
-            print('[NookService] Failed to save element file: $e');
-          }
-        } else {
-          final localPath = '${dir.path}/$fn2';
-          if (await File(localPath).exists()) fileMap[fn2] = localPath;
-        }
-      }
-    }
-
-    final fixedElements = _fixElementPaths(remote.elements, fileMap, dir.path);
-    _nooks[remote.id] = remote.copyWith(
-      musicPath: musicPath,
-      elements: fixedElements,
-    );
-    changed = true;
-  }
-
-  final remoteVersion = data['version'] as int? ?? 0;
-  if (remoteVersion > _version) _version = remoteVersion;
-
-  if (changed) {
-    await _saveLocal();
-    _emit();
-    print('[NookService] Merge complete: ${_worlds.length} worlds, ${_nooks.length} nooks');
-  }
-}
-
-  List<NookElement> _fixElementPaths(
-      List<NookElement> elements,
-      Map<String, String> fileMap,
-      String dirPath) {
-    return elements.map((el) {
-      NookElement fixed = el;
-      if (el.imagePath != null) {
-        final fn = _basename(el.imagePath!);
-        if (fileMap.containsKey(fn)) {
-          fixed = fixed.copyWith(imagePath: fileMap[fn]);
-        } else {
-          final local = '$dirPath/$fn';
-          if (File(local).existsSync()) fixed = fixed.copyWith(imagePath: local);
-        }
-      }
-      if (el.buttonImagePath != null) {
-        final fn = _basename(el.buttonImagePath!);
-        if (fileMap.containsKey(fn)) {
-          fixed = fixed.copyWith(buttonImagePath: fileMap[fn]);
-        } else {
-          final local = '$dirPath/$fn';
-          if (File(local).existsSync()) fixed = fixed.copyWith(buttonImagePath: local);
-        }
-      }
-      return fixed;
-    }).toList();
-  }
-
-  Future<void> _mergeWorldPacket(
-      Map<String, dynamic> header, Uint8List extra) async {
-    final wMap = header['world'] as Map<String, dynamic>?;
-    if (wMap == null) return;
-    final remote = NookWorld.fromJson(wMap);
-    final local = _worlds[remote.id];
-    if (local != null && !remote.updatedAt.isAfter(local.updatedAt)) return;
-
+  /// Mergea el snapshot recibido en la memoria local.
+  /// Devuelve true si hubo algún cambio.
+  Future<bool> _mergeMeta(Map<String, dynamic> meta) async {
     final dir = await getApplicationDocumentsDirectory();
-    String? coverPath = remote.coverImagePath;
-    final b64 = header['coverBase64'] as String?;
-    final fn = header['coverFileName'] as String?;
-    if (b64 != null && fn != null) {
-      try {
-        final dest = '${dir.path}/$fn';
-        await File(dest).writeAsBytes(base64Decode(b64));
-        coverPath = dest;
-      } catch (e) {
-        print('[NookService] world cover save error: $e');
+    bool changed = false;
+
+    // ── Worlds ─────────────────────────────────────────────────────────────
+    for (final rawW in (meta['worlds'] as List? ?? [])) {
+      final wMap = Map<String, dynamic>.from(rawW as Map);
+
+      // Restaurar coverImagePath desde coverFileName
+      final coverFn = wMap['coverFileName'] as String?;
+      if (coverFn != null && coverFn.isNotEmpty) {
+        wMap['coverImagePath'] = '${dir.path}/$coverFn';
+      } else {
+        wMap['coverImagePath'] = null;
       }
-    } else if (coverPath != null) {
-      final local2 = '${dir.path}/${_basename(coverPath)}';
-      if (await File(local2).exists()) coverPath = local2;
-      else coverPath = null;
+
+      final remote = NookWorld.fromJson(wMap);
+      final local = _worlds[remote.id];
+      if (local != null && !remote.updatedAt.isAfter(local.updatedAt)) {
+        continue;
+      }
+      _worlds[remote.id] = remote;
+      changed = true;
     }
 
-    _worlds[remote.id] = remote.copyWith(coverImagePath: coverPath);
-    _version++;
-    await _saveLocal();
-    _emit();
+    // ── Nooks ──────────────────────────────────────────────────────────────
+    for (final rawN in (meta['nooks'] as List? ?? [])) {
+      final nMap = Map<String, dynamic>.from(rawN as Map);
+
+      // Restaurar musicPath desde musicFileName
+      final musicFn = nMap['musicFileName'] as String?;
+      if (musicFn != null && musicFn.isNotEmpty) {
+        nMap['musicPath'] = '${dir.path}/$musicFn';
+      } else {
+        nMap['musicPath'] = null;
+      }
+
+      // Restaurar paths de elementos desde sus fileNames
+      final rawEls = nMap['elements'] as List? ?? [];
+      final fixedEls = rawEls.map((rawEl) {
+        final elMap = Map<String, dynamic>.from(rawEl as Map);
+        final imgFn = elMap['imageFileName'] as String?;
+        if (imgFn != null && imgFn.isNotEmpty) {
+          elMap['imagePath'] = '${dir.path}/$imgFn';
+        } else {
+          elMap['imagePath'] = null;
+        }
+        final btnFn = elMap['buttonImageFileName'] as String?;
+        if (btnFn != null && btnFn.isNotEmpty) {
+          elMap['buttonImagePath'] = '${dir.path}/$btnFn';
+        } else {
+          elMap['buttonImagePath'] = null;
+        }
+        return elMap;
+      }).toList();
+      nMap['elements'] = fixedEls;
+
+      final remote = Nook.fromJson(nMap);
+      final local = _nooks[remote.id];
+      if (local != null && !remote.updatedAt.isAfter(local.updatedAt)) {
+        continue;
+      }
+      _nooks[remote.id] = remote;
+      changed = true;
+    }
+
+    final remoteVersion = meta['version'] as int? ?? 0;
+    if (remoteVersion > _version) {
+      _version = remoteVersion;
+      changed = true;
+    }
+
+    if (changed) {
+      await _saveLocal();
+      print('[NookService] Merge done: ${_worlds.length}W ${_nooks.length}N');
+    }
+    return changed;
   }
 
-  Future<void> _mergeNookPacket(
-      Map<String, dynamic> header, Uint8List extra) async {
-    final nMap = header['nook'] as Map<String, dynamic>?;
-    if (nMap == null) return;
-    final remote = Nook.fromJson(nMap);
-    final local = _nooks[remote.id];
-    if (local != null && !remote.updatedAt.isAfter(local.updatedAt)) return;
+  /// Recorre el estado actual y devuelve la lista de fileNames que se
+  /// referencian pero cuyo archivo no existe todavía en disco.
+  Future<List<String>> _collectMissingFiles() async {
+    final missing = <String>[];
 
-    final dir = await getApplicationDocumentsDirectory();
-
-    String? musicPath = remote.musicPath;
-    final mb64 = header['musicBase64'] as String?;
-    final mfn = header['musicFileName'] as String?;
-    if (mb64 != null && mfn != null) {
-      try {
-        final dest = '${dir.path}/$mfn';
-        await File(dest).writeAsBytes(base64Decode(mb64));
-        musicPath = dest;
-      } catch (e) {
-        print('[NookService] music save error: $e');
+    for (final w in _worlds.values) {
+      if (w.coverImagePath != null &&
+          !await File(w.coverImagePath!).exists()) {
+        missing.add(_basename(w.coverImagePath!));
       }
-    } else if (musicPath != null) {
-      final local2 = '${dir.path}/${_basename(musicPath)}';
-      if (await File(local2).exists()) musicPath = local2;
-      else musicPath = null;
     }
 
-    final elFiles = header['elementFiles'] as List?;
-    final fileMap = <String, String>{};
-    if (elFiles != null) {
-      for (final ef in elFiles) {
-        final efMap = ef as Map<String, dynamic>;
-        final fn2 = efMap['fileName'] as String;
-        final b642 = efMap['base64'] as String;
-        try {
-          final dest = '${dir.path}/$fn2';
-          await File(dest).writeAsBytes(base64Decode(b642));
-          fileMap[fn2] = dest;
-        } catch (e) {
-          print('[NookService] element file save error: $e');
+    for (final n in _nooks.values) {
+      if (n.musicPath != null && !await File(n.musicPath!).exists()) {
+        missing.add(_basename(n.musicPath!));
+      }
+      for (final el in n.elements) {
+        if (el.imagePath != null && !await File(el.imagePath!).exists()) {
+          missing.add(_basename(el.imagePath!));
+        }
+        if (el.buttonImagePath != null &&
+            !await File(el.buttonImagePath!).exists()) {
+          missing.add(_basename(el.buttonImagePath!));
         }
       }
     }
 
-    final fixedElements = _fixElementPaths(remote.elements, fileMap, dir.path);
+    // Quitar duplicados
+    return missing.toSet().toList();
+  }
 
-    _nooks[remote.id] = remote.copyWith(
-      musicPath: musicPath,
-      elements: fixedElements,
-    );
-    _version++;
-    await _saveLocal();
+  /// Descarga cada archivo faltante del peer, abriendo una conexión TCP
+  /// independiente por archivo.
+  Future<void> _downloadMissingFiles(String ip, List<String> fileNames) async {
+    final dir = await getApplicationDocumentsDirectory();
+    bool anyDownloaded = false;
+
+    for (final fileName in fileNames) {
+      final result = await _downloadFile(ip, fileName);
+      if (result != null) {
+        print('[NookService] Downloaded: $fileName (${result.length} bytes)');
+        await File('${dir.path}/$fileName').writeAsBytes(result);
+        anyDownloaded = true;
+      }
+    }
+
+    if (anyDownloaded) {
+      _emit();
+    }
+  }
+
+  /// Abre una conexión TCP, pide [fileName], espera la respuesta completa
+  /// y devuelve los bytes del archivo. Devuelve null si falla o no existe.
+  Future<Uint8List?> _downloadFile(String ip, String fileName) async {
+    Socket? socket;
+    try {
+      socket = await Socket.connect(
+        ip,
+        kNookPort,
+        timeout: const Duration(seconds: 30),
+      );
+
+      final req = _encodePacket({
+        'type': 'request_file',
+        'fileName': fileName,
+      });
+      socket.add(req);
+      await socket.flush();
+      await socket.close(); // half-close → servidor sabe que terminamos de enviar
+
+      final raw = await _readAll(socket);
+      if (raw.isEmpty) {
+        print('[NookService] _downloadFile($fileName): empty response');
+        return null;
+      }
+
+      final decoded = _decodePacket(raw);
+      if (decoded.header['type'] == 'file_not_found') {
+        print('[NookService] _downloadFile($fileName): not found on peer');
+        return null;
+      }
+      if (decoded.header['type'] != 'file_response') {
+        print('[NookService] _downloadFile($fileName): unexpected type ${decoded.header['type']}');
+        return null;
+      }
+
+      if (decoded.extra.isEmpty) {
+        print('[NookService] _downloadFile($fileName): 0 bytes in file_response');
+        return null;
+      }
+
+      return decoded.extra;
+    } catch (e) {
+      print('[NookService] _downloadFile($ip, $fileName) failed: $e');
+      return null;
+    } finally {
+      try {
+        socket?.destroy();
+      } catch (_) {}
+    }
+  }
+
+  // ─── Manejar push de otro peer ────────────────────────────────────────────
+
+  /// Recibe un push de metadatos de un peer y los mergea.
+  /// Después intenta descargar los archivos faltantes del mismo peer.
+  Future<void> _handlePushMeta(Map<String, dynamic> header) async {
+    final senderIp = header['senderIp'] as String?;
+    await _mergeMeta(header);
+
+    if (senderIp != null) {
+      final missing = await _collectMissingFiles();
+      if (missing.isNotEmpty) {
+        await _downloadMissingFiles(senderIp, missing);
+      }
+    }
     _emit();
   }
 
-  // ─── Broadcast con length-prefix ─────────────────────────────────────────
+  // ─── Broadcast a todos los peers ──────────────────────────────────────────
 
-  Future<void> _broadcastPacket(Map<String, dynamic> packet) async {
-    final encoded = _encodePacket(packet);
+  Future<void> _broadcastMeta(Map<String, dynamic> extra) async {
+    final payload = Map<String, dynamic>.from(extra);
+    payload['type'] = 'push_meta';
+    payload['senderIp'] = PeerService().myIp;
+
+    final encoded = _encodePacket(payload);
     final peers = List<String>.from(PeerService().knownPeers.keys);
+
     for (final ip in peers) {
+      Socket? socket;
       try {
-        final socket = await Socket.connect(ip, kNookPort,
-            timeout: const Duration(seconds: 10));
+        socket = await Socket.connect(
+          ip,
+          kNookPort,
+          timeout: const Duration(seconds: 10),
+        );
         socket.add(encoded);
         await socket.flush();
         await socket.close();
         await socket.done;
-        print('[NookService] Broadcast ${packet['type']} → $ip OK');
+        print('[NookService] push_meta → $ip OK');
       } catch (e) {
-        print('[NookService] Broadcast ${packet['type']} → $ip FAILED: $e');
+        print('[NookService] push_meta → $ip FAILED: $e');
+      } finally {
+        try {
+          socket?.destroy();
+        } catch (_) {}
       }
     }
   }
@@ -904,25 +816,44 @@ Future<void> _recoverMissingFiles(String ip) async {
     await _saveLocal();
     _emit();
 
-    final packet = <String, dynamic>{
-      'type': 'world_upsert',
-      'world': world.toJson(),
-    };
+    // Construir payload de metadatos para el broadcast
+    final wJson = world.toJson();
     if (world.coverImagePath != null) {
-      final f = File(world.coverImagePath!);
-      if (f.existsSync()) {
-        try {
-          packet['coverBase64'] = base64Encode(await f.readAsBytes());
-          packet['coverFileName'] = _basename(world.coverImagePath!);
-        } catch (_) {}
-      }
+      wJson['coverFileName'] = _basename(world.coverImagePath!);
     }
-    await _broadcastPacket(packet);
+    wJson.remove('coverImagePath');
+
+    await _broadcastMeta({
+      'version': _version,
+      'worlds': [wJson],
+      'nooks': [],
+    });
   }
 
   Future<void> deleteWorld(String worldId) async {
     await _deleteWorldLocal(worldId);
-    await _broadcastPacket({'type': 'world_delete', 'worldId': worldId});
+    final encoded = _encodePacket({
+      'type': 'delete_world',
+      'worldId': worldId,
+    });
+    final peers = List<String>.from(PeerService().knownPeers.keys);
+    for (final ip in peers) {
+      Socket? s;
+      try {
+        s = await Socket.connect(ip, kNookPort,
+            timeout: const Duration(seconds: 8));
+        s.add(encoded);
+        await s.flush();
+        await s.close();
+        await s.done;
+      } catch (e) {
+        print('[NookService] delete_world → $ip FAILED: $e');
+      } finally {
+        try {
+          s?.destroy();
+        } catch (_) {}
+      }
+    }
   }
 
   Future<void> upsertNook(Nook nook) async {
@@ -931,65 +862,79 @@ Future<void> _recoverMissingFiles(String ip) async {
     await _saveLocal();
     _emit();
 
-    final packet = <String, dynamic>{
-      'type': 'nook_upsert',
-      'nook': nook.toJson(),
-    };
-
+    // Construir payload de metadatos del nook
+    final nJson = nook.toJson();
     if (nook.musicPath != null) {
-      final f = File(nook.musicPath!);
-      if (f.existsSync()) {
-        try {
-          packet['musicBase64'] = base64Encode(await f.readAsBytes());
-          packet['musicFileName'] = _basename(nook.musicPath!);
-        } catch (_) {}
-      }
+      nJson['musicFileName'] = _basename(nook.musicPath!);
     }
+    nJson.remove('musicPath');
 
-    final elFiles = <Map<String, String>>[];
-    for (final el in nook.elements) {
-      for (final path in [el.imagePath, el.buttonImagePath]) {
-        if (path == null) continue;
-        final f = File(path);
-        if (!f.existsSync()) continue;
-        try {
-          elFiles.add({
-            'fileName': _basename(path),
-            'base64': base64Encode(await f.readAsBytes()),
-          });
-        } catch (_) {}
+    final elsJson = nook.elements.map((el) {
+      final ej = el.toJson();
+      if (el.imagePath != null) {
+        ej['imageFileName'] = _basename(el.imagePath!);
       }
-    }
-    if (elFiles.isNotEmpty) packet['elementFiles'] = elFiles;
+      ej.remove('imagePath');
+      if (el.buttonImagePath != null) {
+        ej['buttonImageFileName'] = _basename(el.buttonImagePath!);
+      }
+      ej.remove('buttonImagePath');
+      return ej;
+    }).toList();
+    nJson['elements'] = elsJson;
 
-    await _broadcastPacket(packet);
+    await _broadcastMeta({
+      'version': _version,
+      'worlds': [],
+      'nooks': [nJson],
+    });
   }
 
   Future<void> deleteNook(String nookId) async {
     await _deleteNookLocal(nookId);
-    await _broadcastPacket({'type': 'nook_delete', 'nookId': nookId});
+    final encoded = _encodePacket({
+      'type': 'delete_nook',
+      'nookId': nookId,
+    });
+    final peers = List<String>.from(PeerService().knownPeers.keys);
+    for (final ip in peers) {
+      Socket? s;
+      try {
+        s = await Socket.connect(ip, kNookPort,
+            timeout: const Duration(seconds: 8));
+        s.add(encoded);
+        await s.flush();
+        await s.close();
+        await s.done;
+      } catch (e) {
+        print('[NookService] delete_nook → $ip FAILED: $e');
+      } finally {
+        try {
+          s?.destroy();
+        } catch (_) {}
+      }
+    }
   }
 
   Future<void> setInitialNook(String worldId, String nookId) async {
     final world = _worlds[worldId];
     if (world == null) return;
 
-    // Desmarcar anterior
-    for (final entry in _nooks.entries) {
+    final entries = List<MapEntry<String, Nook>>.from(_nooks.entries);
+    for (final entry in entries) {
       if (entry.value.worldId == worldId && entry.value.isInitial) {
         _nooks[entry.key] = entry.value.copyWith(isInitial: false);
         await upsertNook(_nooks[entry.key]!);
       }
     }
-    // Marcar nuevo
-    final nook = _nooks[nookId];
-    if (nook != null) {
-      _nooks[nookId] = nook.copyWith(isInitial: true);
+
+    final n = _nooks[nookId];
+    if (n != null) {
+      _nooks[nookId] = n.copyWith(isInitial: true);
       await upsertNook(_nooks[nookId]!);
     }
 
-    final updatedWorld = world.copyWith(initialNookId: nookId);
-    await upsertWorld(updatedWorld);
+    await upsertWorld(world.copyWith(initialNookId: nookId));
   }
 
   void _emit() {
