@@ -213,7 +213,34 @@ class AuthService {
     Future.delayed(const Duration(seconds: 2), () {
       registerMyIp(PeerService().myIp);
     });
+
+    // ── Sync privado con peers ya online al momento del login ──
+    final myId = _currentUser!.id;
+    final onlinePeers = PeerService().knownPeers.keys.toList();
+    if (onlinePeers.isNotEmpty) {
+      Future.microtask(() async {
+        for (final ip in onlinePeers) {
+          await ChatService().syncPrivateWithPeer(ip, myId);
+          await ChatService().flushPendingFor(
+            PeerService().ipForUserId(_userIdForIp(ip)) ?? '',
+          );
+        }
+      });
+    }
+
     return null;
+  }
+  String _userIdForIp(String ip) {
+    final username = _ipToUsername[ip];
+    if (username == null) return '';
+    final matches = _users.where((u) => u.username == username);
+    if (matches.isEmpty) return '';
+    return matches.first.id;
+  }
+  Future<void> flushPendingForIp(String ip) async {
+    final userId = _userIdForIp(ip);
+    if (userId.isEmpty) return;
+    await ChatService().flushPendingFor(userId);
   }
 
   // ─── Registro ────────────────────────────────────────────────────────────

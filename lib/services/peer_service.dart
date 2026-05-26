@@ -187,7 +187,6 @@ class PeerService {
   }
 
   void _triggerSync(String ip) {
-    // Lanzar todas las sincronizaciones en paralelo sin bloquear
     Future.microtask(() async {
       await AuthService().syncWithNewPeer(ip);
     });
@@ -195,9 +194,15 @@ class PeerService {
       await ChatService().syncBroadcastWithPeer(ip);
     });
     Future.microtask(() async {
-      final myId = AuthService().currentUser?.id;
+      String? myId;
+      for (int i = 0; i < 5; i++) {
+        myId = AuthService().currentUser?.id;
+        if (myId != null) break;
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
       if (myId != null) {
         await ChatService().syncPrivateWithPeer(ip, myId);
+        await AuthService().flushPendingForIp(ip);
       }
     });
     Future.microtask(() async {
@@ -206,7 +211,6 @@ class PeerService {
     Future.microtask(() async {
       await UniverseService().syncWithNewPeer(ip);
     });
-
     Future.microtask(() async {
       await NookService().syncWithNewPeer(ip);
     });
