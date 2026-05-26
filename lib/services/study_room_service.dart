@@ -29,10 +29,14 @@ class StudyRoomService {
 
   // ─── Estado ───────────────────────────────────────────────────────────────
 
-  final Map<String, StudyTopic> _topics = {};
-  final Map<String, StudyComment> _comments = {};
-  final Map<String, UserProgress> _progress = {};
-  Timer? _saveDebounce;
+  // ─── Estado ───────────────────────────────────────────────────────────────
+
+final Map<String, StudyTopic> _topics = {};
+final Map<String, StudyComment> _comments = {};
+final Map<String, UserProgress> _progress = {};
+// ← NUEVO: IDs de temas eliminados para evitar que el merge los restaure
+final Set<String> _deletedTopicIds = {};
+Timer? _saveDebounce;
 
   int _version = 0;
   ServerSocket? _server;
@@ -134,43 +138,49 @@ class StudyRoomService {
   }
 
   Future<void> _loadLocal() async {
-    try {
-      final file = await _dataFile();
-      if (!await file.exists()) {
-        _version = 0;
-        return;
-      }
-      final raw = await file.readAsString();
-      final data = jsonDecode(raw) as Map<String, dynamic>;
-      _version = data['version'] as int? ?? 0;
-
-      _topics.clear();
-      for (final t in (data['topics'] as List? ?? [])) {
-        final topic = StudyTopic.fromJson(t as Map<String, dynamic>);
-        _topics[topic.id] = topic;
-      }
-
-      _comments.clear();
-      for (final c in (data['comments'] as List? ?? [])) {
-        final comment = StudyComment.fromJson(c as Map<String, dynamic>);
-        _comments[comment.id] = comment;
-      }
-
-      _progress.clear();
-      for (final p in (data['progress'] as List? ?? [])) {
-        final prog = UserProgress.fromJson(p as Map<String, dynamic>);
-        _progress[prog.userId] = prog;
-      }
-
-      await _repairBrokenCoverPaths();
-    } catch (e) {
-      _topics.clear();
-      _comments.clear();
-      _progress.clear();
+  try {
+    final file = await _dataFile();
+    if (!await file.exists()) {
       _version = 0;
+      return;
     }
-  }
+    final raw = await file.readAsString();
+    final data = jsonDecode(raw) as Map<String, dynamic>;
+    _version = data['version'] as int? ?? 0;
 
+    _topics.clear();
+    for (final t in (data['topics'] as List? ?? [])) {
+      final topic = StudyTopic.fromJson(t as Map<String, dynamic>);
+      _topics[topic.id] = topic;
+    }
+
+    _comments.clear();
+    for (final c in (data['comments'] as List? ?? [])) {
+      final comment = StudyComment.fromJson(c as Map<String, dynamic>);
+      _comments[comment.id] = comment;
+    }
+
+    _progress.clear();
+    for (final p in (data['progress'] as List? ?? [])) {
+      final prog = UserProgress.fromJson(p as Map<String, dynamic>);
+      _progress[prog.userId] = prog;
+    }
+
+    // ← NUEVO: cargar IDs eliminados
+    _deletedTopicIds.clear();
+    _deletedTopicIds.addAll(
+      List<String>.from(data['deletedTopicIds'] as List? ?? []),
+    );
+
+    await _repairBrokenCoverPaths();
+  } catch (e) {
+    _topics.clear();
+    _comments.clear();
+    _progress.clear();
+    _deletedTopicIds.clear();
+    _version = 0;
+  }
+}
   Future<void> _repairBrokenCoverPaths() async {
     bool changed = false;
     final dir = await getApplicationDocumentsDirectory();
@@ -375,24 +385,25 @@ class StudyRoomService {
   }
 
   Future<void> _saveLocal() async {
-    _saveDebounce?.cancel();
-    _saveDebounce = Timer(const Duration(milliseconds: 400), () async {
-      try {
-        final file = await _dataFile();
-        final data = {
-          'version': _version,
-          'updatedAt': DateTime.now().toIso8601String(),
-          'topics': _topics.values.map((t) => t.toJson()).toList(),
-          'comments': _comments.values.map((c) => c.toJson()).toList(),
-          'progress': _progress.values.map((p) => p.toJson()).toList(),
-        };
-        await file.writeAsString(jsonEncode(data));
-      } catch (e) {
-        print('[StudyRoom] _saveLocal error: $e');
-      }
-    });
-  }
-
+  _saveDebounce?.cancel();
+  _saveDebounce = Timer(const Duration(milliseconds: 400), () async {
+    try {
+      final file = await _dataFile();
+      final data = {
+        'version': _version,
+        'updatedAt': DateTime.now().toIso8601String(),
+        'topics': _topics.values.map((t) => t.toJson()).toList(),
+        'comments': _comments.values.map((c) => c.toJson()).toList(),
+        'progress': _progress.values.map((p) => p.toJson()).toList(),
+        // ← NUEVO: persistir IDs eliminados
+        'deletedTopicIds': _deletedTopicIds.toList(),
+      };
+      await file.writeAsString(jsonEncode(data));
+    } catch (e) {
+      print('[StudyRoom] _saveLocal error: $e');
+    }
+  });
+}
   // ─── Servidor ─────────────────────────────────────────────────────────────
 
   Future<void> _startServer() async {
@@ -883,6 +894,7 @@ class StudyRoomService {
       'topics': topicsJson,
       'comments': commentsJson,
       'progress': _progress.values.map((p) => p.toJson()).toList(),
+      'deletedTopicIds': _deletedTopicIds.toList(),
     };
   }
 
@@ -955,158 +967,179 @@ class StudyRoomService {
   }
 
   Future<void> _mergeFullPayload(Map<String, dynamic> data) async {
-    bool changed = false;
-    final incomingTopics = (data['topics'] as List? ?? []);
-    print(
-      '🔵 [StudyRoom] _mergeFullPayload: ${incomingTopics.length} topics incoming, currently have ${_topics.length}',
-    );
+  bool changed = false;
+  final incomingTopics = (data['topics'] as List? ?? []);
+  print(
+    '🔵 [StudyRoom] _mergeFullPayload: ${incomingTopics.length} topics incoming, currently have ${_topics.length}',
+  );
 
-    for (final t in (data['topics'] as List? ?? [])) {
-      final tMap = t as Map<String, dynamic>;
-      final remote = StudyTopic.fromJson(tMap);
-      final local = _topics[remote.id];
-
-      if (local == null || remote.updatedAt.isAfter(local.updatedAt)) {
-        final imageBase64 = tMap['imageBase64'] as String?;
-        final imageFileName = tMap['imageFileName'] as String?;
-        final embeddedImages = tMap['embeddedImages'] as List?;
-        String? validCoverPath = remote.coverImagePath;
-
-        // Portada
-        if (imageBase64 != null && imageFileName != null) {
-          try {
-            final dir = await getApplicationDocumentsDirectory();
-            // Usar solo el nombre del archivo, nunca la ruta completa del sender
-            final safeFileName = imageFileName.split('/').last.split('\\').last;
-
-            final destPath = '${dir.path}/$safeFileName';
-            final imgBytes = base64Decode(imageBase64);
-            await File(destPath).writeAsBytes(imgBytes);
-            validCoverPath = destPath;
-          } catch (e) {
-            print('[StudyRoom] Error saving image from payload: $e');
-          }
-        } else if (validCoverPath != null &&
-            !await File(validCoverPath).exists()) {
-          final dir = await getApplicationDocumentsDirectory();
-          final fileName = validCoverPath.split(Platform.pathSeparator).last;
-          final localPath = '${dir.path}/$fileName';
-          validCoverPath = await File(localPath).exists() ? localPath : null;
-        }
-
-        // Imágenes embebidas
-        String fixedDelta = remote.contentDelta;
-        if (embeddedImages != null && embeddedImages.isNotEmpty) {
-          final dir = await getApplicationDocumentsDirectory();
-          final fileNameToLocalPath = <String, String>{};
-          for (final img in embeddedImages) {
-            final imgMap = img as Map<String, dynamic>;
-            final fileName = imgMap['fileName'] as String;
-            final b64 = imgMap['base64'] as String;
-            final destPath = '${dir.path}/$fileName';
-            try {
-              await File(destPath).writeAsBytes(base64Decode(b64));
-              fileNameToLocalPath[fileName] = destPath;
-            } catch (e) {
-              print('[StudyRoom] Error saving embedded image in merge: $e');
-            }
-          }
-          fixedDelta = await _fixEmbeddedImagePaths(
-            remote.contentDelta,
-            fileNameToLocalPath,
-          );
-        }
-
-        _topics[remote.id] = StudyTopic(
-          id: remote.id,
-          title: remote.title,
-          contentDelta: fixedDelta,
-          coverImagePath: validCoverPath,
-          minHierarchy: remote.minHierarchy,
-          isSequential: remote.isSequential,
-          requiredTopicIds: remote.requiredTopicIds,
-          unlocksTopicIds: remote.unlocksTopicIds,
-          requiresApproval: remote.requiresApproval,
-          order: remote.order,
-          creatorId: remote.creatorId,
-          createdAt: remote.createdAt,
-          updatedAt: remote.updatedAt,
-        );
-        changed = true;
-      }
-    }
-
-    for (final c in (data['comments'] as List? ?? [])) {
-      final cMap = c as Map<String, dynamic>;
-      final remote = StudyComment.fromJson(cMap);
-
-      if (!_comments.containsKey(remote.id)) {
-        // Guardar imágenes si vienen embebidas en el full_push
-        final images = cMap['images'] as List?;
-        if (images != null && images.isNotEmpty) {
-          final dir = await getApplicationDocumentsDirectory();
-          final savedPaths = <String>[];
-          for (final img in images) {
-            final imgMap = img as Map<String, dynamic>;
-            final fileName = imgMap['fileName'] as String;
-            final b64 = imgMap['base64'] as String;
-            final destPath = '${dir.path}/$fileName';
-            try {
-              await File(destPath).writeAsBytes(base64Decode(b64));
-              savedPaths.add(destPath);
-            } catch (e) {
-              print('[StudyRoom] Error saving comment image in merge: $e');
-            }
-          }
-          _comments[remote.id] = StudyComment(
-            id: remote.id,
-            topicId: remote.topicId,
-            userId: remote.userId,
-            username: remote.username,
-            content: remote.content,
-            imagePaths: savedPaths,
-            status: remote.status,
-            timestamp: remote.timestamp,
-            isEdited: remote.isEdited,
-          );
-        } else {
-          _comments[remote.id] = remote;
-        }
-        changed = true;
-      } else {
-        final local = _comments[remote.id]!;
-        if (remote.status == CommentStatus.approved &&
-                local.status == CommentStatus.pending ||
-            remote.content != local.content) {
-          _comments[remote.id] = remote;
+  // ← NUEVO: sincronizar IDs eliminados remotos
+  final remoteDeleted = Set<String>.from(
+    data['deletedTopicIds'] as List? ?? [],
+  );
+  if (remoteDeleted.isNotEmpty) {
+    for (final deletedId in remoteDeleted) {
+      if (!_deletedTopicIds.contains(deletedId)) {
+        _deletedTopicIds.add(deletedId);
+        if (_topics.containsKey(deletedId)) {
+          _topics.remove(deletedId);
+          _comments.removeWhere((_, c) => c.topicId == deletedId);
           changed = true;
+          print('[StudyRoom] Applied remote deletion for topic: $deletedId');
         }
       }
-    }
-
-    for (final p in (data['progress'] as List? ?? [])) {
-      final remote = UserProgress.fromJson(p as Map<String, dynamic>);
-      final local = _progress[remote.userId];
-      if (local == null) {
-        _progress[remote.userId] = remote;
-        changed = true;
-      } else {
-        final merged = UserProgress.merge(local, remote);
-        if (merged.updatedAt != local.updatedAt) {
-          _progress[remote.userId] = merged;
-          changed = true;
-        }
-      }
-    }
-
-    final remoteVersion = data['version'] as int? ?? 0;
-    if (remoteVersion > _version) _version = remoteVersion;
-
-    if (changed) {
-      await _saveLocal();
-      _emit();
     }
   }
+
+  for (final t in incomingTopics) {
+    final tMap = t as Map<String, dynamic>;
+    final remote = StudyTopic.fromJson(tMap);
+
+    // ← NUEVO: ignorar temas que ya fueron eliminados localmente
+    if (_deletedTopicIds.contains(remote.id)) continue;
+
+    final local = _topics[remote.id];
+
+    if (local == null || remote.updatedAt.isAfter(local.updatedAt)) {
+      final imageBase64 = tMap['imageBase64'] as String?;
+      final imageFileName = tMap['imageFileName'] as String?;
+      final embeddedImages = tMap['embeddedImages'] as List?;
+      String? validCoverPath = remote.coverImagePath;
+
+      if (imageBase64 != null && imageFileName != null) {
+        try {
+          final dir = await getApplicationDocumentsDirectory();
+          final safeFileName = imageFileName.split('/').last.split('\\').last;
+          final destPath = '${dir.path}/$safeFileName';
+          final imgBytes = base64Decode(imageBase64);
+          await File(destPath).writeAsBytes(imgBytes);
+          validCoverPath = destPath;
+        } catch (e) {
+          print('[StudyRoom] Error saving image from payload: $e');
+        }
+      } else if (validCoverPath != null &&
+          !await File(validCoverPath).exists()) {
+        final dir = await getApplicationDocumentsDirectory();
+        final fileName = validCoverPath.split(Platform.pathSeparator).last;
+        final localPath = '${dir.path}/$fileName';
+        validCoverPath = await File(localPath).exists() ? localPath : null;
+      }
+
+      String fixedDelta = remote.contentDelta;
+      if (embeddedImages != null && embeddedImages.isNotEmpty) {
+        final dir = await getApplicationDocumentsDirectory();
+        final fileNameToLocalPath = <String, String>{};
+        for (final img in embeddedImages) {
+          final imgMap = img as Map<String, dynamic>;
+          final fileName = imgMap['fileName'] as String;
+          final b64 = imgMap['base64'] as String;
+          final destPath = '${dir.path}/$fileName';
+          try {
+            await File(destPath).writeAsBytes(base64Decode(b64));
+            fileNameToLocalPath[fileName] = destPath;
+          } catch (e) {
+            print('[StudyRoom] Error saving embedded image in merge: $e');
+          }
+        }
+        fixedDelta = await _fixEmbeddedImagePaths(
+          remote.contentDelta,
+          fileNameToLocalPath,
+        );
+      }
+
+      _topics[remote.id] = StudyTopic(
+        id: remote.id,
+        title: remote.title,
+        contentDelta: fixedDelta,
+        coverImagePath: validCoverPath,
+        minHierarchy: remote.minHierarchy,
+        isSequential: remote.isSequential,
+        requiredTopicIds: remote.requiredTopicIds,
+        unlocksTopicIds: remote.unlocksTopicIds,
+        requiresApproval: remote.requiresApproval,
+        order: remote.order,
+        creatorId: remote.creatorId,
+        createdAt: remote.createdAt,
+        updatedAt: remote.updatedAt,
+      );
+      changed = true;
+    }
+  }
+
+  for (final c in (data['comments'] as List? ?? [])) {
+    final cMap = c as Map<String, dynamic>;
+    final remote = StudyComment.fromJson(cMap);
+
+    // Ignorar comentarios de temas eliminados
+    if (_deletedTopicIds.contains(remote.topicId)) continue;
+
+    if (!_comments.containsKey(remote.id)) {
+      final images = cMap['images'] as List?;
+      if (images != null && images.isNotEmpty) {
+        final dir = await getApplicationDocumentsDirectory();
+        final savedPaths = <String>[];
+        for (final img in images) {
+          final imgMap = img as Map<String, dynamic>;
+          final fileName = imgMap['fileName'] as String;
+          final b64 = imgMap['base64'] as String;
+          final destPath = '${dir.path}/$fileName';
+          try {
+            await File(destPath).writeAsBytes(base64Decode(b64));
+            savedPaths.add(destPath);
+          } catch (e) {
+            print('[StudyRoom] Error saving comment image in merge: $e');
+          }
+        }
+        _comments[remote.id] = StudyComment(
+          id: remote.id,
+          topicId: remote.topicId,
+          userId: remote.userId,
+          username: remote.username,
+          content: remote.content,
+          imagePaths: savedPaths,
+          status: remote.status,
+          timestamp: remote.timestamp,
+          isEdited: remote.isEdited,
+        );
+      } else {
+        _comments[remote.id] = remote;
+      }
+      changed = true;
+    } else {
+      final local = _comments[remote.id]!;
+      // ← CORREGIDO: paréntesis para precedencia correcta
+      if ((remote.status == CommentStatus.approved &&
+              local.status == CommentStatus.pending) ||
+          remote.content != local.content) {
+        _comments[remote.id] = remote;
+        changed = true;
+      }
+    }
+  }
+
+  for (final p in (data['progress'] as List? ?? [])) {
+    final remote = UserProgress.fromJson(p as Map<String, dynamic>);
+    final local = _progress[remote.userId];
+    if (local == null) {
+      _progress[remote.userId] = remote;
+      changed = true;
+    } else {
+      final merged = UserProgress.merge(local, remote);
+      if (merged.updatedAt != local.updatedAt) {
+        _progress[remote.userId] = merged;
+        changed = true;
+      }
+    }
+  }
+
+  final remoteVersion = data['version'] as int? ?? 0;
+  if (remoteVersion > _version) _version = remoteVersion;
+
+  if (changed) {
+    await _saveLocal();
+    _emit();
+  }
+}
 
   void _emit() {
     _controller.add(StudyRoomEvent('topics_updated', topics));
@@ -1145,35 +1178,35 @@ class StudyRoomService {
   }
 
   Future<void> _deleteTopicLocal(String id) async {
-    _topics.remove(id);
-    _comments.removeWhere((_, c) => c.topicId == id);
+  _topics.remove(id);
+  _comments.removeWhere((_, c) => c.topicId == id);
+  // ← NUEVO: registrar como eliminado para que el merge no lo restaure
+  _deletedTopicIds.add(id);
 
-    // Limpiar referencias huérfanas en todos los demás temas
-    final topicsToUpdate = <StudyTopic>[];
-    for (final entry in _topics.entries) {
-      final t = entry.value;
-      final hadReq = t.requiredTopicIds.contains(id);
-      final hadUnlocks = t.unlocksTopicIds.contains(id);
-      if (hadReq || hadUnlocks) {
-        final updated = t.copyWith(
-          requiredTopicIds: t.requiredTopicIds.where((r) => r != id).toList(),
-          unlocksTopicIds: t.unlocksTopicIds.where((u) => u != id).toList(),
-          updatedAt: DateTime.now(),
-        );
-        _topics[entry.key] = updated;
-        topicsToUpdate.add(updated);
-      }
-    }
-
-    _version++;
-    await _saveLocal();
-    _emit();
-
-    // Propagar los temas modificados a los peers
-    for (final t in topicsToUpdate) {
-      await _broadcastPacket({'type': 'topic_upsert', 'topic': t.toJson()});
+  final topicsToUpdate = <StudyTopic>[];
+  for (final entry in _topics.entries) {
+    final t = entry.value;
+    final hadReq = t.requiredTopicIds.contains(id);
+    final hadUnlocks = t.unlocksTopicIds.contains(id);
+    if (hadReq || hadUnlocks) {
+      final updated = t.copyWith(
+        requiredTopicIds: t.requiredTopicIds.where((r) => r != id).toList(),
+        unlocksTopicIds: t.unlocksTopicIds.where((u) => u != id).toList(),
+        updatedAt: DateTime.now(),
+      );
+      _topics[entry.key] = updated;
+      topicsToUpdate.add(updated);
     }
   }
+
+  _version++;
+  await _saveLocal();
+  _emit();
+
+  for (final t in topicsToUpdate) {
+    await _broadcastPacket({'type': 'topic_upsert', 'topic': t.toJson()});
+  }
+}
 
   Future<void> _upsertCommentLocal(StudyComment comment) async {
     _comments[comment.id] = comment;

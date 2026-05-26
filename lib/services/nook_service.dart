@@ -267,67 +267,147 @@ class NookService {
   }
 
   void _handleConnection(Socket socket) async {
+  try {
+    final raw = await _readAll(socket);
+    if (raw.isEmpty) return;
+
+    Map<String, dynamic> header;
+    Uint8List extra;
     try {
-      final raw = await _readAll(socket);
-      if (raw.isEmpty) return;
-
-      // Intentar decodificar como length-prefix primero,
-      // si falla intentar como JSON plano (compatibilidad)
-      Map<String, dynamic> header;
-      Uint8List extra;
-      try {
-        final decoded = _decodePacket(raw);
-        header = decoded.header;
-        extra = decoded.extra;
-      } catch (_) {
-        header = jsonDecode(utf8.decode(raw)) as Map<String, dynamic>;
-        extra = Uint8List(0);
-      }
-
-      final type = header['type'] as String?;
-
-      switch (type) {
-        case 'request_data':
-          // Responder con full payload length-prefixed
-          await _respondFullPayload(socket);
-          break;
-
-        case 'full_push':
-          await socket.close();
-          await _mergeFullPayload(header);
-          break;
-
-        case 'world_upsert':
-          await socket.close();
-          await _mergeWorldPacket(header, extra);
-          break;
-
-        case 'world_delete':
-          await socket.close();
-          final wid = header['worldId'] as String?;
-          if (wid != null) await _deleteWorldLocal(wid);
-          break;
-
-        case 'nook_upsert':
-          await socket.close();
-          await _mergeNookPacket(header, extra);
-          break;
-
-        case 'nook_delete':
-          await socket.close();
-          final nid = header['nookId'] as String?;
-          if (nid != null) await _deleteNookLocal(nid);
-          break;
-
-        default:
-          await socket.close();
-      }
-    } catch (e) {
-      print('[NookService] Connection error: $e');
-    } finally {
-      try { await socket.close(); } catch (_) {}
+      final decoded = _decodePacket(raw);
+      header = decoded.header;
+      extra = decoded.extra;
+    } catch (_) {
+      header = jsonDecode(utf8.decode(raw)) as Map<String, dynamic>;
+      extra = Uint8List(0);
     }
+
+    final type = header['type'] as String?;
+
+    switch (type) {
+      case 'request_data':
+        await _respondFullPayload(socket);
+        return; // socket ya cerrado dentro de _respondFullPayload
+
+      case 'request_file':
+        await _handleFileRequest(socket, header);
+        return;
+
+      case 'full_push':
+        await socket.close();
+        await _mergeFullPayload(header);
+        break;
+
+      case 'world_upsert':
+        await socket.close();
+        await _mergeWorldPacket(header, extra);
+        break;
+
+      case 'world_delete':
+        await socket.close();
+        final wid = header['worldId'] as String?;
+        if (wid != null) await _deleteWorldLocal(wid);
+        break;
+
+      case 'nook_upsert':
+        await socket.close();
+        await _mergeNookPacket(header, extra);
+        break;
+
+      case 'nook_delete':
+        await socket.close();
+        final nid = header['nookId'] as String?;
+        if (nid != null) await _deleteNookLocal(nid);
+        break;
+
+      default:
+        await socket.close();
+    }
+  } catch (e) {
+    print('[NookService] Connection error: $e');
+  } finally {
+    try { await socket.close(); } catch (_) {}
   }
+}
+
+/// Responde con los bytes de un archivo pedido por nombre.
+Future<void> _handleFileRequest(
+  Socket socket,
+  Map<String, dynamic> header,
+) async {
+  final fileName = header['fileName'] as String?;
+  if (fileName == null) {
+    try { await socket.close(); } catch (_) {}
+    return;
+  }
+
+  try {
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File('${dir.path}/$fileName');
+
+    if (!await file.exists()) {
+      // Buscar también en rutas conocidas de worlds y nooks
+      String? foundPath;
+      for (final w in _worlds.values) {
+        if (w.coverImagePath != null &&
+            _basename(w.coverImagePath!) == fileName) {
+          if (await File(w.coverImagePath!).exists()) {
+            foundPath = w.coverImagePath;
+            break;
+          }
+        }
+      }
+      if (foundPath == null) {
+        for (final n in _nooks.values) {
+          if (n.musicPath != null && _basename(n.musicPath!) == fileName) {
+            if (await File(n.musicPath!).exists()) {
+              foundPath = n.musicPath;
+              break;
+            }
+          }
+          for (final el in n.elements) {
+            for (final path in [el.imagePath, el.buttonImagePath]) {
+              if (path != null && _basename(path) == fileName) {
+                if (await File(path).exists()) {
+                  foundPath = path;
+                  break;
+                }
+              }
+            }
+            if (foundPath != null) break;
+          }
+          if (foundPath != null) break;
+        }
+      }
+
+      if (foundPath == null) {
+        final responseHeader = _encodePacket({'type': 'file_not_found'});
+        socket.add(responseHeader);
+        await socket.flush();
+        await socket.close();
+        return;
+      }
+
+      final bytes = await File(foundPath).readAsBytes();
+      final responseHeaderBytes = _encodePacket({'type': 'file_response'});
+      socket.add(responseHeaderBytes);
+      socket.add(bytes);
+      await socket.flush();
+      await socket.close();
+      return;
+    }
+
+    final bytes = await file.readAsBytes();
+    final responseHeaderBytes = _encodePacket({'type': 'file_response'});
+    socket.add(responseHeaderBytes);
+    socket.add(bytes);
+    await socket.flush();
+    await socket.close();
+  } catch (e) {
+    print('[NookService] _handleFileRequest error: $e');
+    try { await socket.close(); } catch (_) {}
+  }
+}
 
   // ─── Sincronización ───────────────────────────────────────────────────────
 
@@ -338,61 +418,65 @@ class NookService {
   }
 
   Future<void> _requestDataFrom(String ip) async {
-    print('[NookService] Requesting data from $ip');
-    try {
-      final socket = await Socket.connect(ip, kNookPort,
-          timeout: const Duration(seconds: 8));
+  print('[NookService] Requesting data from $ip');
+  try {
+    final socket = await Socket.connect(
+      ip,
+      kNookPort,
+      timeout: const Duration(seconds: 10),
+    );
 
-      // Enviar request con length-prefix
-      final reqBytes = _encodePacket({'type': 'request_data'});
-      socket.add(reqBytes);
-      await socket.flush();
-      // Half-close: señal de fin de escritura
-      await socket.close();
+    final reqBytes = _encodePacket({'type': 'request_data'});
+    socket.add(reqBytes);
+    await socket.flush();
 
-      // Leer respuesta completa
-      final raw = await _readAll(socket);
-      print('[NookService] Received ${raw.length} bytes from $ip');
-      if (raw.isEmpty) return;
-
-      final decoded = _decodePacket(raw);
-      await _mergeFullPayload(decoded.header);
-    } catch (e) {
-      print('[NookService] _requestDataFrom($ip) failed: $e');
+    // Leer respuesta SIN cerrar el lado de escritura primero
+    // El servidor cierra cuando termina de enviar
+    final chunks = <int>[];
+    await for (final chunk in socket) {
+      chunks.addAll(chunk);
     }
+    await socket.close();
+
+    print('[NookService] Received ${chunks.length} bytes from $ip');
+    if (chunks.isEmpty) return;
+
+    final raw = Uint8List.fromList(chunks);
+    final decoded = _decodePacket(raw);
+    await _mergeFullPayload(decoded.header);
+
+    // Después del merge, pedir archivos faltantes uno por uno
+    await _recoverMissingFiles(ip);
+  } catch (e) {
+    print('[NookService] _requestDataFrom($ip) failed: $e');
   }
+}
 
   /// Construye y envía el payload completo al socket que lo pidió.
-  Future<void> _respondFullPayload(Socket socket) async {
-    try {
-      final payload = await _buildFullPayload();
-      final encoded = _encodePacket(payload);
-      socket.add(encoded);
-      await socket.flush();
-      await socket.close();
-      await socket.done;
-    } catch (e) {
-      print('[NookService] _respondFullPayload error: $e');
-    }
+ Future<void> _respondFullPayload(Socket socket) async {
+  try {
+    final payload = await _buildFullPayload();
+    final encoded = _encodePacket(payload);
+    socket.add(encoded);
+    await socket.flush();
+    await socket.close();
+  } catch (e) {
+    print('[NookService] _respondFullPayload error: $e');
+    try { await socket.close(); } catch (_) {}
   }
-
-  Future<Map<String, dynamic>> _buildFullPayload() async {
+}
+ Future<Map<String, dynamic>> _buildFullPayload() async {
   final worldsJson = <Map<String, dynamic>>[];
   for (final w in _worlds.values) {
     final wj = w.toJson();
-    // Solo incluir imagen si es pequeña (< 500KB)
     if (w.coverImagePath != null) {
       final f = File(w.coverImagePath!);
       if (f.existsSync()) {
         try {
           final bytes = await f.readAsBytes();
-          if (bytes.length < 500 * 1024) {
-            wj['coverBase64'] = base64Encode(bytes);
-            wj['coverFileName'] = _basename(w.coverImagePath!);
-          } else {
-            // Solo enviar nombre para que el peer lo pida por separado si lo necesita
-            wj['coverFileName'] = _basename(w.coverImagePath!);
-          }
+          // Siempre incluir portadas de mundos, son críticas para la UI
+          wj['coverBase64'] = base64Encode(bytes);
+          wj['coverFileName'] = _basename(w.coverImagePath!);
         } catch (_) {}
       }
     }
@@ -402,12 +486,13 @@ class NookService {
   final nooksJson = <Map<String, dynamic>>[];
   for (final n in _nooks.values) {
     final nj = n.toJson();
-    // Música: nunca incluir en el payload completo, demasiado pesada
+
+    // Música: solo enviar nombre, se pedirá por separado
     if (n.musicPath != null) {
       nj['musicFileName'] = _basename(n.musicPath!);
-      // NO incluir musicBase64 aquí
     }
-    // Imágenes de elementos: solo si son pequeñas
+
+    // Imágenes de elementos: incluir todas
     final elFiles = <Map<String, String>>[];
     for (final el in n.elements) {
       for (final path in [el.imagePath, el.buttonImagePath]) {
@@ -416,14 +501,10 @@ class NookService {
         if (!f.existsSync()) continue;
         try {
           final bytes = await f.readAsBytes();
-          if (bytes.length < 300 * 1024) {
-            elFiles.add({
-              'fileName': _basename(path),
-              'base64': base64Encode(bytes),
-            });
-          } else {
-            elFiles.add({'fileName': _basename(path)});
-          }
+          elFiles.add({
+            'fileName': _basename(path),
+            'base64': base64Encode(bytes),
+          });
         } catch (_) {}
       }
     }
@@ -439,6 +520,125 @@ class NookService {
   };
 }
 
+/// Pide un archivo específico por nombre a un peer.
+/// Retorna la ruta local donde se guardó, o null si falló.
+Future<String?> _requestFileFromPeer(String ip, String fileName) async {
+  try {
+    final socket = await Socket.connect(
+      ip,
+      kNookPort,
+      timeout: const Duration(seconds: 30),
+    );
+    final reqBytes = _encodePacket({
+      'type': 'request_file',
+      'fileName': fileName,
+    });
+    socket.add(reqBytes);
+    await socket.flush();
+
+    final chunks = <int>[];
+    await for (final chunk in socket) {
+      chunks.addAll(chunk);
+    }
+    await socket.close();
+
+    if (chunks.isEmpty) return null;
+
+    final raw = Uint8List.fromList(chunks);
+    if (raw.length < 4) return null;
+
+    final headerLen = ByteData.view(raw.buffer, 0, 4).getInt32(0, Endian.big);
+    if (raw.length < 4 + headerLen) return null;
+
+    final header = jsonDecode(
+      utf8.decode(raw.sublist(4, 4 + headerLen)),
+    ) as Map<String, dynamic>;
+
+    if (header['type'] != 'file_response') return null;
+
+    final fileBytes = raw.sublist(4 + headerLen);
+    if (fileBytes.isEmpty) return null;
+
+    final dir = await getApplicationDocumentsDirectory();
+    final dest = '${dir.path}/$fileName';
+    await File(dest).writeAsBytes(fileBytes);
+    print('[NookService] Recovered file from $ip: $fileName');
+    return dest;
+  } catch (e) {
+    print('[NookService] _requestFileFromPeer($ip, $fileName) failed: $e');
+    return null;
+  }
+}
+
+/// Detecta archivos faltantes localmente y los pide al peer.
+Future<void> _recoverMissingFiles(String ip) async {
+  final dir = await getApplicationDocumentsDirectory();
+  bool changed = false;
+
+  // Portadas de mundos
+  for (final entry in _worlds.entries) {
+    final w = entry.value;
+    if (w.coverImagePath == null) continue;
+    if (await File(w.coverImagePath!).exists()) continue;
+    final fn = _basename(w.coverImagePath!);
+    final recovered = await _requestFileFromPeer(ip, fn);
+    if (recovered != null) {
+      _worlds[entry.key] = w.copyWith(coverImagePath: recovered);
+      changed = true;
+    }
+  }
+
+  // Música de nooks
+  for (final entry in _nooks.entries) {
+    final n = entry.value;
+    if (n.musicPath == null) continue;
+    if (await File(n.musicPath!).exists()) continue;
+    final fn = _basename(n.musicPath!);
+    final recovered = await _requestFileFromPeer(ip, fn);
+    if (recovered != null) {
+      _nooks[entry.key] = n.copyWith(musicPath: recovered);
+      changed = true;
+    }
+  }
+
+  // Imágenes de elementos de nooks
+  for (final entry in _nooks.entries) {
+    final n = entry.value;
+    final fixedElements = <NookElement>[];
+    bool nookChanged = false;
+    for (final el in n.elements) {
+      NookElement fixed = el;
+      if (el.imagePath != null && !await File(el.imagePath!).exists()) {
+        final fn = _basename(el.imagePath!);
+        final recovered = await _requestFileFromPeer(ip, fn);
+        if (recovered != null) {
+          fixed = fixed.copyWith(imagePath: recovered);
+          nookChanged = true;
+        }
+      }
+      if (el.buttonImagePath != null &&
+          !await File(el.buttonImagePath!).exists()) {
+        final fn = _basename(el.buttonImagePath!);
+        final recovered = await _requestFileFromPeer(ip, fn);
+        if (recovered != null) {
+          fixed = fixed.copyWith(buttonImagePath: recovered);
+          nookChanged = true;
+        }
+      }
+      fixedElements.add(fixed);
+    }
+    if (nookChanged) {
+      _nooks[entry.key] = n.copyWith(elements: fixedElements);
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    await _saveLocal();
+    _emit();
+  }
+}
+
  Future<void> _mergeFullPayload(Map<String, dynamic> data) async {
   bool changed = false;
   final dir = await getApplicationDocumentsDirectory();
@@ -452,10 +652,10 @@ class NookService {
     String? coverPath = remote.coverImagePath;
     final b64 = wMap['coverBase64'] as String?;
     final fn = wMap['coverFileName'] as String?;
+
     if (b64 != null && fn != null) {
       try {
-        // Decodificar en microtask para no bloquear el frame
-        final bytes = await Future.microtask(() => base64Decode(b64));
+        final bytes = base64Decode(b64);
         final dest = '${dir.path}/$fn';
         await File(dest).writeAsBytes(bytes);
         coverPath = dest;
@@ -464,12 +664,10 @@ class NookService {
       }
     } else if (fn != null) {
       final localPath = '${dir.path}/$fn';
-      if (await File(localPath).exists()) coverPath = localPath;
-      else coverPath = null;
+      coverPath = await File(localPath).exists() ? localPath : null;
     } else if (coverPath != null) {
       final localPath = '${dir.path}/${_basename(coverPath)}';
-      if (await File(localPath).exists()) coverPath = localPath;
-      else coverPath = null;
+      coverPath = await File(localPath).exists() ? localPath : null;
     }
 
     _worlds[remote.id] = remote.copyWith(coverImagePath: coverPath);
@@ -482,19 +680,29 @@ class NookService {
     final local = _nooks[remote.id];
     if (local != null && !remote.updatedAt.isAfter(local.updatedAt)) continue;
 
-    // Música: solo reparar ruta local, nunca decodificar aquí
+    // Música
     String? musicPath = remote.musicPath;
+    final mb64 = nMap['musicBase64'] as String?;
     final mfn = nMap['musicFileName'] as String?;
-    if (mfn != null) {
+
+    if (mb64 != null && mfn != null) {
+      try {
+        final bytes = base64Decode(mb64);
+        final dest = '${dir.path}/$mfn';
+        await File(dest).writeAsBytes(bytes);
+        musicPath = dest;
+      } catch (e) {
+        print('[NookService] Failed to save music: $e');
+      }
+    } else if (mfn != null) {
       final localPath = '${dir.path}/$mfn';
-      if (await File(localPath).exists()) musicPath = localPath;
-      else musicPath = null; // Se pedirá por separado si es necesario
+      musicPath = await File(localPath).exists() ? localPath : null;
     } else if (musicPath != null) {
       final localPath = '${dir.path}/${_basename(musicPath)}';
-      if (await File(localPath).exists()) musicPath = localPath;
-      else musicPath = null;
+      musicPath = await File(localPath).exists() ? localPath : null;
     }
 
+    // Imágenes de elementos
     final elFiles = nMap['elementFiles'] as List?;
     final fileMap = <String, String>{};
     if (elFiles != null) {
@@ -504,7 +712,7 @@ class NookService {
         final b642 = efMap['base64'] as String?;
         if (b642 != null) {
           try {
-            final bytes = await Future.microtask(() => base64Decode(b642));
+            final bytes = base64Decode(b642);
             final dest = '${dir.path}/$fn2';
             await File(dest).writeAsBytes(bytes);
             fileMap[fn2] = dest;
@@ -512,7 +720,6 @@ class NookService {
             print('[NookService] Failed to save element file: $e');
           }
         } else {
-          // Sin base64: buscar localmente
           final localPath = '${dir.path}/$fn2';
           if (await File(localPath).exists()) fileMap[fn2] = localPath;
         }
