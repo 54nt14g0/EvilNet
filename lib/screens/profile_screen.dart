@@ -131,26 +131,37 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Future<void> _pickProfileImage() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      allowMultiple: false,
-    );
-    if (result == null || result.files.isEmpty) return;
-    final path = result.files.first.path;
-    if (path == null) return;
+  final result = await FilePicker.platform.pickFiles(
+    type: FileType.image,
+    allowMultiple: false,
+  );
+  if (result == null || result.files.isEmpty) return;
+  final path = result.files.first.path;
+  if (path == null) return;
 
-    final err = await _auth.updateProfile(
-      nombre: _nombreCtrl.text,
-      telefono: _telefonoCtrl.text,
-      edad: _edadCtrl.text,
-      correo: _correoCtrl.text,
-      newProfileImagePath: path,
-    );
-    if (err == null) {
-      await _auth.pushUsersToPeers(_peer.knownPeers.keys.toList());
-      setState(() {});
+  final err = await _auth.updateProfile(
+    nombre: _nombreCtrl.text,
+    telefono: _telefonoCtrl.text,
+    edad: _edadCtrl.text,
+    correo: _correoCtrl.text,
+    newProfileImagePath: path,
+  );
+
+  if (err == null) {
+    await _auth.pushUsersToPeers(_peer.knownPeers.keys.toList());
+    PaintingBinding.instance.imageCache.clear();
+    if (mounted) setState(() {});
+  } else {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(err, style: const TextStyle(fontFamily: 'monospace')),
+          backgroundColor: kPink.withOpacity(0.8),
+        ),
+      );
     }
   }
+}
 
   Future<void> _removeProfileImage() async {
     final confirm = await showDialog<bool>(

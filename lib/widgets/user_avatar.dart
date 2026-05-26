@@ -3,9 +3,6 @@ import 'package:flutter/material.dart';
 import '../models/app_user.dart';
 import '../services/auth_service.dart';
 
-/// Avatar circular reutilizable para cualquier usuario.
-/// Si tiene profileImagePath válido lo muestra, si no muestra
-/// el asset 'assets/user.jpg', y si ese falla muestra la inicial.
 class UserAvatar extends StatelessWidget {
   final AppUser? user;
   final double size;
@@ -20,7 +17,6 @@ class UserAvatar extends StatelessWidget {
     this.borderWidth = 0,
   });
 
-  /// Constructor rápido para mostrar el avatar del usuario actual.
   factory UserAvatar.me({
     double size = 40,
     Color borderColor = Colors.transparent,
@@ -37,8 +33,8 @@ class UserAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final u = user;
-    final hasPhoto = u?.profileImagePath != null &&
-        File(u!.profileImagePath!).existsSync();
+    final profilePath = u?.profileImagePath;
+    final hasPhoto = profilePath != null && File(profilePath).existsSync();
 
     return Container(
       width: size,
@@ -52,8 +48,12 @@ class UserAvatar extends StatelessWidget {
       child: ClipOval(
         child: hasPhoto
             ? Image.file(
-                File(u!.profileImagePath!),
+                File(profilePath),
+                // ← CLAVE: key con la ruta fuerza rebuild cuando cambia el archivo
+                key: ValueKey(profilePath),
                 fit: BoxFit.cover,
+                // ← CLAVE: gdf = false para no cachear por ruta
+                cacheWidth: null,
                 errorBuilder: (_, __, ___) => _fallback(u),
               )
             : _assetFallback(u),

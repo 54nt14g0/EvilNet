@@ -317,20 +317,28 @@ class AuthService {
   String? finalImagePath = _users[idx].profileImagePath;
 
   if (clearProfileImage) {
+    // Eliminar archivo anterior si existe
+    if (finalImagePath != null) {
+      try { await File(finalImagePath).delete(); } catch (_) {}
+    }
     finalImagePath = null;
   } else if (newProfileImagePath != null) {
     try {
       final sourceFile = File(newProfileImagePath);
       if (!await sourceFile.exists()) return 'No se pudo leer la imagen';
+
       final dir = await getApplicationDocumentsDirectory();
       final ext = newProfileImagePath.split('.').last.toLowerCase();
-      final fileName = 'profile_${_currentUser!.id}.$ext';
+      // ← CLAVE: timestamp en el nombre para romper el cache de Flutter
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final fileName = 'profile_${_currentUser!.id}_$ts.$ext';
       final destPath = '${dir.path}/$fileName';
+
       // Eliminar archivo anterior si existe
-      final destFile = File(destPath);
-      if (await destFile.exists()) {
-        await destFile.delete();
+      if (finalImagePath != null) {
+        try { await File(finalImagePath).delete(); } catch (_) {}
       }
+
       await sourceFile.copy(destPath);
       finalImagePath = destPath;
     } catch (e) {
@@ -358,7 +366,6 @@ class AuthService {
   await _saveLocalUsers();
   _authController.add('users_updated');
 
-  // Propagar a peers inmediatamente
   final peerIps = PeerService().knownPeers.keys.toList();
   if (peerIps.isNotEmpty) {
     unawaited(_pushAndPropagate(peerIps));
