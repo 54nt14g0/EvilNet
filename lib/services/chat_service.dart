@@ -418,177 +418,188 @@ class ChatService {
 }
 
   Future<void> _handleChatFileRequest(
-    Socket socket,
-    Map<String, dynamic> header,
-    Uint8List all,
-    int headerLen,
-  ) async {
-    final messageId = header['messageId'] as String?;
-    final fileName = header['fileName'] as String?;
-    if (messageId == null || fileName == null) {
+  Socket socket,
+  Map<String, dynamic> header,
+  Uint8List all,
+  int headerLen,
+) async {
+  final messageId = header['messageId'] as String?;
+  final fileName = header['fileName'] as String?;
+  if (messageId == null || fileName == null) {
+    try { await socket.close(); } catch (_) {}
+    return;
+  }
+
+  final prefs = await SharedPreferences.getInstance();
+  final myId = _myId;
+  String? filePath;
+
+  // Buscar por messageId primero
+  for (final key in [kBroadcastKey, _privateKey(myId)]) {
+    final list = prefs.getStringList(key) ?? [];
+    for (final s in list) {
       try {
-        await socket.close();
+        final j = jsonDecode(s) as Map<String, dynamic>;
+        if (j['id'] == messageId) {
+          filePath = j['content'] as String?;
+          break;
+        }
       } catch (_) {}
-      return;
     }
+    if (filePath != null) break;
+  }
 
-    // Buscar el mensaje en el historial para encontrar la ruta real del archivo
-    final prefs = await SharedPreferences.getInstance();
-    final myId = _myId;
-    String? filePath;
-
-    for (final key in [kBroadcastKey, _privateKey(myId)]) {
-      final list = prefs.getStringList(key) ?? [];
-      for (final s in list) {
-        try {
-          final j = jsonDecode(s) as Map<String, dynamic>;
-          if (j['id'] == messageId) {
-            filePath = j['content'] as String?;
-            break;
-          }
-        } catch (_) {}
-      }
-      if (filePath != null) break;
-    }
-
-    if (filePath == null || !File(filePath).existsSync()) {
-      try {
-        await socket.close();
-      } catch (_) {}
-      return;
-    }
-
-    try {
-      final fileBytes = await File(filePath).readAsBytes();
-      final responseHeader = utf8.encode(
-        jsonEncode({
-          'type': 'chat_file_response',
-          'messageId': messageId,
-          'fileName': fileName,
-        }),
-      );
-      final lenBytes = ByteData(4)
-        ..setInt32(0, responseHeader.length, Endian.big);
-      socket.add(lenBytes.buffer.asUint8List());
-      socket.add(responseHeader);
-      socket.add(fileBytes);
-      await socket.flush();
-      try {
-        await socket.close();
-      } catch (_) {}
-    } catch (e) {
-      print('[ChatService] _handleChatFileRequest error: $e');
-      try {
-        await socket.close();
-      } catch (_) {}
+  // Fallback: buscar el archivo por nombre en el directorio de documentos
+  if (filePath == null || !File(filePath).existsSync()) {
+    final dir = await getApplicationDocumentsDirectory();
+    final candidate = File('${dir.path}/$fileName');
+    if (candidate.existsSync()) {
+      filePath = candidate.path;
     }
   }
+
+  if (filePath == null || !File(filePath).existsSync()) {
+    try { await socket.close(); } catch (_) {}
+    return;
+  }
+
+  try {
+    final fileBytes = await File(filePath).readAsBytes();
+    final responseHeader = utf8.encode(jsonEncode({
+      'type': 'chat_file_response',
+      'messageId': messageId,
+      'fileName': fileName,
+    }));
+    final lenBytes = ByteData(4)..setInt32(0, responseHeader.length, Endian.big);
+    socket.add(lenBytes.buffer.asUint8List());
+    socket.add(responseHeader);
+    socket.add(fileBytes);
+    await socket.flush();
+    try { await socket.close(); } catch (_) {}
+  } catch (e) {
+    print('[ChatService] _handleChatFileRequest error: $e');
+    try { await socket.close(); } catch (_) {}
+  }
+}
 
   Future<void> syncPrivateWithPeer(String ip, String myUserId) async {
-    try {
-      final socket = await Socket.connect(
-        ip,
-        kChatPort,
-        timeout: const Duration(seconds: 8),
-      );
-      final headerBytes = utf8.encode(
-        jsonEncode({'type': 'request_private_history', 'senderId': myUserId}),
-      );
-      final lenBytes = ByteData(4)..setInt32(0, headerBytes.length, Endian.big);
-      socket.add(lenBytes.buffer.asUint8List());
-      socket.add(headerBytes);
-      await socket.flush();
-      await socket.close();
+  try {
+    final socket = await Socket.connect(
+      ip,
+      kChatPort,
+      timeout: const Duration(seconds: 8),
+    );
+    final headerBytes = utf8.encode(
+      jsonEncode({'type': 'request_private_history', 'senderId': myUserId}),
+    );
+    final lenBytes = ByteData(4)..setInt32(0, headerBytes.length, Endian.big);
+    socket.add(lenBytes.buffer.asUint8List());
+    socket.add(headerBytes);
+    await socket.flush();
+    await socket.close();
 
-      final chunks = <int>[];
-      await for (final chunk in socket) {
-        chunks.addAll(chunk);
-      }
-      if (chunks.isEmpty) return;
-
-      final all = Uint8List.fromList(chunks);
-      if (all.length < 4) return;
-
-      final respHeaderLen = ByteData.view(
-        all.buffer,
-        0,
-        4,
-      ).getInt32(0, Endian.big);
-      if (all.length < 4 + respHeaderLen) return;
-
-      final response =
-          jsonDecode(utf8.decode(all.sublist(4, 4 + respHeaderLen)))
-              as Map<String, dynamic>;
-
-      if (response['type'] != 'private_history_response') return;
-
-      final messages = response['messages'] as List? ?? [];
-      final prefs = await SharedPreferences.getInstance();
-      final key = _privateKey(myUserId);
-      final existing = prefs.getStringList(key) ?? [];
-
-      final existingIds = existing
-          .map((s) {
-            try {
-              return (jsonDecode(s) as Map)['id'] as String?;
-            } catch (_) {
-              return null;
-            }
-          })
-          .whereType<String>()
-          .toSet();
-
-      bool changed = false;
-      final newMessages = <Message>[];
-
-      for (final raw in messages) {
-        try {
-          final j = Map<String, dynamic>.from(raw as Map);
-          final id = j['id'] as String?;
-          if (id == null || existingIds.contains(id)) continue;
-          existing.add(jsonEncode(j));
-          existingIds.add(id);
-          changed = true;
-          final isMe = j['senderId'] == myUserId;
-          newMessages.add(Message.fromJson(j, isMe));
-        } catch (_) {}
-      }
-
-      if (changed) {
-        existing.sort((a, b) {
-          try {
-            final ta = DateTime.parse(
-              (jsonDecode(a) as Map)['timestamp'] as String,
-            );
-            final tb = DateTime.parse(
-              (jsonDecode(b) as Map)['timestamp'] as String,
-            );
-            return ta.compareTo(tb);
-          } catch (_) {
-            return 0;
-          }
-        });
-        await prefs.setStringList(key, existing);
-
-        newMessages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-        for (final msg in newMessages) {
-          _controller.add(ChatEvent('message', msg));
-        }
-
-        // Recuperar archivos faltantes
-        for (final msg in newMessages) {
-          if (msg.type == MessageType.text) continue;
-          final file = File(msg.content);
-          if (file.existsSync()) continue;
-          final fileName = msg.content.split('/').last.split('\\').last;
-          if (fileName.isEmpty) continue;
-          _requestFileFromPeer(ip, msg.id, fileName);
-        }
-      }
-    } catch (e) {
-      print('[ChatService] syncPrivateWithPeer($ip) failed: $e');
+    final chunks = <int>[];
+    await for (final chunk in socket) {
+      chunks.addAll(chunk);
     }
+    if (chunks.isEmpty) return;
+
+    final all = Uint8List.fromList(chunks);
+    if (all.length < 4) return;
+
+    final respHeaderLen = ByteData.view(
+      all.buffer, 0, 4,
+    ).getInt32(0, Endian.big);
+    if (all.length < 4 + respHeaderLen) return;
+
+    final response = jsonDecode(
+      utf8.decode(all.sublist(4, 4 + respHeaderLen)),
+    ) as Map<String, dynamic>;
+
+    if (response['type'] != 'private_history_response') return;
+
+    final messages = response['messages'] as List? ?? [];
+    final prefs = await SharedPreferences.getInstance();
+    final key = _privateKey(myUserId);
+    final existing = prefs.getStringList(key) ?? [];
+
+    final existingIds = existing.map((s) {
+      try {
+        return (jsonDecode(s) as Map)['id'] as String?;
+      } catch (_) {
+        return null;
+      }
+    }).whereType<String>().toSet();
+
+    bool changed = false;
+    final newMessages = <Message>[];
+
+    for (final raw in messages) {
+      try {
+        final j = Map<String, dynamic>.from(raw as Map);
+        final id = j['id'] as String?;
+        if (id == null || existingIds.contains(id)) continue;
+
+        // Normalizar content: si es una ruta de archivo, dejarla vacía
+        // hasta que se descargue. Así el chip muestra "no disponible"
+        // en lugar de una ruta inválida del otro dispositivo.
+        final msgType = j['type'] as String? ?? 'text';
+        if (msgType != 'text') {
+          j['content'] = ''; // se llenará cuando _requestFileFromPeer termine
+        }
+
+        existing.add(jsonEncode(j));
+        existingIds.add(id);
+        changed = true;
+        final isMe = j['senderId'] == myUserId;
+        newMessages.add(Message.fromJson(j, isMe));
+      } catch (_) {}
+    }
+
+    if (changed) {
+      existing.sort((a, b) {
+        try {
+          final ta = DateTime.parse(
+            (jsonDecode(a) as Map)['timestamp'] as String,
+          );
+          final tb = DateTime.parse(
+            (jsonDecode(b) as Map)['timestamp'] as String,
+          );
+          return ta.compareTo(tb);
+        } catch (_) {
+          return 0;
+        }
+      });
+      await prefs.setStringList(key, existing);
+
+      newMessages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      for (final msg in newMessages) {
+        _controller.add(ChatEvent('message', msg));
+      }
+
+      // Recuperar archivos faltantes usando el fileName del mensaje
+      // (NO el content que es una ruta inválida del otro dispositivo)
+      for (final msg in newMessages) {
+        if (msg.type == MessageType.text) continue;
+
+        // Usar fileName que viene en el header del mensaje
+        final rawMsg = messages.firstWhere(
+          (m) => (m as Map)['id'] == msg.id,
+          orElse: () => null,
+        );
+        if (rawMsg == null) continue;
+
+        final fileName = (rawMsg as Map)['fileName'] as String?;
+        if (fileName == null || fileName.isEmpty) continue;
+
+        // Pedir el archivo al peer
+        _requestFileFromPeer(ip, msg.id, fileName);
+      }
+    }
+  } catch (e) {
+    print('[ChatService] syncPrivateWithPeer($ip) failed: $e');
   }
+}
 
   Future<void> _handleBroadcastHistoryRequest(
     Socket socket,
@@ -622,62 +633,60 @@ class ChatService {
     await socket.close();
   }
 
-  Future<void> _requestFileFromPeer(
-    String ip,
-    String messageId,
-    String fileName,
-  ) async {
-    try {
-      final socket = await Socket.connect(
-        ip,
-        kChatPort,
-        timeout: const Duration(seconds: 10),
-      );
-      final headerBytes = utf8.encode(
-        jsonEncode({
-          'type': 'request_chat_file',
-          'messageId': messageId,
-          'fileName': fileName,
-        }),
-      );
-      final lenBytes = ByteData(4)..setInt32(0, headerBytes.length, Endian.big);
-      socket.add(lenBytes.buffer.asUint8List());
-      socket.add(headerBytes);
-      await socket.flush();
-      await socket.close();
+ Future<void> _requestFileFromPeer(
+  String ip,
+  String messageId,
+  String fileName,
+) async {
+  try {
+    final socket = await Socket.connect(
+      ip,
+      kChatPort,
+      timeout: const Duration(seconds: 30),
+    );
+    final headerBytes = utf8.encode(jsonEncode({
+      'type': 'request_chat_file',
+      'messageId': messageId,
+      'fileName': fileName,
+    }));
+    final lenBytes = ByteData(4)..setInt32(0, headerBytes.length, Endian.big);
+    socket.add(lenBytes.buffer.asUint8List());
+    socket.add(headerBytes);
+    await socket.flush();
+    await socket.close();
 
-      final chunks = <int>[];
-      await for (final chunk in socket) {
-        chunks.addAll(chunk);
-      }
-      if (chunks.length < 4) return;
-
-      final respHeaderLen = ByteData.view(
-        Uint8List.fromList(chunks.sublist(0, 4)).buffer,
-      ).getInt32(0, Endian.big);
-      if (chunks.length < 4 + respHeaderLen) return;
-
-      final response =
-          jsonDecode(utf8.decode(chunks.sublist(4, 4 + respHeaderLen)))
-              as Map<String, dynamic>;
-
-      if (response['type'] != 'chat_file_response') return;
-
-      final fileBytes = Uint8List.fromList(chunks.sublist(4 + respHeaderLen));
-      if (fileBytes.isEmpty) return;
-
-      final dir = await getApplicationDocumentsDirectory();
-      final destPath = '${dir.path}/$fileName';
-      await File(destPath).writeAsBytes(fileBytes);
-
-      // Actualizar el contenido del mensaje con la ruta local correcta
-      await _updateMessageContent(messageId, destPath);
-
-      print('[ChatService] Recovered file from $ip: $fileName');
-    } catch (e) {
-      print('[ChatService] _requestFileFromPeer($ip) failed: $e');
+    final chunks = <int>[];
+    await for (final chunk in socket) {
+      chunks.addAll(chunk);
     }
+    if (chunks.length < 4) return;
+
+    final respHeaderLen = ByteData.view(
+      Uint8List.fromList(chunks.sublist(0, 4)).buffer,
+    ).getInt32(0, Endian.big);
+    if (chunks.length < 4 + respHeaderLen) return;
+
+    final response = jsonDecode(
+      utf8.decode(chunks.sublist(4, 4 + respHeaderLen)),
+    ) as Map<String, dynamic>;
+
+    if (response['type'] != 'chat_file_response') return;
+
+    final fileBytes = Uint8List.fromList(chunks.sublist(4 + respHeaderLen));
+    if (fileBytes.isEmpty) return;
+
+    final dir = await getApplicationDocumentsDirectory();
+    final destPath = '${dir.path}/$fileName';
+    await File(destPath).writeAsBytes(fileBytes);
+
+    // Actualizar el content del mensaje con la ruta local correcta
+    await _updateMessageContent(messageId, destPath);
+
+    print('[ChatService] Recovered file from $ip: $fileName');
+  } catch (e) {
+    print('[ChatService] _requestFileFromPeer($ip, $fileName) failed: $e');
   }
+}
 
   Future<void> _updateMessageContent(
     String messageId,

@@ -79,39 +79,57 @@ class _ChatScreenState extends State<ChatScreen> {
     _sub = _chat.events.listen(_onChatEvent);
   }
 
-  void _onChatEvent(ChatEvent event) {
-    if (!mounted) return;
-    switch (event.type) {
-      case 'message':
-        final msg = event.data as Message;
-        if (!_isForThisChat(msg)) return;
-        if (_messages.any((m) => m.id == msg.id)) return;
-        setState(() => _messages.add(msg));
-        _scrollToBottom();
-        break;
+ void _onChatEvent(ChatEvent event) {
+  if (!mounted) return;
+  switch (event.type) {
+    case 'message':
+      final msg = event.data as Message;
+      if (!_isForThisChat(msg)) return;
+      if (_messages.any((m) => m.id == msg.id)) return;
+      setState(() => _messages.add(msg));
+      _scrollToBottom();
+      break;
 
-      case 'message_edited':
-        final data = event.data as Map<String, dynamic>;
-        final id = data['messageId'] as String;
-        final newContent = data['newContent'] as String;
-        setState(() {
-          final idx = _messages.indexWhere((m) => m.id == id);
-          if (idx != -1) {
-            _messages[idx] = _messages[idx].copyWith(
-              content: newContent,
-              isEdited: true,
-            );
-          }
-        });
-        break;
+    case 'message_edited':
+      final data = event.data as Map<String, dynamic>;
+      final id = data['messageId'] as String;
+      final newContent = data['newContent'] as String;
+      setState(() {
+        final idx = _messages.indexWhere((m) => m.id == id);
+        if (idx != -1) {
+          // Reemplazar mensaje completo para forzar rebuild del widget
+          final old = _messages[idx];
+          _messages[idx] = Message(
+            id: old.id,
+            senderId: old.senderId,
+            senderUsername: old.senderUsername,
+            senderIp: old.senderIp,
+            type: old.type,
+            content: newContent,
+            fileName: old.fileName,
+            fileSize: old.fileSize,
+            timestamp: old.timestamp,
+            isMe: old.isMe,
+            groupId: old.groupId,
+            recipientId: old.recipientId,
+            recipientUsername: old.recipientUsername,
+            isEdited: old.isEdited,
+            isBackgroundVideo: old.isBackgroundVideo,
+          );
+        } else {
+          // El mensaje no está en la lista aún (llegó por sync mientras
+          // el chat estaba cerrado y se abrió después). No hacer nada,
+          // se cargará correctamente cuando se abra el chat.
+        }
+      });
+      break;
 
-      case 'message_deleted':
-        final id = event.data as String;
-        setState(() => _messages.removeWhere((m) => m.id == id));
-        break;
-    }
+    case 'message_deleted':
+      final id = event.data as String;
+      setState(() => _messages.removeWhere((m) => m.id == id));
+      break;
   }
-
+}
   bool _isForThisChat(Message msg) {
     final myId = _auth.currentUser?.id ?? '';
     if (_isBroadcast) {

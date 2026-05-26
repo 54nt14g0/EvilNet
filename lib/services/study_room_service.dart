@@ -375,23 +375,23 @@ class StudyRoomService {
   }
 
   Future<void> _saveLocal() async {
-  _saveDebounce?.cancel();
-  _saveDebounce = Timer(const Duration(milliseconds: 400), () async {
-    try {
-      final file = await _dataFile();
-      final data = {
-        'version': _version,
-        'updatedAt': DateTime.now().toIso8601String(),
-        'topics': _topics.values.map((t) => t.toJson()).toList(),
-        'comments': _comments.values.map((c) => c.toJson()).toList(),
-        'progress': _progress.values.map((p) => p.toJson()).toList(),
-      };
-      await file.writeAsString(jsonEncode(data));
-    } catch (e) {
-      print('[StudyRoom] _saveLocal error: $e');
-    }
-  });
-}
+    _saveDebounce?.cancel();
+    _saveDebounce = Timer(const Duration(milliseconds: 400), () async {
+      try {
+        final file = await _dataFile();
+        final data = {
+          'version': _version,
+          'updatedAt': DateTime.now().toIso8601String(),
+          'topics': _topics.values.map((t) => t.toJson()).toList(),
+          'comments': _comments.values.map((c) => c.toJson()).toList(),
+          'progress': _progress.values.map((p) => p.toJson()).toList(),
+        };
+        await file.writeAsString(jsonEncode(data));
+      } catch (e) {
+        print('[StudyRoom] _saveLocal error: $e');
+      }
+    });
+  }
 
   // ─── Servidor ─────────────────────────────────────────────────────────────
 
@@ -421,228 +421,249 @@ class StudyRoomService {
   }
 
   void _handleConnection(Socket socket) async {
+  try {
+    final chunks = <int>[];
+    await for (final chunk in socket) {
+      chunks.addAll(chunk);
+    }
+    if (chunks.isEmpty) return;
+
+    String? type;
+    Map<String, dynamic>? packet;
+
     try {
-      final chunks = <int>[];
-      await for (final chunk in socket) {
-        chunks.addAll(chunk);
-      }
-      if (chunks.isEmpty) return;
-
-      String? type;
-      Map<String, dynamic>? packet;
-
-      try {
-        final raw = utf8.decode(chunks);
-        packet = jsonDecode(raw) as Map<String, dynamic>;
-        type = packet['type'] as String?;
-      } catch (_) {
-        if (chunks.length >= 4) {
-          final headerLen = ByteData.view(
-            Uint8List.fromList(chunks.sublist(0, 4)).buffer,
-          ).getInt32(0, Endian.big);
-          if (chunks.length >= 4 + headerLen) {
-            final headerBytes = chunks.sublist(4, 4 + headerLen);
-            packet =
-                jsonDecode(utf8.decode(headerBytes)) as Map<String, dynamic>;
-            type = packet['type'] as String?;
-          }
+      final raw = utf8.decode(chunks);
+      packet = jsonDecode(raw) as Map<String, dynamic>;
+      type = packet['type'] as String?;
+    } catch (_) {
+      if (chunks.length >= 4) {
+        final headerLen = ByteData.view(
+          Uint8List.fromList(chunks.sublist(0, 4)).buffer,
+        ).getInt32(0, Endian.big);
+        if (chunks.length >= 4 + headerLen) {
+          final headerBytes = chunks.sublist(4, 4 + headerLen);
+          packet =
+              jsonDecode(utf8.decode(headerBytes)) as Map<String, dynamic>;
+          type = packet['type'] as String?;
         }
       }
-
-      if (packet == null || type == null) return;
-
-      switch (type) {
-        case 'request_data':
-          final response = _buildFullPayload();
-          socket.add(utf8.encode(jsonEncode(response)));
-          await socket.flush();
-          break;
-
-        case 'full_push':
-          await _mergeFullPayload(packet);
-          break;
-
-        case 'topic_upsert':
-          final topic = StudyTopic.fromJson(
-            packet['topic'] as Map<String, dynamic>,
-          );
-          final imageBase64 = packet['imageBase64'] as String?;
-          final imageFileName = packet['imageFileName'] as String?;
-          final embeddedImages = packet['embeddedImages'] as List?;
-
-          String? validCoverPath;
-
-          // Guardar portada
-          if (imageBase64 != null && imageFileName != null) {
-            try {
-              final dir = await getApplicationDocumentsDirectory();
-              final destPath = '${dir.path}/$imageFileName';
-              await File(destPath).writeAsBytes(base64Decode(imageBase64));
-              validCoverPath = destPath;
-            } catch (e) {
-              print('[StudyRoom] Error saving cover image: $e');
-            }
-          }
-
-          // Guardar imágenes embebidas y reparar rutas en el Delta
-          String fixedDelta = topic.contentDelta;
-          if (embeddedImages != null && embeddedImages.isNotEmpty) {
-            final dir = await getApplicationDocumentsDirectory();
-            final fileNameToLocalPath = <String, String>{};
-            for (final img in embeddedImages) {
-              final imgMap = img as Map<String, dynamic>;
-              final fileName = imgMap['fileName'] as String;
-              final b64 = imgMap['base64'] as String;
-              final destPath = '${dir.path}/$fileName';
-              try {
-                await File(destPath).writeAsBytes(base64Decode(b64));
-                fileNameToLocalPath[fileName] = destPath;
-              } catch (e) {
-                print('[StudyRoom] Error saving embedded image: $e');
-              }
-            }
-            fixedDelta = await _fixEmbeddedImagePaths(
-              topic.contentDelta,
-              fileNameToLocalPath,
-            );
-          }
-
-          final topicToSave = StudyTopic(
-            id: topic.id,
-            title: topic.title,
-            contentDelta: fixedDelta,
-            coverImagePath: validCoverPath ?? topic.coverImagePath,
-            minHierarchy: topic.minHierarchy,
-            isSequential: topic.isSequential,
-            requiredTopicIds: topic.requiredTopicIds,
-            unlocksTopicIds: topic.unlocksTopicIds,
-            requiresApproval: topic.requiresApproval,
-            order: topic.order,
-            creatorId: topic.creatorId,
-            createdAt: topic.createdAt,
-            updatedAt: topic.updatedAt,
-          );
-          await _upsertTopicLocal(topicToSave);
-          break;
-
-        case 'topic_delete':
-          final id = packet['topicId'] as String;
-          await _deleteTopicLocal(id);
-          break;
-
-        case 'comment_upsert':
-          final comment = StudyComment.fromJson(
-            packet['comment'] as Map<String, dynamic>,
-          );
-          // Guardar imágenes embebidas si vienen en el packet
-          final images = packet['images'] as List?;
-          if (images != null && images.isNotEmpty) {
-            final dir = await getApplicationDocumentsDirectory();
-            final savedPaths = <String>[];
-            for (final img in images) {
-              final imgMap = img as Map<String, dynamic>;
-              final fileName = imgMap['fileName'] as String;
-              final b64 = imgMap['base64'] as String;
-              final destPath = '${dir.path}/$fileName';
-              try {
-                await File(destPath).writeAsBytes(base64Decode(b64));
-                savedPaths.add(destPath);
-              } catch (e) {
-                print('[StudyRoom] Error saving comment image: $e');
-              }
-            }
-            // Reconstruir el comentario con las rutas locales correctas
-            final fixedComment = StudyComment(
-              id: comment.id,
-              topicId: comment.topicId,
-              userId: comment.userId,
-              username: comment.username,
-              content: comment.content,
-              imagePaths: savedPaths,
-              status: comment.status,
-              timestamp: comment.timestamp,
-              isEdited: comment.isEdited,
-            );
-            await _upsertCommentLocal(fixedComment);
-          } else {
-            await _upsertCommentLocal(comment);
-          }
-          break;
-
-        case 'comment_delete':
-          final commentId = packet['commentId'] as String;
-          await _deleteCommentLocal(commentId);
-          break;
-
-        case 'progress_update':
-          final prog = UserProgress.fromJson(
-            packet['progress'] as Map<String, dynamic>,
-          );
-          await _upsertProgressLocal(prog);
-          break;
-        case 'request_cover_image':
-          final fileName = packet['fileName'] as String?;
-          if (fileName == null) break;
-          final dir = await getApplicationDocumentsDirectory();
-          final file = File('${dir.path}/$fileName');
-          if (!await file.exists()) {
-            socket.add(
-              utf8.encode(jsonEncode({'type': 'cover_image_not_found'})),
-            );
-            await socket.flush();
-          } else {
-            final bytes = await file.readAsBytes();
-            final response = jsonEncode({
-              'type': 'cover_image_response',
-              'fileName': fileName,
-              'imageBase64': base64Encode(bytes),
-            });
-            socket.add(utf8.encode(response));
-            await socket.flush();
-          }
-          break;
-
-        case 'request_comment_images':
-          final commentId = packet['commentId'] as String?;
-          if (commentId == null) break;
-          final comment = _comments[commentId];
-          if (comment == null) break;
-          final dir = await getApplicationDocumentsDirectory();
-          final imagePayloads = <Map<String, String>>[];
-          for (final imgPath in comment.imagePaths) {
-            final f = File(imgPath);
-            if (!await f.exists()) continue;
-            try {
-              final bytes = await f.readAsBytes();
-              final fileName = imgPath.split(Platform.pathSeparator).last;
-              imagePayloads.add({
-                'fileName': fileName,
-                'base64': base64Encode(bytes),
-              });
-            } catch (_) {}
-          }
-          socket.add(
-            utf8.encode(
-              jsonEncode({
-                'type': 'comment_images_response',
-                'commentId': commentId,
-                'images': imagePayloads,
-              }),
-            ),
-          );
-          await socket.flush();
-          break;
-        case 'image_transfer':
-          await _receiveImageTransfer(socket, packet, chunks);
-          break;
-      }
-    } catch (e) {
-      print('[StudyRoom] Connection error: $e');
-    } finally {
-      await socket.close();
     }
-  }
 
+    if (packet == null || type == null) return;
+
+    switch (type) {
+      case 'request_data':
+        final response = _buildFullPayload();
+        socket.add(utf8.encode(jsonEncode(response)));
+        await socket.flush();
+        break;
+
+      case 'full_push':
+        await _mergeFullPayload(packet);
+        break;
+
+      case 'topic_upsert':
+        final topic = StudyTopic.fromJson(
+          packet['topic'] as Map<String, dynamic>,
+        );
+        final imageBase64 = packet['imageBase64'] as String?;
+        final imageFileName = packet['imageFileName'] as String?;
+        final embeddedImages = packet['embeddedImages'] as List?;
+
+        String? validCoverPath;
+
+        // Guardar portada
+        if (imageBase64 != null && imageFileName != null) {
+          try {
+            final dir = await getApplicationDocumentsDirectory();
+            // ✅ CORREGIDO: null-check y operador !
+            final safeFileName = imageFileName
+                .split('/')
+                .last
+                .split('\\')
+                .last;
+            final destPath = '${dir.path}/$safeFileName';
+            await File(destPath).writeAsBytes(base64Decode(imageBase64));
+            validCoverPath = destPath;
+          } catch (e) {
+            print('[StudyRoom] Error saving cover image: $e');
+          }
+        }
+
+        // Guardar imágenes embebidas y reparar rutas en el Delta
+        String fixedDelta = topic.contentDelta;
+        if (embeddedImages != null && embeddedImages.isNotEmpty) {
+          final dir = await getApplicationDocumentsDirectory();
+          final fileNameToLocalPath = <String, String>{};
+          for (final img in embeddedImages) {
+            final imgMap = img as Map<String, dynamic>;
+            final fileName = imgMap['fileName'] as String;
+            final b64 = imgMap['base64'] as String;
+            
+            // ✅ CORREGIDO: usar fileName (no imageFileName) y sanitizar ruta
+            final safeFileName = fileName
+                .split('/')
+                .last
+                .split('\\')
+                .last;
+            final destPath = '${dir.path}/$safeFileName';
+            try {
+              await File(destPath).writeAsBytes(base64Decode(b64));
+              fileNameToLocalPath[fileName] = destPath;
+            } catch (e) {
+              print('[StudyRoom] Error saving embedded image: $e');
+            }
+          }
+          fixedDelta = await _fixEmbeddedImagePaths(
+            topic.contentDelta,
+            fileNameToLocalPath,
+          );
+        }
+
+        final topicToSave = StudyTopic(
+          id: topic.id,
+          title: topic.title,
+          contentDelta: fixedDelta,
+          coverImagePath: validCoverPath ?? topic.coverImagePath,
+          minHierarchy: topic.minHierarchy,
+          isSequential: topic.isSequential,
+          requiredTopicIds: topic.requiredTopicIds,
+          unlocksTopicIds: topic.unlocksTopicIds,
+          requiresApproval: topic.requiresApproval,
+          order: topic.order,
+          creatorId: topic.creatorId,
+          createdAt: topic.createdAt,
+          updatedAt: topic.updatedAt,
+        );
+        await _upsertTopicLocal(topicToSave);
+        break;
+
+      case 'topic_delete':
+        final id = packet['topicId'] as String;
+        await _deleteTopicLocal(id);
+        break;
+
+      case 'comment_upsert':
+        final comment = StudyComment.fromJson(
+          packet['comment'] as Map<String, dynamic>,
+        );
+        // Guardar imágenes embebidas si vienen en el packet
+        final images = packet['images'] as List?;
+        if (images != null && images.isNotEmpty) {
+          final dir = await getApplicationDocumentsDirectory();
+          final savedPaths = <String>[];
+          for (final img in images) {
+            final imgMap = img as Map<String, dynamic>;
+            final fileName = imgMap['fileName'] as String;
+            final b64 = imgMap['base64'] as String;
+            
+            // ✅ CORREGIDO: sanitizar nombre de archivo
+            final safeFileName = fileName
+                .split('/')
+                .last
+                .split('\\')
+                .last;
+            final destPath = '${dir.path}/$safeFileName';
+            try {
+              await File(destPath).writeAsBytes(base64Decode(b64));
+              savedPaths.add(destPath);
+            } catch (e) {
+              print('[StudyRoom] Error saving comment image: $e');
+            }
+          }
+          // Reconstruir el comentario con las rutas locales correctas
+          final fixedComment = StudyComment(
+            id: comment.id,
+            topicId: comment.topicId,
+            userId: comment.userId,
+            username: comment.username,
+            content: comment.content,
+            imagePaths: savedPaths,
+            status: comment.status,
+            timestamp: comment.timestamp,
+            isEdited: comment.isEdited,
+          );
+          await _upsertCommentLocal(fixedComment);
+        } else {
+          await _upsertCommentLocal(comment);
+        }
+        break;
+
+      case 'comment_delete':
+        final commentId = packet['commentId'] as String;
+        await _deleteCommentLocal(commentId);
+        break;
+
+      case 'progress_update':
+        final prog = UserProgress.fromJson(
+          packet['progress'] as Map<String, dynamic>,
+        );
+        await _upsertProgressLocal(prog);
+        break;
+        
+      case 'request_cover_image':
+        final fileName = packet['fileName'] as String?;
+        if (fileName == null) break;
+        final dir = await getApplicationDocumentsDirectory();
+        final file = File('${dir.path}/$fileName');
+        if (!await file.exists()) {
+          socket.add(
+            utf8.encode(jsonEncode({'type': 'cover_image_not_found'})),
+          );
+          await socket.flush();
+        } else {
+          final bytes = await file.readAsBytes();
+          final response = jsonEncode({
+            'type': 'cover_image_response',
+            'fileName': fileName,
+            'imageBase64': base64Encode(bytes),
+          });
+          socket.add(utf8.encode(response));
+          await socket.flush();
+        }
+        break;
+
+      case 'request_comment_images':
+        final commentId = packet['commentId'] as String?;
+        if (commentId == null) break;
+        final comment = _comments[commentId];
+        if (comment == null) break;
+        final dir = await getApplicationDocumentsDirectory();
+        final imagePayloads = <Map<String, String>>[];
+        for (final imgPath in comment.imagePaths) {
+          final f = File(imgPath);
+          if (!await f.exists()) continue;
+          try {
+            final bytes = await f.readAsBytes();
+            final fileName = imgPath.split(Platform.pathSeparator).last;
+            imagePayloads.add({
+              'fileName': fileName,
+              'base64': base64Encode(bytes),
+            });
+          } catch (_) {}
+        }
+        socket.add(
+          utf8.encode(
+            jsonEncode({
+              'type': 'comment_images_response',
+              'commentId': commentId,
+              'images': imagePayloads,
+            }),
+          ),
+        );
+        await socket.flush();
+        break;
+        
+      case 'image_transfer':
+        await _receiveImageTransfer(socket, packet, chunks);
+        break;
+    }
+  } catch (e) {
+    print('[StudyRoom] Connection error: $e');
+  } finally {
+    await socket.close();
+  }
+}
   // ─── Transferencia de imágenes ────────────────────────────────────────────
 
   Future<void> _sendImage(String ip, String fileName, Uint8List bytes) async {
@@ -866,77 +887,73 @@ class StudyRoomService {
   }
 
   /// Escanea el Delta JSON y extrae las imágenes embebidas como base64.
-  Future<List<Map<String, String>>> _extractEmbeddedImages(String deltaJson) async {
-  final result = <Map<String, String>>[];
-  try {
-    final ops = jsonDecode(deltaJson) as List<dynamic>;
-    for (final op in ops) {
-      if (op is! Map) continue;
-      final insert = op['insert'];
-      if (insert is! Map) continue;
-      final imagePath = insert['image'] as String?;
-      if (imagePath == null) continue;
-      final file = File(imagePath);
-      if (!await file.exists()) continue;
-      final bytes = await file.readAsBytes();
+  Future<List<Map<String, String>>> _extractEmbeddedImages(
+    String deltaJson,
+  ) async {
+    final result = <Map<String, String>>[];
+    try {
+      final ops = jsonDecode(deltaJson) as List<dynamic>;
+      for (final op in ops) {
+        if (op is! Map) continue;
+        final insert = op['insert'];
+        if (insert is! Map) continue;
+        final imagePath = insert['image'] as String?;
+        if (imagePath == null) continue;
+        final file = File(imagePath);
+        if (!await file.exists()) continue;
+        final bytes = await file.readAsBytes();
 
-      // Split con ambos separadores
-      final fileName = imagePath
-          .split('/')
-          .last
-          .split('\\')
-          .last;
+        // Split con ambos separadores
+        final fileName = imagePath.split('/').last.split('\\').last;
 
-      result.add({
-        'fileName': fileName,
-        'base64': base64Encode(bytes),
-        'originalPath': imagePath,
-      });
+        result.add({
+          'fileName': fileName,
+          'base64': base64Encode(bytes),
+          'originalPath': imagePath,
+        });
+      }
+    } catch (e) {
+      print('[StudyRoom] _extractEmbeddedImages error: $e');
     }
-  } catch (e) {
-    print('[StudyRoom] _extractEmbeddedImages error: $e');
+    return result;
   }
-  return result;
-}
+
   /// Toma un Delta JSON y reemplaza las rutas de imágenes embebidas
   /// por las rutas locales correctas del peer receptor.
   Future<String> _fixEmbeddedImagePaths(
-  String deltaJson,
-  Map<String, String> fileNameToLocalPath,
-) async {
-  try {
-    final ops = jsonDecode(deltaJson) as List<dynamic>;
-    final fixed = ops.map((op) {
-      if (op is! Map) return op;
-      final insert = op['insert'];
-      if (insert is! Map) return op;
-      final imagePath = insert['image'] as String?;
-      if (imagePath == null) return op;
+    String deltaJson,
+    Map<String, String> fileNameToLocalPath,
+  ) async {
+    try {
+      final ops = jsonDecode(deltaJson) as List<dynamic>;
+      final fixed = ops.map((op) {
+        if (op is! Map) return op;
+        final insert = op['insert'];
+        if (insert is! Map) return op;
+        final imagePath = insert['image'] as String?;
+        if (imagePath == null) return op;
 
-      // Split con ambos separadores para cubrir Windows → Android y viceversa
-      final fileName = imagePath
-          .split('/')
-          .last
-          .split('\\')
-          .last;
+        // Split con ambos separadores para cubrir Windows → Android y viceversa
+        final fileName = imagePath.split('/').last.split('\\').last;
 
-      final localPath = fileNameToLocalPath[fileName];
-      if (localPath == null) return op;
+        final localPath = fileNameToLocalPath[fileName];
+        if (localPath == null) return op;
 
-      return {
-        ...Map<String, dynamic>.from(op as Map),
-        'insert': {
-          ...Map<String, dynamic>.from(insert as Map),
-          'image': localPath,
-        },
-      };
-    }).toList();
-    return jsonEncode(fixed);
-  } catch (e) {
-    print('[StudyRoom] _fixEmbeddedImagePaths error: $e');
-    return deltaJson;
+        return {
+          ...Map<String, dynamic>.from(op as Map),
+          'insert': {
+            ...Map<String, dynamic>.from(insert as Map),
+            'image': localPath,
+          },
+        };
+      }).toList();
+      return jsonEncode(fixed);
+    } catch (e) {
+      print('[StudyRoom] _fixEmbeddedImagePaths error: $e');
+      return deltaJson;
+    }
   }
-}
+
   Future<void> _mergeFullPayload(Map<String, dynamic> data) async {
     bool changed = false;
     final incomingTopics = (data['topics'] as List? ?? []);
@@ -959,7 +976,10 @@ class StudyRoomService {
         if (imageBase64 != null && imageFileName != null) {
           try {
             final dir = await getApplicationDocumentsDirectory();
-            final destPath = '${dir.path}/$imageFileName';
+            // Usar solo el nombre del archivo, nunca la ruta completa del sender
+            final safeFileName = imageFileName.split('/').last.split('\\').last;
+
+            final destPath = '${dir.path}/$safeFileName';
             final imgBytes = base64Decode(imageBase64);
             await File(destPath).writeAsBytes(imgBytes);
             validCoverPath = destPath;
@@ -1457,55 +1477,55 @@ class StudyRoomService {
   // ─── Lógica de acceso ─────────────────────────────────────────────────────
 
   bool canViewTopic({
-  required String topicId,
-  required String userId,
-  required int userHierarchy,
-}) {
-  final topic = _topics[topicId];
-  if (topic == null) return false;
+    required String topicId,
+    required String userId,
+    required int userHierarchy,
+  }) {
+    final topic = _topics[topicId];
+    if (topic == null) return false;
 
-  // J9+ accede a todo sin restricción
-  if (userHierarchy >= 9) return true;
+    // J9+ accede a todo sin restricción
+    if (userHierarchy >= 9) return true;
 
-  if (userHierarchy < topic.minHierarchy) return false;
-  if (!topic.isSequential || topic.requiredTopicIds.isEmpty) return true;
-  final prog = _progress[userId];
-  if (prog == null) return false;
-  return topic.requiredTopicIds.every((id) => prog.hasUnlocked(id));
-}
+    if (userHierarchy < topic.minHierarchy) return false;
+    if (!topic.isSequential || topic.requiredTopicIds.isEmpty) return true;
+    final prog = _progress[userId];
+    if (prog == null) return false;
+    return topic.requiredTopicIds.every((id) => prog.hasUnlocked(id));
+  }
 
   String? lockReason({
-  required String topicId,
-  required String userId,
-  required int userHierarchy,
-}) {
-  final topic = _topics[topicId];
-  if (topic == null) return null;
+    required String topicId,
+    required String userId,
+    required int userHierarchy,
+  }) {
+    final topic = _topics[topicId];
+    if (topic == null) return null;
 
-  // J9+ sin restricciones, nunca muestra candado
-  if (userHierarchy >= 9) return null;
+    // J9+ sin restricciones, nunca muestra candado
+    if (userHierarchy >= 9) return null;
 
-  if (userHierarchy < topic.minHierarchy) {
-    return 'Requiere jerarquía ${topic.minHierarchy} para acceder';
-  }
-
-  if (topic.isSequential && topic.requiredTopicIds.isNotEmpty) {
-    final prog = _progress[userId];
-    final missing = topic.requiredTopicIds
-        .where((id) => prog == null || !prog.hasUnlocked(id))
-        .map((id) => _topics[id]?.title ?? id)
-        .toList();
-
-    if (missing.isNotEmpty) {
-      if (missing.length == 1) {
-        return 'Debes comentar "${missing.first}" para desbloquear este tema';
-      }
-      return 'Debes comentar: ${missing.map((t) => '"$t"').join(', ')}';
+    if (userHierarchy < topic.minHierarchy) {
+      return 'Requiere jerarquía ${topic.minHierarchy} para acceder';
     }
-  }
 
-  return null;
-}
+    if (topic.isSequential && topic.requiredTopicIds.isNotEmpty) {
+      final prog = _progress[userId];
+      final missing = topic.requiredTopicIds
+          .where((id) => prog == null || !prog.hasUnlocked(id))
+          .map((id) => _topics[id]?.title ?? id)
+          .toList();
+
+      if (missing.isNotEmpty) {
+        if (missing.length == 1) {
+          return 'Debes comentar "${missing.first}" para desbloquear este tema';
+        }
+        return 'Debes comentar: ${missing.map((t) => '"$t"').join(', ')}';
+      }
+    }
+
+    return null;
+  }
 
   // ─── Transferencia de imágenes de portada ─────────────────────────────────
 
