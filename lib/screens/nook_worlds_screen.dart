@@ -12,11 +12,11 @@ import '../services/auth_service.dart';
 import 'nook_canvas_screen.dart';
 
 // ─── Paleta Recovecos ─────────────────────────────────────────────────────────
-const Color kNW1 = Color(0xFF7B2FBE);  // violeta profundo
-const Color kNW2 = Color(0xFF00D4FF);  // cian eléctrico
-const Color kNW3 = Color(0xFFFF6B6B);  // coral
-const Color kNW4 = Color(0xFF39FF14);  // verde neón
-const Color kNW5 = Color(0xFFFF9A3C);  // ámbar
+const Color kNW1 = Color(0xFF7B2FBE); // violeta profundo
+const Color kNW2 = Color(0xFF00D4FF); // cian eléctrico
+const Color kNW3 = Color(0xFFFF6B6B); // coral
+const Color kNW4 = Color(0xFF39FF14); // verde neón
+const Color kNW5 = Color(0xFFFF9A3C); // ámbar
 const Color kNWBg = Color(0xFF03010A); // negro espacio
 const Color kNWPanel = Color(0xFF0C0720);
 
@@ -124,7 +124,10 @@ class _NookWorldsScreenState extends State<NookWorldsScreen>
           style: const TextStyle(fontFamily: 'monospace', color: Colors.white),
           decoration: InputDecoration(
             hintText: '// ingresa la clave...',
-            hintStyle: TextStyle(color: Colors.white38, fontFamily: 'monospace'),
+            hintStyle: TextStyle(
+              color: Colors.white38,
+              fontFamily: 'monospace',
+            ),
             enabledBorder: OutlineInputBorder(
               borderSide: BorderSide(color: kNW2.withOpacity(0.3)),
             ),
@@ -137,13 +140,17 @@ class _NookWorldsScreenState extends State<NookWorldsScreen>
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('CANCELAR',
-                style: TextStyle(fontFamily: 'monospace', color: Colors.white38)),
+            child: const Text(
+              'CANCELAR',
+              style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, ctrl.text),
-            child: const Text('ENTRAR',
-                style: TextStyle(fontFamily: 'monospace', color: kNW2)),
+            child: const Text(
+              'ENTRAR',
+              style: TextStyle(fontFamily: 'monospace', color: kNW2),
+            ),
           ),
         ],
       ),
@@ -163,10 +170,7 @@ class _NookWorldsScreenState extends State<NookWorldsScreen>
     Navigator.push(
       context,
       _NebulaPageRoute(
-        builder: (_) => NookCanvasScreen(
-          world: world,
-          nookId: initialNook.id,
-        ),
+        builder: (_) => NookCanvasScreen(world: world, nookId: initialNook.id),
       ),
     );
   }
@@ -206,18 +210,20 @@ class _NookWorldsScreenState extends State<NookWorldsScreen>
     if (!mounted) return;
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => NookWorldDetailScreen(world: world),
-      ),
+      MaterialPageRoute(builder: (_) => NookWorldDetailScreen(world: world)),
     );
   }
 
   void _showMsg(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg,
-          style: const TextStyle(fontFamily: 'monospace', color: Colors.white)),
-      backgroundColor: kNWPanel,
-    ));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          msg,
+          style: const TextStyle(fontFamily: 'monospace', color: Colors.white),
+        ),
+        backgroundColor: kNWPanel,
+      ),
+    );
   }
 
   // ─── Build ────────────────────────────────────────────────────────────────
@@ -289,8 +295,11 @@ class _NookWorldsScreenState extends State<NookWorldsScreen>
                 borderRadius: BorderRadius.circular(8),
                 color: Colors.black26,
               ),
-              child: const Icon(Icons.arrow_back_ios_new,
-                  color: kNW2, size: 14),
+              child: const Icon(
+                Icons.arrow_back_ios_new,
+                color: kNW2,
+                size: 14,
+              ),
             ),
           ),
           const SizedBox(width: 16),
@@ -389,12 +398,11 @@ class _NookWorldsScreenState extends State<NookWorldsScreen>
           onTap: () => _enterWorld(_worlds[i]),
           onEdit: _isAdmin
               ? () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          NookWorldDetailScreen(world: _worlds[i]),
-                    ),
-                  )
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => NookWorldDetailScreen(world: _worlds[i]),
+                  ),
+                )
               : null,
         ),
       ),
@@ -445,7 +453,8 @@ class _WorldCardState extends State<_WorldCard>
   // Color único por mundo basado en su id
   Color get _worldColor {
     final colors = [kNW1, kNW2, kNW3, kNW4, kNW5];
-    final idx = widget.world.id.codeUnits.fold(0, (a, b) => a + b) % colors.length;
+    final idx =
+        widget.world.id.codeUnits.fold(0, (a, b) => a + b) % colors.length;
     return colors[idx];
   }
 
@@ -480,7 +489,8 @@ class _WorldCardState extends State<_WorldCard>
                         boxShadow: [
                           BoxShadow(
                             color: color.withOpacity(
-                                0.15 + pv * 0.15 + hv * 0.2),
+                              0.15 + pv * 0.15 + hv * 0.2,
+                            ),
                             blurRadius: 30 + pv * 20 + hv * 20,
                             spreadRadius: 2 + pv * 4,
                           ),
@@ -521,7 +531,8 @@ class _WorldCardState extends State<_WorldCard>
                                 )
                               : null,
                         ),
-                        child: widget.world.coverImagePath != null &&
+                        child:
+                            widget.world.coverImagePath != null &&
                                 File(widget.world.coverImagePath!).existsSync()
                             ? Image.file(
                                 File(widget.world.coverImagePath!),
@@ -574,11 +585,13 @@ class _WorldCardState extends State<_WorldCard>
                             decoration: BoxDecoration(
                               color: Colors.black.withOpacity(0.7),
                               shape: BoxShape.circle,
-                              border: Border.all(
-                                  color: color.withOpacity(0.5)),
+                              border: Border.all(color: color.withOpacity(0.5)),
                             ),
-                            child: Icon(Icons.edit_outlined,
-                                size: 12, color: color),
+                            child: Icon(
+                              Icons.edit_outlined,
+                              size: 12,
+                              color: color,
+                            ),
                           ),
                         ),
                       ),
@@ -629,9 +642,14 @@ class _SmallBadge extends StatelessWidget {
       ),
       child: icon != null
           ? Icon(icon, size: 9, color: color)
-          : Text(label!,
+          : Text(
+              label!,
               style: TextStyle(
-                  fontFamily: 'monospace', fontSize: 8, color: color)),
+                fontFamily: 'monospace',
+                fontSize: 8,
+                color: color,
+              ),
+            ),
     );
   }
 }
@@ -680,10 +698,11 @@ class _WorldFormDialogState extends State<_WorldFormDialog> {
       title: Text(
         widget.existing == null ? '✦ NUEVO MUNDO' : '✦ EDITAR MUNDO',
         style: const TextStyle(
-            fontFamily: 'monospace',
-            fontSize: 13,
-            color: kNW2,
-            letterSpacing: 2),
+          fontFamily: 'monospace',
+          fontSize: 13,
+          color: kNW2,
+          letterSpacing: 2,
+        ),
       ),
       content: SingleChildScrollView(
         child: Column(
@@ -699,7 +718,8 @@ class _WorldFormDialogState extends State<_WorldFormDialog> {
             GestureDetector(
               onTap: _pickCover,
               child: Container(
-                height: 60,
+                height: 80,
+                width: double.infinity,
                 decoration: BoxDecoration(
                   color: Colors.black26,
                   border: Border.all(color: kNW1.withOpacity(0.3)),
@@ -708,12 +728,26 @@ class _WorldFormDialogState extends State<_WorldFormDialog> {
                 child: _coverPath != null && File(_coverPath!).existsSync()
                     ? ClipRRect(
                         borderRadius: BorderRadius.circular(4),
-                        child: Image.file(File(_coverPath!), fit: BoxFit.cover,
-                            width: double.infinity),
+                        child: Image.file(
+                          File(_coverPath!),
+                          fit: BoxFit.cover,
+                          width: double.infinity,
+                          height: 80,
+                          errorBuilder: (_, __, ___) => const Center(
+                            child: Icon(
+                              Icons.broken_image_outlined,
+                              color: Colors.white38,
+                              size: 24,
+                            ),
+                          ),
+                        ),
                       )
                     : const Center(
-                        child: Icon(Icons.add_photo_alternate_outlined,
-                            color: Colors.white38, size: 24),
+                        child: Icon(
+                          Icons.add_photo_alternate_outlined,
+                          color: Colors.white38,
+                          size: 24,
+                        ),
                       ),
               ),
             ),
@@ -732,14 +766,20 @@ class _WorldFormDialogState extends State<_WorldFormDialog> {
                   value: _minH,
                   dropdownColor: kNWPanel,
                   style: const TextStyle(
-                      fontFamily: 'monospace', color: Colors.white),
+                    fontFamily: 'monospace',
+                    color: Colors.white,
+                  ),
                   items: List.generate(
                     10,
                     (i) => DropdownMenuItem(
                       value: i + 1,
-                      child: Text('J${i + 1}',
-                          style: const TextStyle(
-                              fontFamily: 'monospace', color: Colors.white70)),
+                      child: Text(
+                        'J${i + 1}',
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          color: Colors.white70,
+                        ),
+                      ),
                     ),
                   ),
                   onChanged: (v) => setState(() => _minH = v ?? 1),
@@ -750,18 +790,20 @@ class _WorldFormDialogState extends State<_WorldFormDialog> {
             _Label('CONTRASEÑA (opcional)'),
             const SizedBox(height: 4),
             _NWField(
-                controller: _passCtrl,
-                hint: 'dejar vacío = sin contraseña',
-                obscure: true),
+              controller: _passCtrl,
+              hint: 'dejar vacío = sin contraseña',
+              obscure: true,
+            ),
           ],
         ),
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('CANCELAR',
-              style:
-                  TextStyle(fontFamily: 'monospace', color: Colors.white38)),
+          child: const Text(
+            'CANCELAR',
+            style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
+          ),
         ),
         TextButton(
           onPressed: () {
@@ -774,8 +816,10 @@ class _WorldFormDialogState extends State<_WorldFormDialog> {
               'password': _passCtrl.text,
             });
           },
-          child: const Text('GUARDAR',
-              style: TextStyle(fontFamily: 'monospace', color: kNW2)),
+          child: const Text(
+            'GUARDAR',
+            style: TextStyle(fontFamily: 'monospace', color: kNW2),
+          ),
         ),
       ],
     );
@@ -827,53 +871,62 @@ class _NookWorldDetailScreenState extends State<NookWorldDetailScreen>
     final w = _service.world(_world.id);
     if (w != null) _world = w;
     setState(() {
-      _nooks = _service.nooksForWorld(_world.id).map((n) => _NookRow(n)).toList();
+      _nooks = _service
+          .nooksForWorld(_world.id)
+          .map((n) => _NookRow(n))
+          .toList();
     });
   }
 
   Future<void> _createNook() async {
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (_) => _NookFormDialog(worldId: _world.id),
-    );
-    if (result == null) return;
+  final result = await showDialog<Map<String, dynamic>>(
+    context: context,
+    builder: (_) => _NookFormDialog(worldId: _world.id),
+  );
+  if (result == null) return;
 
-    final nook = Nook.create(
-      worldId: _world.id,
-      name: result['name'] as String,
-      isInitial: result['isInitial'] as bool,
-    );
-    if (result['isInitial'] as bool) {
-      await _service.setInitialNook(_world.id, nook.id);
-      // setInitialNook ya llama upsertNook internamente para el marcado,
-      // pero necesitamos guardar el nook completo
-    }
-    await _service.upsertNook(nook);
-    if (result['isInitial'] as bool) {
-      await _service.setInitialNook(_world.id, nook.id);
-    }
+  final nook = Nook.create(
+    worldId: _world.id,
+    name: result['name'] as String,
+    isInitial: result['isInitial'] as bool,
+  );
+
+  // Primero guardar el nook en el servicio
+  await _service.upsertNook(nook);
+
+  // Luego, si es inicial, marcarlo (ahora sí existe en el servicio)
+  if (result['isInitial'] as bool) {
+    await _service.setInitialNook(_world.id, nook.id);
   }
-
+}
   Future<void> _deleteNook(String nookId) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: kNWPanel,
-        title: const Text('ELIMINAR RECOVECO',
-            style: TextStyle(
-                fontFamily: 'monospace', color: kNW3, fontSize: 13)),
-        content: const Text('¿Eliminar este recoveco?\nNo se puede deshacer.',
-            style: TextStyle(fontFamily: 'monospace', color: Colors.white70)),
+        title: const Text(
+          'ELIMINAR RECOVECO',
+          style: TextStyle(fontFamily: 'monospace', color: kNW3, fontSize: 13),
+        ),
+        content: const Text(
+          '¿Eliminar este recoveco?\nNo se puede deshacer.',
+          style: TextStyle(fontFamily: 'monospace', color: Colors.white70),
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('CANCELAR',
-                  style: TextStyle(
-                      fontFamily: 'monospace', color: Colors.white38))),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text(
+              'CANCELAR',
+              style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
+            ),
+          ),
           TextButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('ELIMINAR',
-                  style: TextStyle(fontFamily: 'monospace', color: kNW3))),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              'ELIMINAR',
+              style: TextStyle(fontFamily: 'monospace', color: kNW3),
+            ),
+          ),
         ],
       ),
     );
@@ -885,22 +938,29 @@ class _NookWorldDetailScreenState extends State<NookWorldDetailScreen>
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: kNWPanel,
-        title: const Text('ELIMINAR MUNDO',
-            style: TextStyle(fontFamily: 'monospace', color: kNW3, fontSize: 13)),
+        title: const Text(
+          'ELIMINAR MUNDO',
+          style: TextStyle(fontFamily: 'monospace', color: kNW3, fontSize: 13),
+        ),
         content: const Text(
-            'Esto eliminará el mundo y TODOS sus recovecos.\n¿Continuar?',
-            style:
-                TextStyle(fontFamily: 'monospace', color: Colors.white70)),
+          'Esto eliminará el mundo y TODOS sus recovecos.\n¿Continuar?',
+          style: TextStyle(fontFamily: 'monospace', color: Colors.white70),
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('CANCELAR',
-                  style: TextStyle(
-                      fontFamily: 'monospace', color: Colors.white38))),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text(
+              'CANCELAR',
+              style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
+            ),
+          ),
           TextButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('ELIMINAR',
-                  style: TextStyle(fontFamily: 'monospace', color: kNW3))),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              'ELIMINAR',
+              style: TextStyle(fontFamily: 'monospace', color: kNW3),
+            ),
+          ),
         ],
       ),
     );
@@ -953,7 +1013,8 @@ class _NookWorldDetailScreenState extends State<NookWorldDetailScreen>
             child: AnimatedBuilder(
               animation: _bgCtrl,
               builder: (_, __) => CustomPaint(
-                  painter: _NebulaPainter(_bgCtrl.value, _bgCtrl.value * 0.5)),
+                painter: _NebulaPainter(_bgCtrl.value, _bgCtrl.value * 0.5),
+              ),
             ),
           ),
           SafeArea(
@@ -970,11 +1031,14 @@ class _NookWorldDetailScreenState extends State<NookWorldDetailScreen>
         onPressed: _createNook,
         backgroundColor: kNW1.withOpacity(0.85),
         icon: const Icon(Icons.add, color: Colors.white),
-        label: const Text('RECOVECO',
-            style: TextStyle(
-                fontFamily: 'monospace',
-                color: Colors.white,
-                letterSpacing: 2)),
+        label: const Text(
+          'RECOVECO',
+          style: TextStyle(
+            fontFamily: 'monospace',
+            color: Colors.white,
+            letterSpacing: 2,
+          ),
+        ),
       ),
     );
   }
@@ -984,8 +1048,7 @@ class _NookWorldDetailScreenState extends State<NookWorldDetailScreen>
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.4),
-        border: Border(
-            bottom: BorderSide(color: kNW1.withOpacity(0.2))),
+        border: Border(bottom: BorderSide(color: kNW1.withOpacity(0.2))),
       ),
       child: Row(
         children: [
@@ -997,8 +1060,11 @@ class _NookWorldDetailScreenState extends State<NookWorldDetailScreen>
                 border: Border.all(color: kNW2.withOpacity(0.3)),
                 borderRadius: BorderRadius.circular(6),
               ),
-              child: const Icon(Icons.arrow_back_ios_new,
-                  color: kNW2, size: 13),
+              child: const Icon(
+                Icons.arrow_back_ios_new,
+                color: kNW2,
+                size: 13,
+              ),
             ),
           ),
           const SizedBox(width: 12),
@@ -1009,19 +1075,21 @@ class _NookWorldDetailScreenState extends State<NookWorldDetailScreen>
                 Text(
                   _world.name.toUpperCase(),
                   style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                      letterSpacing: 2),
+                    fontFamily: 'monospace',
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                    letterSpacing: 2,
+                  ),
                 ),
                 Text(
                   '${_nooks.length} recoveco${_nooks.length != 1 ? 's' : ''}',
                   style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 10,
-                      color: kNW2.withOpacity(0.5),
-                      letterSpacing: 1),
+                    fontFamily: 'monospace',
+                    fontSize: 10,
+                    color: kNW2.withOpacity(0.5),
+                    letterSpacing: 1,
+                  ),
                 ),
               ],
             ),
@@ -1047,16 +1115,22 @@ class _NookWorldDetailScreenState extends State<NookWorldDetailScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.explore_outlined,
-                size: 48, color: kNW1.withOpacity(0.3)),
+            Icon(
+              Icons.explore_outlined,
+              size: 48,
+              color: kNW1.withOpacity(0.3),
+            ),
             const SizedBox(height: 16),
-            const Text('Sin recovecos aún.\nPulsa + para crear el primero.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 12,
-                    color: Colors.white24,
-                    height: 1.6)),
+            const Text(
+              'Sin recovecos aún.\nPulsa + para crear el primero.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 12,
+                color: Colors.white24,
+                height: 1.6,
+              ),
+            ),
           ],
         ),
       );
@@ -1075,15 +1149,15 @@ class _NookWorldDetailScreenState extends State<NookWorldDetailScreen>
           decoration: BoxDecoration(
             color: Colors.black.withOpacity(0.4),
             border: Border.all(
-              color: isInitial
-                  ? kNW4.withOpacity(0.5)
-                  : kNW1.withOpacity(0.2),
+              color: isInitial ? kNW4.withOpacity(0.5) : kNW1.withOpacity(0.2),
             ),
             borderRadius: BorderRadius.circular(6),
           ),
           child: ListTile(
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 14,
+              vertical: 4,
+            ),
             leading: Container(
               width: 36,
               height: 36,
@@ -1107,26 +1181,29 @@ class _NookWorldDetailScreenState extends State<NookWorldDetailScreen>
             title: Text(
               nook.name,
               style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 13,
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold),
+                fontFamily: 'monospace',
+                fontSize: 13,
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
             ),
             subtitle: isInitial
-                ? const Text('RECOVECO INICIAL',
+                ? const Text(
+                    'RECOVECO INICIAL',
                     style: TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 9,
-                        color: kNW4,
-                        letterSpacing: 1))
+                      fontFamily: 'monospace',
+                      fontSize: 9,
+                      color: kNW4,
+                      letterSpacing: 1,
+                    ),
+                  )
                 : null,
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 // Botón editar canvas
                 IconButton(
-                  icon: const Icon(Icons.edit_outlined,
-                      color: kNW2, size: 16),
+                  icon: const Icon(Icons.edit_outlined, color: kNW2, size: 16),
                   onPressed: () => Navigator.push(
                     context,
                     MaterialPageRoute(
@@ -1142,16 +1219,22 @@ class _NookWorldDetailScreenState extends State<NookWorldDetailScreen>
                 // Marcar como inicial
                 if (!isInitial)
                   IconButton(
-                    icon: const Icon(Icons.flag_outlined,
-                        color: kNW4, size: 16),
+                    icon: const Icon(
+                      Icons.flag_outlined,
+                      color: kNW4,
+                      size: 16,
+                    ),
                     onPressed: () =>
                         _service.setInitialNook(_world.id, nook.id),
                     tooltip: 'Marcar como inicial',
                   ),
                 // Eliminar
                 IconButton(
-                  icon: Icon(Icons.delete_outline,
-                      color: kNW3.withOpacity(0.7), size: 16),
+                  icon: Icon(
+                    Icons.delete_outline,
+                    color: kNW3.withOpacity(0.7),
+                    size: 16,
+                  ),
                   onPressed: () => _deleteNook(nook.id),
                   tooltip: 'Eliminar recoveco',
                 ),
@@ -1201,12 +1284,15 @@ class _NookFormDialogState extends State<_NookFormDialog> {
         borderRadius: BorderRadius.circular(6),
         side: BorderSide(color: kNW1.withOpacity(0.3)),
       ),
-      title: const Text('✦ NUEVO RECOVECO',
-          style: TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 13,
-              color: kNW2,
-              letterSpacing: 2)),
+      title: const Text(
+        '✦ NUEVO RECOVECO',
+        style: TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 13,
+          color: kNW2,
+          letterSpacing: 2,
+        ),
+      ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1223,12 +1309,15 @@ class _NookFormDialogState extends State<_NookFormDialog> {
                 activeColor: kNW4,
               ),
               const SizedBox(width: 8),
-              const Text('RECOVECO INICIAL',
-                  style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 11,
-                      color: kNW4,
-                      letterSpacing: 1)),
+              const Text(
+                'RECOVECO INICIAL',
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                  color: kNW4,
+                  letterSpacing: 1,
+                ),
+              ),
             ],
           ),
         ],
@@ -1236,9 +1325,10 @@ class _NookFormDialogState extends State<_NookFormDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('CANCELAR',
-              style:
-                  TextStyle(fontFamily: 'monospace', color: Colors.white38)),
+          child: const Text(
+            'CANCELAR',
+            style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
+          ),
         ),
         TextButton(
           onPressed: () {
@@ -1246,8 +1336,10 @@ class _NookFormDialogState extends State<_NookFormDialog> {
             if (name.isEmpty) return;
             Navigator.pop(context, {'name': name, 'isInitial': _isInitial});
           },
-          child: const Text('CREAR',
-              style: TextStyle(fontFamily: 'monospace', color: kNW2)),
+          child: const Text(
+            'CREAR',
+            style: TextStyle(fontFamily: 'monospace', color: kNW2),
+          ),
         ),
       ],
     );
@@ -1261,12 +1353,15 @@ class _Label extends StatelessWidget {
   const _Label(this.text);
   @override
   Widget build(BuildContext context) {
-    return Text(text,
-        style: TextStyle(
-            fontFamily: 'monospace',
-            fontSize: 9,
-            color: kNW2.withOpacity(0.6),
-            letterSpacing: 2));
+    return Text(
+      text,
+      style: TextStyle(
+        fontFamily: 'monospace',
+        fontSize: 9,
+        color: kNW2.withOpacity(0.6),
+        letterSpacing: 2,
+      ),
+    );
   }
 }
 
@@ -1274,8 +1369,11 @@ class _NWField extends StatelessWidget {
   final TextEditingController controller;
   final String hint;
   final bool obscure;
-  const _NWField(
-      {required this.controller, required this.hint, this.obscure = false});
+  const _NWField({
+    required this.controller,
+    required this.hint,
+    this.obscure = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1292,9 +1390,14 @@ class _NWField extends StatelessWidget {
         decoration: InputDecoration(
           hintText: hint,
           hintStyle: const TextStyle(
-              fontFamily: 'monospace', color: Colors.white24, fontSize: 12),
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            fontFamily: 'monospace',
+            color: Colors.white24,
+            fontSize: 12,
+          ),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 10,
+            vertical: 10,
+          ),
           border: InputBorder.none,
         ),
       ),
@@ -1309,8 +1412,11 @@ class _NebulaPageRoute extends MaterialPageRoute {
 
   @override
   Widget buildTransitions(
-      BuildContext context, Animation<double> animation,
-      Animation<double> secondaryAnimation, Widget child) {
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
     return FadeTransition(
       opacity: CurvedAnimation(parent: animation, curve: Curves.easeInOut),
       child: child,
@@ -1328,8 +1434,7 @@ class _NebulaPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     // Fondo negro espacio
-    canvas.drawRect(Offset.zero & size,
-        Paint()..color = kNWBg);
+    canvas.drawRect(Offset.zero & size, Paint()..color = kNWBg);
 
     final rng = Random(42);
 
@@ -1401,6 +1506,5 @@ class _NebulaPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_NebulaPainter old) =>
-      old.t != t || old.starT != starT;
+  bool shouldRepaint(_NebulaPainter old) => old.t != t || old.starT != starT;
 }

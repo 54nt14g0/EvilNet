@@ -142,11 +142,11 @@ class _NookCanvasScreenState extends State<NookCanvasScreen>
   bool _isRiddleSolved(String riddleId) => _solvedRiddles.contains(riddleId);
 
   bool _isButtonVisible(NookElement btn) {
-  if (btn.requiredRiddleId == null || btn.requiredRiddleId!.isEmpty) {
-    return true;
+    if (btn.requiredRiddleId == null || btn.requiredRiddleId!.isEmpty) {
+      return true;
+    }
+    return _isRiddleSolved(btn.requiredRiddleId!);
   }
-  return _isRiddleSolved(btn.requiredRiddleId!);
-}
 
   // ─── Navegación ───────────────────────────────────────────────────────────
 
@@ -165,13 +165,13 @@ class _NookCanvasScreenState extends State<NookCanvasScreen>
 
   // ─── Guardar ─────────────────────────────────────────────────────────────
 
- Future<void> _saveCanvas() async {
-  if (_nook == null) return;
-  await _service.upsertNook(_nook!);
-  if (!mounted) return; // ← este guard faltaba
-  setState(() => _isDirty = false);
-  _showMsg('Canvas guardado ✓');
-}
+  Future<void> _saveCanvas() async {
+    if (_nook == null) return;
+    await _service.upsertNook(_nook!);
+    if (!mounted) return; // ← este guard faltaba
+    setState(() => _isDirty = false);
+    _showMsg('Canvas guardado ✓');
+  }
 
   void _showMsg(String msg) {
     if (!mounted) return;
@@ -627,110 +627,107 @@ class _NookCanvasScreenState extends State<NookCanvasScreen>
   // ─── Canvas con zoom ──────────────────────────────────────────────────────
 
   Widget _buildZoomableCanvas() {
-  return LayoutBuilder(builder: (context, constraints) {
-    final availableW = constraints.maxWidth;
-    final availableH = constraints.maxHeight;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableW = constraints.maxWidth;
+        final availableH = constraints.maxHeight;
 
-    // Escalar el canvas lógico para que quepa completo en pantalla
-    final scaleX = availableW / kCanvasW;
-    final scaleY = availableH / kCanvasH;
-    final scale = scaleX < scaleY ? scaleX : scaleY;
+        // Escalar el canvas lógico para que quepa completo en pantalla
+        final scaleX = availableW / kCanvasW;
+        final scaleY = availableH / kCanvasH;
+        final scale = scaleX < scaleY ? scaleX : scaleY;
 
-    final scaledW = kCanvasW * scale;
-    final scaledH = kCanvasH * scale;
+        final scaledW = kCanvasW * scale;
+        final scaledH = kCanvasH * scale;
 
-    // Centrar el canvas en el espacio disponible
-    final offsetX = (availableW - scaledW) / 2;
-    final offsetY = (availableH - scaledH) / 2;
+        // Centrar el canvas en el espacio disponible
+        final offsetX = (availableW - scaledW) / 2;
+        final offsetY = (availableH - scaledH) / 2;
 
-    return InteractiveViewer(
-      transformationController: _transformCtrl,
-      panEnabled: true,
-      scaleEnabled: true,
-      minScale: 0.5,
-      maxScale: 6.0,
-      constrained: false,
-      boundaryMargin: const EdgeInsets.all(double.infinity),
-      child: SizedBox(
-        width: availableW,
-        height: availableH,
-        child: Stack(
-          children: [
-            // Canvas centrado
-            Positioned(
-              left: offsetX,
-              top: offsetY,
-              width: scaledW,
-              height: scaledH,
-              child: GestureDetector(
-                onTap: _editMode
-                    ? () => setState(() => _selectedElementId = null)
-                    : null,
-                child: ClipRect(
-                  child: Stack(
-                    clipBehavior: Clip.hardEdge,
-                    children: [
-                      _buildBackground(scaledW, scaledH),
-                      ..._buildElements(scale),
-                      if (_editMode)
-                        Positioned.fill(
-                          child: IgnorePointer(
-                            child: CustomPaint(
-                                painter: _GridPainter()),
-                          ),
-                        ),
-                    ],
+        return InteractiveViewer(
+          transformationController: _transformCtrl,
+          panEnabled: true,
+          scaleEnabled: true,
+          minScale: 0.5,
+          maxScale: 6.0,
+          constrained: false,
+          boundaryMargin: const EdgeInsets.all(double.infinity),
+          child: SizedBox(
+            width: availableW,
+            height: availableH,
+            child: Stack(
+              children: [
+                // Canvas centrado
+                Positioned(
+                  left: offsetX,
+                  top: offsetY,
+                  width: scaledW,
+                  height: scaledH,
+                  child: GestureDetector(
+                    onTap: _editMode
+                        ? () => setState(() => _selectedElementId = null)
+                        : null,
+                    child: ClipRect(
+                      child: Stack(
+                        clipBehavior: Clip.hardEdge,
+                        children: [
+                          _buildBackground(scaledW, scaledH),
+                          ..._buildElements(scale),
+                          if (_editMode)
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                child: CustomPaint(painter: _GridPainter()),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
-              ),
+              ],
             ),
-          ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildBackground(double canvasW, double canvasH) {
+    final bgs = _nook!.elements
+        .where((e) => e.type == NookElementType.backgroundImage)
+        .toList();
+
+    if (bgs.isNotEmpty &&
+        bgs.first.imagePath != null &&
+        File(bgs.first.imagePath!).existsSync()) {
+      return Positioned.fill(
+        child: Image.file(
+          File(bgs.first.imagePath!),
+          fit: BoxFit.fill,
+          width: canvasW,
+          height: canvasH,
         ),
-      ),
-    );
-  });
-}
+      );
+    }
 
-Widget _buildBackground(double canvasW, double canvasH) {
-  final bgs = _nook!.elements
-      .where((e) => e.type == NookElementType.backgroundImage)
-      .toList();
-
-  if (bgs.isNotEmpty &&
-      bgs.first.imagePath != null &&
-      File(bgs.first.imagePath!).existsSync()) {
-    return Positioned(
-      left: 0,
-      top: 0,
-      width: canvasW,
-      height: canvasH,
-      child: Image.file(
-        File(bgs.first.imagePath!),
-        fit: BoxFit.cover,
-        width: canvasW,
-        height: canvasH,
+    return Positioned.fill(
+      child: AnimatedBuilder(
+        animation: _bgPulse,
+        builder: (_, __) =>
+            CustomPaint(painter: _CanvasDefaultBgPainter(_bgPulse.value)),
       ),
     );
   }
 
-  return Positioned.fill(
-    child: AnimatedBuilder(
-      animation: _bgPulse,
-      builder: (_, __) =>
-          CustomPaint(painter: _CanvasDefaultBgPainter(_bgPulse.value)),
-    ),
-  );
-}
-
-List<Widget> _buildElements(double scale) {
-  final result = <Widget>[];
-  for (final el in _nook!.elements) {
-    if (el.type == NookElementType.backgroundImage) continue;
-    final w = _buildElement(el, scale);
-    if (w != null) result.add(w);
+  List<Widget> _buildElements(double scale) {
+    final result = <Widget>[];
+    for (final el in _nook!.elements) {
+      if (el.type == NookElementType.backgroundImage) continue;
+      final w = _buildElement(el, scale);
+      if (w != null) result.add(w);
+    }
+    return result;
   }
-  return result;
-}
 
   Widget? _buildElement(NookElement el, double scale) {
     final left = el.x * scale;
@@ -870,34 +867,81 @@ List<Widget> _buildElements(double scale) {
     );
   }
 
-  Widget _buildRiddleInput(
-    NookElement el, double w, double h, double scale) {
-  final solved = _isRiddleSolved(el.id);
-  final bgColor = el.textColor != null
-      ? Color(el.textColor!).withOpacity(0.85)
-      : Colors.black.withOpacity(0.65);
-  final textColor = el.buttonColor != null
-      ? Color(el.buttonColor!)
-      : Colors.white70;
-  final fontSize = (el.fontSize ?? 12) * scale;
+  Widget _buildRiddleInput(NookElement el, double w, double h, double scale) {
+    final solved = _isRiddleSolved(el.id);
+    final bgColor = el.textColor != null
+        ? Color(el.textColor!).withOpacity(0.85)
+        : Colors.black.withOpacity(0.65);
+    final textColor = el.buttonColor != null
+        ? Color(el.buttonColor!)
+        : Colors.white70;
+    final fontSize = (el.fontSize ?? 12) * scale;
 
-  _riddleControllers.putIfAbsent(el.id, () => TextEditingController());
-  final ctrl = _riddleControllers[el.id]!;
+    _riddleControllers.putIfAbsent(el.id, () => TextEditingController());
+    final ctrl = _riddleControllers[el.id]!;
 
-  if (solved) {
+    if (solved) {
+      return Container(
+        width: w,
+        height: h,
+        padding: EdgeInsets.all(8 * scale),
+        decoration: BoxDecoration(
+          color: Colors.green.withOpacity(0.12),
+          border: Border.all(color: Colors.green.withOpacity(0.4)),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Flexible(
+              child: SingleChildScrollView(
+                child: Text(
+                  el.riddleQuestion ?? '',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: fontSize,
+                    color: textColor,
+                    height: 1.3,
+                  ),
+                ),
+              ),
+            ),
+            SizedBox(height: 4 * scale),
+            Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.green, size: 14 * scale),
+                SizedBox(width: 4 * scale),
+                Text(
+                  '¡RESUELTO!',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 10 * scale,
+                    color: Colors.green,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
     return Container(
       width: w,
       height: h,
       padding: EdgeInsets.all(8 * scale),
       decoration: BoxDecoration(
-        color: Colors.green.withOpacity(0.12),
-        border: Border.all(color: Colors.green.withOpacity(0.4)),
+        color: bgColor,
+        border: Border.all(color: kNW1.withOpacity(0.45)),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Pregunta scrolleable para textos largos
           Flexible(
             child: SingleChildScrollView(
               child: Text(
@@ -911,59 +955,13 @@ List<Widget> _buildElements(double scale) {
               ),
             ),
           ),
-          SizedBox(height: 4 * scale),
-          Row(children: [
-            Icon(Icons.check_circle, color: Colors.green, size: 14 * scale),
-            SizedBox(width: 4 * scale),
-            Text(
-              '¡RESUELTO!',
-              style: TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 10 * scale,
-                color: Colors.green,
-                letterSpacing: 1,
-              ),
-            ),
-          ]),
-        ],
-      ),
-    );
-  }
-
-  return Container(
-    width: w,
-    height: h,
-    padding: EdgeInsets.all(8 * scale),
-    decoration: BoxDecoration(
-      color: bgColor,
-      border: Border.all(color: kNW1.withOpacity(0.45)),
-      borderRadius: BorderRadius.circular(8),
-    ),
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Pregunta scrolleable para textos largos
-        Flexible(
-          child: SingleChildScrollView(
-            child: Text(
-              el.riddleQuestion ?? '',
-              style: TextStyle(
-                fontFamily: 'monospace',
-                fontSize: fontSize,
-                color: textColor,
-                height: 1.3,
-              ),
-            ),
-          ),
-        ),
-        SizedBox(height: 6 * scale),
-        // Input de respuesta
-        Row(
-          children: [
-            Expanded(
-              child: SizedBox(
-                height: 32 * scale,
+          SizedBox(height: 6 * scale),
+          // Input de respuesta
+          // Input de respuesta
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
                 child: TextField(
                   controller: ctrl,
                   style: TextStyle(
@@ -974,7 +972,7 @@ List<Widget> _buildElements(double scale) {
                   decoration: InputDecoration(
                     contentPadding: EdgeInsets.symmetric(
                       horizontal: 8 * scale,
-                      vertical: 4 * scale,
+                      vertical: 8 * scale,
                     ),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(4),
@@ -996,55 +994,58 @@ List<Widget> _buildElements(double scale) {
                   onSubmitted: (v) => _checkRiddle(el, v),
                 ),
               ),
-            ),
-            SizedBox(width: 6 * scale),
-            GestureDetector(
-              onTap: () => _checkRiddle(el, ctrl.text),
-              child: Container(
-                padding: EdgeInsets.symmetric(
-                  horizontal: 10 * scale,
-                  vertical: 6 * scale,
-                ),
-                decoration: BoxDecoration(
-                  color: kNW1.withOpacity(0.25),
-                  border: Border.all(color: kNW1.withOpacity(0.5)),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  'OK',
-                  style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 10 * scale,
-                    color: kNW2,
-                    letterSpacing: 1,
+              SizedBox(width: 6 * scale),
+              GestureDetector(
+                onTap: () => _checkRiddle(el, ctrl.text),
+                child: Container(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: 10 * scale,
+                    vertical: 10 * scale,
+                  ),
+                  decoration: BoxDecoration(
+                    color: kNW1.withOpacity(0.25),
+                    border: Border.all(color: kNW1.withOpacity(0.5)),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    'OK',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 10 * scale,
+                      color: kNW2,
+                      letterSpacing: 1,
+                    ),
                   ),
                 ),
               ),
-            ),
-          ],
-        ),
-      ],
-    ),
-  );
-}
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 
   void _checkRiddle(NookElement el, String answer) {
-  final correct = (el.riddleAnswer ?? '').trim();
-  if (answer.trim() == correct) {
-    _markRiddleSolved(el.id);
-    // Buscar portales que este acertijo desbloquea para avisar al usuario
-    final unlockedButtons = _nook!.elements.where((e) =>
-        e.type == NookElementType.linkButton &&
-        e.requiredRiddleId == el.id).toList();
-    if (unlockedButtons.isNotEmpty) {
-      _showMsg('¡Correcto! Portal desbloqueado ✓ Tócalo para continuar.');
+    final correct = (el.riddleAnswer ?? '').trim();
+    if (answer.trim() == correct) {
+      _markRiddleSolved(el.id);
+      // Buscar portales que este acertijo desbloquea para avisar al usuario
+      final unlockedButtons = _nook!.elements
+          .where(
+            (e) =>
+                e.type == NookElementType.linkButton &&
+                e.requiredRiddleId == el.id,
+          )
+          .toList();
+      if (unlockedButtons.isNotEmpty) {
+        _showMsg('¡Correcto! Portal desbloqueado ✓ Tócalo para continuar.');
+      } else {
+        _showMsg('¡Correcto! Acertijo resuelto ✓');
+      }
     } else {
-      _showMsg('¡Correcto! Acertijo resuelto ✓');
+      _showMsg('Respuesta incorrecta. Inténtalo de nuevo.');
     }
-  } else {
-    _showMsg('Respuesta incorrecta. Inténtalo de nuevo.');
   }
-}
 
   // ─── Diálogos de edición de elementos ────────────────────────────────────
 
@@ -1554,407 +1555,450 @@ List<Widget> _buildElements(double scale) {
   }
 
   Future<void> _editRiddleDialog(NookElement el) async {
-  final qCtrl = TextEditingController(text: el.riddleQuestion);
-  final aCtrl = TextEditingController(text: el.riddleAnswer);
-  double fontSize = el.fontSize ?? 12;
-  Color bgColor = el.textColor != null
-      ? Color(el.textColor!)
-      : Colors.black.withOpacity(0.65);
-  Color questionColor = el.buttonColor != null
-      ? Color(el.buttonColor!)
-      : Colors.white70;
-  String? linkedButtonId =
-      el.unlocksButtonId?.isNotEmpty == true ? el.unlocksButtonId : null;
+    final qCtrl = TextEditingController(text: el.riddleQuestion);
+    final aCtrl = TextEditingController(text: el.riddleAnswer);
+    double fontSize = el.fontSize ?? 12;
+    Color bgColor = el.textColor != null
+        ? Color(el.textColor!)
+        : Colors.black.withOpacity(0.65);
+    Color questionColor = el.buttonColor != null
+        ? Color(el.buttonColor!)
+        : Colors.white70;
+    String? linkedButtonId = el.unlocksButtonId?.isNotEmpty == true
+        ? el.unlocksButtonId
+        : null;
 
-  final buttons = _nook!.elements
-      .where((e) => e.type == NookElementType.linkButton)
-      .toList();
+    final buttons = _nook!.elements
+        .where((e) => e.type == NookElementType.linkButton)
+        .toList();
 
-  await showDialog(
-    context: context,
-    barrierDismissible: false,
-    builder: (_) => StatefulBuilder(
-      builder: (ctx, setSt) => AlertDialog(
-        backgroundColor: kNWPanel,
-        title: const Text(
-          'EDITAR ACERTIJO',
-          style: TextStyle(
-              fontFamily: 'monospace', color: kNW2, fontSize: 13),
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // ── Pregunta ──────────────────────────────────────────
-              const Text(
-                'PREGUNTA',
-                style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 9,
-                    color: Colors.white38,
-                    letterSpacing: 2),
-              ),
-              const SizedBox(height: 6),
-              TextField(
-                controller: qCtrl,
-                maxLines: 5,
-                autofocus: true,
-                style: const TextStyle(
-                    fontFamily: 'monospace', color: Colors.white),
-                decoration: InputDecoration(
-                  filled: true,
-                  fillColor: Colors.black26,
-                  hintText: '¿Escribe la pregunta o acertijo?',
-                  hintStyle: const TextStyle(
-                      color: Colors.white24, fontSize: 12),
-                  enabledBorder: OutlineInputBorder(
-                      borderSide:
-                          BorderSide(color: kNW1.withOpacity(0.3))),
-                  focusedBorder: const OutlineInputBorder(
-                      borderSide: BorderSide(color: kNW2)),
-                ),
-              ),
-              const SizedBox(height: 14),
-
-              // ── Tamaño de fuente ──────────────────────────────────
-              Text(
-                'TAMAÑO DE FUENTE: ${fontSize.round()}pt',
-                style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 9,
-                  color: Colors.white38,
-                  letterSpacing: 2,
-                ),
-              ),
-              Slider(
-                value: fontSize,
-                min: 8,
-                max: 48,
-                divisions: 40,
-                activeColor: kNW2,
-                inactiveColor: kNW2.withOpacity(0.2),
-                onChanged: (v) => setSt(() => fontSize = v),
-              ),
-              // Preview del texto con el tamaño elegido
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.black26,
-                  border: Border.all(color: kNW1.withOpacity(0.2)),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  qCtrl.text.isEmpty
-                      ? 'Preview del acertijo...'
-                      : qCtrl.text,
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
+          backgroundColor: kNWPanel,
+          title: const Text(
+            'EDITAR ACERTIJO',
+            style: TextStyle(
+              fontFamily: 'monospace',
+              color: kNW2,
+              fontSize: 13,
+            ),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── Pregunta ──────────────────────────────────────────
+                const Text(
+                  'PREGUNTA',
                   style: TextStyle(
                     fontFamily: 'monospace',
-                    fontSize: fontSize,
-                    color: questionColor,
-                    height: 1.3,
+                    fontSize: 9,
+                    color: Colors.white38,
+                    letterSpacing: 2,
                   ),
                 ),
-              ),
-              const SizedBox(height: 14),
-
-              // ── Respuesta ─────────────────────────────────────────
-              const Text(
-                'RESPUESTA CORRECTA',
-                style: TextStyle(
+                const SizedBox(height: 6),
+                TextField(
+                  controller: qCtrl,
+                  maxLines: 5,
+                  autofocus: true,
+                  style: const TextStyle(
                     fontFamily: 'monospace',
-                    fontSize: 9,
-                    color: Colors.white38,
-                    letterSpacing: 2),
-              ),
-              const SizedBox(height: 6),
-              TextField(
-                controller: aCtrl,
-                style: const TextStyle(
-                    fontFamily: 'monospace', color: kNW4),
-                decoration: InputDecoration(
-                  filled: true,
-                  fillColor: Colors.black26,
-                  hintText: 'respuesta exacta...',
-                  hintStyle: const TextStyle(
-                      color: Colors.white24, fontSize: 12),
-                  enabledBorder: OutlineInputBorder(
-                      borderSide:
-                          BorderSide(color: kNW4.withOpacity(0.4))),
-                  focusedBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: kNW4)),
-                ),
-              ),
-              const SizedBox(height: 6),
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withOpacity(0.08),
-                  border: Border.all(
-                      color: Colors.orange.withOpacity(0.3)),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: const Text(
-                  '⚠ Mayúsculas, minúsculas y espacios importan.',
-                  style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 9,
-                      color: Colors.orange,
-                      height: 1.5),
-                ),
-              ),
-              const SizedBox(height: 16),
-
-              // ── Color de fondo ────────────────────────────────────
-              const Text(
-                'COLOR DE FONDO',
-                style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 9,
-                    color: Colors.white38,
-                    letterSpacing: 2),
-              ),
-              const SizedBox(height: 6),
-              GestureDetector(
-                onTap: () async {
-                  Color picked = bgColor;
-                  await showDialog(
-                    context: ctx,
-                    builder: (_) => AlertDialog(
-                      backgroundColor: kNWPanel,
-                      title: const Text('COLOR DE FONDO',
-                          style: TextStyle(
-                              fontFamily: 'monospace', color: kNW2)),
-                      content: SingleChildScrollView(
-                        child: ColorPicker(
-                          pickerColor: picked,
-                          onColorChanged: (c) => picked = c,
-                        ),
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () {
-                            setSt(() => bgColor = picked);
-                            Navigator.pop(ctx);
-                          },
-                          child: const Text('OK',
-                              style: TextStyle(
-                                  fontFamily: 'monospace',
-                                  color: kNW2)),
-                        ),
-                      ],
+                    color: Colors.white,
+                  ),
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: Colors.black26,
+                    hintText: '¿Escribe la pregunta o acertijo?',
+                    hintStyle: const TextStyle(
+                      color: Colors.white24,
+                      fontSize: 12,
                     ),
-                  );
-                },
-                child: Container(
-                  height: 38,
-                  decoration: BoxDecoration(
-                    color: bgColor,
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: Colors.white24),
-                  ),
-                  child: Center(
-                    child: Text(
-                      'Toca para cambiar color de fondo',
-                      style: TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 10,
-                          color: bgColor.computeLuminance() > 0.4
-                              ? Colors.black87
-                              : Colors.white70),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: kNW1.withOpacity(0.3)),
+                    ),
+                    focusedBorder: const OutlineInputBorder(
+                      borderSide: BorderSide(color: kNW2),
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 14),
+                const SizedBox(height: 14),
 
-              // ── Color de texto ────────────────────────────────────
-              const Text(
-                'COLOR DE TEXTO',
-                style: TextStyle(
+                // ── Tamaño de fuente ──────────────────────────────────
+                Text(
+                  'TAMAÑO DE FUENTE: ${fontSize.round()}pt',
+                  style: const TextStyle(
                     fontFamily: 'monospace',
                     fontSize: 9,
                     color: Colors.white38,
-                    letterSpacing: 2),
-              ),
-              const SizedBox(height: 6),
-              GestureDetector(
-                onTap: () async {
-                  Color picked = questionColor;
-                  await showDialog(
-                    context: ctx,
-                    builder: (_) => AlertDialog(
-                      backgroundColor: kNWPanel,
-                      title: const Text('COLOR DE TEXTO',
-                          style: TextStyle(
-                              fontFamily: 'monospace', color: kNW2)),
-                      content: SingleChildScrollView(
-                        child: ColorPicker(
-                          pickerColor: picked,
-                          onColorChanged: (c) => picked = c,
-                        ),
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () {
-                            setSt(() => questionColor = picked);
-                            Navigator.pop(ctx);
-                          },
-                          child: const Text('OK',
-                              style: TextStyle(
-                                  fontFamily: 'monospace',
-                                  color: kNW2)),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-                child: Container(
-                  height: 38,
-                  decoration: BoxDecoration(
-                    color: questionColor,
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: Colors.white24),
-                  ),
-                  child: Center(
-                    child: Text(
-                      'Toca para cambiar color de texto',
-                      style: TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 10,
-                          color: questionColor.computeLuminance() > 0.4
-                              ? Colors.black87
-                              : Colors.white70),
-                    ),
+                    letterSpacing: 2,
                   ),
                 ),
-              ),
-              const SizedBox(height: 16),
-
-              // ── Portal que desbloquea ─────────────────────────────
-              const Text(
-                'PORTAL QUE DESBLOQUEA',
-                style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 9,
-                    color: Colors.white38,
-                    letterSpacing: 2),
-              ),
-              const SizedBox(height: 6),
-              if (buttons.isEmpty)
+                Slider(
+                  value: fontSize,
+                  min: 8,
+                  max: 48,
+                  divisions: 40,
+                  activeColor: kNW2,
+                  inactiveColor: kNW2.withOpacity(0.2),
+                  onChanged: (v) => setSt(() => fontSize = v),
+                ),
+                // Preview del texto con el tamaño elegido
                 Container(
-                  padding: const EdgeInsets.all(10),
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
                     color: Colors.black26,
                     border: Border.all(color: kNW1.withOpacity(0.2)),
                     borderRadius: BorderRadius.circular(4),
                   ),
-                  child: const Text(
-                    'No hay portales en el canvas.\nCrea un portal primero.',
+                  child: Text(
+                    qCtrl.text.isEmpty ? 'Preview del acertijo...' : qCtrl.text,
                     style: TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 10,
-                        color: Colors.white24,
-                        height: 1.5),
-                  ),
-                )
-              else
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.black26,
-                    border: Border.all(color: kNW1.withOpacity(0.3)),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<String?>(
-                      value: linkedButtonId,
-                      isExpanded: true,
-                      dropdownColor: kNWPanel,
-                      style: const TextStyle(
-                          fontFamily: 'monospace', color: Colors.white),
-                      items: [
-                        const DropdownMenuItem(
-                          value: null,
-                          child: Text(
-                            'Ninguno',
-                            style: TextStyle(
-                                fontFamily: 'monospace',
-                                color: Colors.white38,
-                                fontSize: 11),
-                          ),
-                        ),
-                        ...buttons.map((btn) {
-                          final destName = btn.targetNookId != null
-                              ? (_service.nook(btn.targetNookId!)?.name ??
-                                  'Portal sin nombre')
-                              : 'Portal sin destino';
-                          return DropdownMenuItem(
-                            value: btn.id,
-                            child: Text(
-                              '→ $destName',
-                              style: const TextStyle(
-                                  fontFamily: 'monospace',
-                                  color: kNW2,
-                                  fontSize: 11),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          );
-                        }),
-                      ],
-                      onChanged: (v) => setSt(() => linkedButtonId = v),
+                      fontFamily: 'monospace',
+                      fontSize: fontSize,
+                      color: questionColor,
+                      height: 1.3,
                     ),
                   ),
                 ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('CANCELAR',
-                style: TextStyle(
-                    fontFamily: 'monospace', color: Colors.white38)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: kNW1),
-            onPressed: () {
-              final updatedRiddle = el.copyWith(
-                riddleQuestion: qCtrl.text,
-                riddleAnswer: aCtrl.text,
-                fontSize: fontSize,
-                textColor: bgColor.value,
-                buttonColor: questionColor.value,
-                unlocksButtonId: linkedButtonId ?? '',
-              );
-              _updateElement(updatedRiddle);
+                const SizedBox(height: 14),
 
-              if (linkedButtonId != null) {
-                final btn = _nook!.elements
-                    .firstWhere((e) => e.id == linkedButtonId);
-                _updateElement(btn.copyWith(requiredRiddleId: el.id));
-              } else {
-                final prevBtn = _nook!.elements
-                    .where((e) =>
-                        e.type == NookElementType.linkButton &&
-                        e.requiredRiddleId == el.id)
-                    .toList();
-                for (final b in prevBtn) {
-                  _updateElement(b.copyWith(clearRequiredRiddle: true));
-                }
-              }
-              Navigator.pop(context);
-            },
-            child: const Text('GUARDAR',
-                style: TextStyle(
-                    fontFamily: 'monospace', color: Colors.white)),
+                // ── Respuesta ─────────────────────────────────────────
+                const Text(
+                  'RESPUESTA CORRECTA',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 9,
+                    color: Colors.white38,
+                    letterSpacing: 2,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: aCtrl,
+                  style: const TextStyle(fontFamily: 'monospace', color: kNW4),
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: Colors.black26,
+                    hintText: 'respuesta exacta...',
+                    hintStyle: const TextStyle(
+                      color: Colors.white24,
+                      fontSize: 12,
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: kNW4.withOpacity(0.4)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: kNW4),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.08),
+                    border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: const Text(
+                    '⚠ Mayúsculas, minúsculas y espacios importan.',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 9,
+                      color: Colors.orange,
+                      height: 1.5,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // ── Color de fondo ────────────────────────────────────
+                const Text(
+                  'COLOR DE FONDO',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 9,
+                    color: Colors.white38,
+                    letterSpacing: 2,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                GestureDetector(
+                  onTap: () async {
+                    Color picked = bgColor;
+                    await showDialog(
+                      context: ctx,
+                      builder: (_) => AlertDialog(
+                        backgroundColor: kNWPanel,
+                        title: const Text(
+                          'COLOR DE FONDO',
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            color: kNW2,
+                          ),
+                        ),
+                        content: SingleChildScrollView(
+                          child: ColorPicker(
+                            pickerColor: picked,
+                            onColorChanged: (c) => picked = c,
+                          ),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () {
+                              setSt(() => bgColor = picked);
+                              Navigator.pop(ctx);
+                            },
+                            child: const Text(
+                              'OK',
+                              style: TextStyle(
+                                fontFamily: 'monospace',
+                                color: kNW2,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                  child: Container(
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: bgColor,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: Center(
+                      child: Text(
+                        'Toca para cambiar color de fondo',
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 10,
+                          color: bgColor.computeLuminance() > 0.4
+                              ? Colors.black87
+                              : Colors.white70,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+
+                // ── Color de texto ────────────────────────────────────
+                const Text(
+                  'COLOR DE TEXTO',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 9,
+                    color: Colors.white38,
+                    letterSpacing: 2,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                GestureDetector(
+                  onTap: () async {
+                    Color picked = questionColor;
+                    await showDialog(
+                      context: ctx,
+                      builder: (_) => AlertDialog(
+                        backgroundColor: kNWPanel,
+                        title: const Text(
+                          'COLOR DE TEXTO',
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            color: kNW2,
+                          ),
+                        ),
+                        content: SingleChildScrollView(
+                          child: ColorPicker(
+                            pickerColor: picked,
+                            onColorChanged: (c) => picked = c,
+                          ),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () {
+                              setSt(() => questionColor = picked);
+                              Navigator.pop(ctx);
+                            },
+                            child: const Text(
+                              'OK',
+                              style: TextStyle(
+                                fontFamily: 'monospace',
+                                color: kNW2,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                  child: Container(
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: questionColor,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: Center(
+                      child: Text(
+                        'Toca para cambiar color de texto',
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 10,
+                          color: questionColor.computeLuminance() > 0.4
+                              ? Colors.black87
+                              : Colors.white70,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // ── Portal que desbloquea ─────────────────────────────
+                const Text(
+                  'PORTAL QUE DESBLOQUEA',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 9,
+                    color: Colors.white38,
+                    letterSpacing: 2,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                if (buttons.isEmpty)
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.black26,
+                      border: Border.all(color: kNW1.withOpacity(0.2)),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text(
+                      'No hay portales en el canvas.\nCrea un portal primero.',
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 10,
+                        color: Colors.white24,
+                        height: 1.5,
+                      ),
+                    ),
+                  )
+                else
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.black26,
+                      border: Border.all(color: kNW1.withOpacity(0.3)),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String?>(
+                        value: linkedButtonId,
+                        isExpanded: true,
+                        dropdownColor: kNWPanel,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          color: Colors.white,
+                        ),
+                        items: [
+                          const DropdownMenuItem(
+                            value: null,
+                            child: Text(
+                              'Ninguno',
+                              style: TextStyle(
+                                fontFamily: 'monospace',
+                                color: Colors.white38,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
+                          ...buttons.map((btn) {
+                            final destName = btn.targetNookId != null
+                                ? (_service.nook(btn.targetNookId!)?.name ??
+                                      'Portal sin nombre')
+                                : 'Portal sin destino';
+                            return DropdownMenuItem(
+                              value: btn.id,
+                              child: Text(
+                                '→ $destName',
+                                style: const TextStyle(
+                                  fontFamily: 'monospace',
+                                  color: kNW2,
+                                  fontSize: 11,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            );
+                          }),
+                        ],
+                        onChanged: (v) => setSt(() => linkedButtonId = v),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text(
+                'CANCELAR',
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  color: Colors.white38,
+                ),
+              ),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: kNW1),
+              onPressed: () {
+                final updatedRiddle = el.copyWith(
+                  riddleQuestion: qCtrl.text,
+                  riddleAnswer: aCtrl.text,
+                  fontSize: fontSize,
+                  textColor: bgColor.value,
+                  buttonColor: questionColor.value,
+                  unlocksButtonId: linkedButtonId ?? '',
+                );
+                _updateElement(updatedRiddle);
+
+                if (linkedButtonId != null) {
+                  final btn = _nook!.elements.firstWhere(
+                    (e) => e.id == linkedButtonId,
+                  );
+                  _updateElement(btn.copyWith(requiredRiddleId: el.id));
+                } else {
+                  final prevBtn = _nook!.elements
+                      .where(
+                        (e) =>
+                            e.type == NookElementType.linkButton &&
+                            e.requiredRiddleId == el.id,
+                      )
+                      .toList();
+                  for (final b in prevBtn) {
+                    _updateElement(b.copyWith(clearRequiredRiddle: true));
+                  }
+                }
+                Navigator.pop(context);
+              },
+              child: const Text(
+                'GUARDAR',
+                style: TextStyle(fontFamily: 'monospace', color: Colors.white),
+              ),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
-}
+    );
+  }
   // ─── Toolbar de edición ───────────────────────────────────────────────────
 
   Widget _buildEditToolbar() {
@@ -2066,120 +2110,115 @@ class _EditableElementState extends State<_EditableElement> {
   static const double _handleSz = 22.0;
   static const double _actionH = 28.0;
 
-  @override
-  Widget build(BuildContext context) {
-    final w = widget.element.width * widget.scale;
-    final h = widget.element.height * widget.scale;
+ @override
+Widget build(BuildContext context) {
+  final w = widget.element.width * widget.scale;
+  final h = widget.element.height * widget.scale;
 
-    // Zona total: acción arriba + contenido + handle abajo-derecha
-    final totalW = w + _handleSz;
-    final totalH = _actionH + h + _handleSz;
+  final totalW = w + _handleSz;
+  final totalH = _actionH + h + _handleSz;
 
-    return SizedBox(
-      width: totalW,
-      height: totalH,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          // ── Área de acciones (arriba) ────────────────────────────────
-          if (widget.isSelected)
-            Positioned(
-              top: 0,
-              left: 0,
-              height: _actionH,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _ActionBtn(
-                    icon: Icons.edit_outlined,
-                    color: kNW5,
-                    onTap: widget.onEdit,
-                  ),
-                  const SizedBox(width: 4),
-                  _ActionBtn(
-                    icon: Icons.delete_outline,
-                    color: kNW3,
-                    onTap: widget.onDelete,
-                  ),
-                ],
-              ),
-            ),
-
-          // ── Contenido + borde + drag ─────────────────────────────────
+  return SizedBox(
+    width: totalW,
+    height: totalH,
+    child: Stack(
+      clipBehavior: Clip.none,
+      children: [
+        // ── Área de acciones (arriba) ──────────────────────────────
+        if (widget.isSelected)
           Positioned(
-            top: _actionH,
+            top: 0,
             left: 0,
-            child: GestureDetector(
-              onTap: widget.onSelect,
-              onPanStart: (d) {
-                widget.onSelect();
-                _resizing = false;
-                _lastPos = d.globalPosition;
-              },
-              onPanUpdate: (d) {
-                if (!_resizing) {
-                  final delta = d.globalPosition - _lastPos;
-                  _lastPos = d.globalPosition;
-                  widget.onMove(delta.dx, delta.dy);
-                }
-              },
-              child: Stack(
-                children: [
-                  // Borde selección
-                  if (widget.isSelected)
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            border: Border.all(color: kNW2, width: 1.5),
-                          ),
-                        ),
-                      ),
-                    ),
-                  // Contenido real
-                  SizedBox(width: w, height: h, child: widget.child),
-                ],
-              ),
+            height: _actionH,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _ActionBtn(
+                  icon: Icons.edit_outlined,
+                  color: kNW5,
+                  onTap: widget.onEdit,
+                ),
+                const SizedBox(width: 4),
+                _ActionBtn(
+                  icon: Icons.delete_outline,
+                  color: kNW3,
+                  onTap: widget.onDelete,
+                ),
+              ],
             ),
           ),
 
-          // ── Handle de resize (esquina inferior-derecha) ───────────────
-          if (widget.isSelected)
-            Positioned(
-              top: _actionH + h,
-              left: w,
-              child: GestureDetector(
-                onPanStart: (_) {
-                  _resizing = true;
-                },
-                onPanUpdate: (d) {
-                  widget.onResize(d.delta.dx, d.delta.dy);
-                },
-                onPanEnd: (_) => _resizing = false,
-                child: Container(
-                  width: _handleSz,
-                  height: _handleSz,
-                  decoration: BoxDecoration(
-                    color: kNW2,
-                    borderRadius: BorderRadius.circular(4),
-                    boxShadow: [
-                      BoxShadow(color: kNW2.withOpacity(0.5), blurRadius: 6),
-                    ],
+        // ── Contenido + borde + drag ───────────────────────────────
+        Positioned(
+          top: _actionH,
+          left: 0,
+          child: GestureDetector(
+            onTap: widget.onSelect,
+            onPanStart: (d) {
+              widget.onSelect();
+              _resizing = false;
+              _lastPos = d.globalPosition;
+            },
+            onPanUpdate: (d) {
+              if (!_resizing) {
+                final delta = d.globalPosition - _lastPos;
+                _lastPos = d.globalPosition;
+                widget.onMove(delta.dx, delta.dy);
+              }
+            },
+            child: Stack(
+              children: [
+                if (widget.isSelected)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          border: Border.all(color: kNW2, width: 1.5),
+                        ),
+                      ),
+                    ),
                   ),
-                  child: const Icon(
-                    Icons.open_in_full,
-                    size: 12,
-                    color: Colors.black,
-                  ),
+                SizedBox(width: w, height: h, child: widget.child),
+              ],
+            ),
+          ),
+        ),
+
+        // ── Handle de resize — siempre dentro del viewport ─────────
+        if (widget.isSelected)
+          Positioned(
+            top: _actionH + h - _handleSz, // pegado al borde INTERNO inferior
+            left: w - _handleSz,           // pegado al borde INTERNO derecho
+            child: GestureDetector(
+              onPanStart: (_) => _resizing = true,
+              onPanUpdate: (d) => widget.onResize(d.delta.dx, d.delta.dy),
+              onPanEnd: (_) => _resizing = false,
+              child: Container(
+                width: _handleSz,
+                height: _handleSz,
+                decoration: BoxDecoration(
+                  color: kNW2,
+                  borderRadius: BorderRadius.circular(4),
+                  boxShadow: [
+                    BoxShadow(
+                      color: kNW2.withOpacity(0.5),
+                      blurRadius: 6,
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.open_in_full,
+                  size: 12,
+                  color: Colors.black,
                 ),
               ),
             ),
-        ],
-      ),
-    );
-  }
+          ),
+      ],
+    ),
+  );
 }
-
+}
 class _ActionBtn extends StatelessWidget {
   final IconData icon;
   final Color color;
