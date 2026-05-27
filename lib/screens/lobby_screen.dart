@@ -11,17 +11,19 @@ import '../services/auth_service.dart' show kSeedAdmin;
 import '../services/chat_service.dart';
 
 // ─── Paleta Matrix Terminal ───────────────────────────────────────────────────
-const Color kMatrix       = Color(0xFF00FF41); // Verde matrix principal
-const Color kMatrixDim    = Color(0xFF00BB30); // Verde apagado
-const Color kMatrixDark   = Color(0xFF003B0C); // Verde muy oscuro para fondos
-const Color kPink         = Color(0xFFFF2D78); // Rosa neón (alertas/peligro)
-const Color kPurple       = Color(0xFF9B00FF); // Púrpura (secundario)
-const Color kDark         = Color(0xFF000000); // Negro puro
-const Color kDarkPanel    = Color(0xFF010801); // Negro verdoso paneles
-const Color kCard         = Color(0xFF010F03); // Negro verdoso tarjetas
-const Color kBorder       = Color(0xFF003B0C); // Borde sutil verde oscuro
-const Color kTextPrimary  = Color(0xFFCCFFD6); // Texto principal verde claro
-const Color kTextSecondary= Color(0xFF3D7A47); // Texto secundario verde apagado
+const Color kMatrix = Color(0xFF00FF41); // Verde matrix principal
+const Color kMatrixDim = Color(0xFF00BB30); // Verde apagado
+const Color kMatrixDark = Color(0xFF003B0C); // Verde muy oscuro para fondos
+const Color kPink = Color(0xFFFF2D78); // Rosa neón (alertas/peligro)
+const Color kPurple = Color(0xFF9B00FF); // Púrpura (secundario)
+const Color kDark = Color(0xFF000000); // Negro puro
+const Color kDarkPanel = Color(0xFF010801); // Negro verdoso paneles
+const Color kCard = Color(0xFF010F03); // Negro verdoso tarjetas
+const Color kBorder = Color(0xFF003B0C); // Borde sutil verde oscuro
+const Color kTextPrimary = Color(0xFFCCFFD6); // Texto principal verde claro
+const Color kTextSecondary = Color(
+  0xFF3D7A47,
+); // Texto secundario verde apagado
 
 class LobbyScreen extends StatefulWidget {
   const LobbyScreen({super.key});
@@ -79,6 +81,9 @@ class _LobbyScreenState extends State<LobbyScreen>
       _refreshOnlineCache();
       setState(() {});
     });
+    ChatService().unreadStream.listen((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   void _refreshOnlineCache() {
@@ -129,10 +134,8 @@ class _LobbyScreenState extends State<LobbyScreen>
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => ChatScreen(
-          recipientId: users.first.id,
-          peerName: '@$username',
-        ),
+        builder: (_) =>
+            ChatScreen(recipientId: users.first.id, peerName: '@$username'),
       ),
     );
   }
@@ -143,10 +146,8 @@ class _LobbyScreenState extends State<LobbyScreen>
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => ChatScreen(
-          recipientId: users.first.id,
-          peerName: '@$username',
-        ),
+        builder: (_) =>
+            ChatScreen(recipientId: users.first.id, peerName: '@$username'),
       ),
     );
   }
@@ -229,10 +230,10 @@ class _LobbyScreenState extends State<LobbyScreen>
                   ),
                 ),
                 items: List.generate(10, (i) => i + 1)
-                    .map((h) => DropdownMenuItem(
-                          value: h,
-                          child: Text('LEVEL_$h+'),
-                        ))
+                    .map(
+                      (h) =>
+                          DropdownMenuItem(value: h, child: Text('LEVEL_$h+')),
+                    )
                     .toList(),
                 onChanged: (v) => setSt(() => minHierarchy = v!),
               ),
@@ -421,7 +422,9 @@ class _LobbyScreenState extends State<LobbyScreen>
                     if (isRegistered)
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 5, vertical: 2),
+                          horizontal: 5,
+                          vertical: 2,
+                        ),
                         decoration: BoxDecoration(
                           border: Border.all(color: kMatrix.withOpacity(0.5)),
                         ),
@@ -466,9 +469,8 @@ class _LobbyScreenState extends State<LobbyScreen>
           Positioned.fill(
             child: AnimatedBuilder(
               animation: _scanCtrl,
-              builder: (_, __) => CustomPaint(
-                painter: _MatrixScanlinePainter(_scanCtrl.value),
-              ),
+              builder: (_, __) =>
+                  CustomPaint(painter: _MatrixScanlinePainter(_scanCtrl.value)),
             ),
           ),
           // Contenido
@@ -497,9 +499,7 @@ class _LobbyScreenState extends State<LobbyScreen>
           ),
           decoration: BoxDecoration(
             color: kDarkPanel,
-            border: Border(
-              bottom: BorderSide(color: kMatrix.withOpacity(0.5)),
-            ),
+            border: Border(bottom: BorderSide(color: kMatrix.withOpacity(0.5))),
             boxShadow: [
               BoxShadow(
                 color: kMatrix.withOpacity(0.08 * glow),
@@ -518,17 +518,17 @@ class _LobbyScreenState extends State<LobbyScreen>
                 },
                 child: Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 6),
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
-                    border: Border.all(
-                        color: kMatrix.withOpacity(0.5)),
+                    border: Border.all(color: kMatrix.withOpacity(0.5)),
                     color: kMatrixDark.withOpacity(0.3),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.arrow_back_ios_new,
-                          color: kMatrix, size: 12),
+                      Icon(Icons.arrow_back_ios_new, color: kMatrix, size: 12),
                       const SizedBox(width: 4),
                       const Text(
                         'ESC',
@@ -574,7 +574,8 @@ class _LobbyScreenState extends State<LobbyScreen>
                           fontFamily: 'monospace',
                           fontSize: isMobile ? 9 : 10,
                           color: kMatrixDim.withOpacity(
-                              0.6 + _pulseCtrl.value * 0.4),
+                            0.6 + _pulseCtrl.value * 0.4,
+                          ),
                           letterSpacing: 1,
                         ),
                       ),
@@ -594,8 +595,9 @@ class _LobbyScreenState extends State<LobbyScreen>
                     color: kMatrix,
                     boxShadow: [
                       BoxShadow(
-                        color:
-                            kMatrix.withOpacity(0.7 + _pulseCtrl.value * 0.3),
+                        color: kMatrix.withOpacity(
+                          0.7 + _pulseCtrl.value * 0.3,
+                        ),
                         blurRadius: 10,
                         spreadRadius: 3,
                       ),
@@ -611,24 +613,24 @@ class _LobbyScreenState extends State<LobbyScreen>
   }
 
   Widget _buildContent(bool isMobile) {
-    final allUsers = _auth.users
-        .where((u) =>
-            u.id != kSeedAdmin.id && u.id != _auth.currentUser?.id)
-        .toList()
-      ..sort((a, b) {
-        final aOnline = _isUserOnline(a.username);
-        final bOnline = _isUserOnline(b.username);
-        if (aOnline && !bOnline) return -1;
-        if (!aOnline && bOnline) return 1;
-        return a.username.compareTo(b.username);
-      });
+    final allUsers =
+        _auth.users
+            .where(
+              (u) => u.id != kSeedAdmin.id && u.id != _auth.currentUser?.id,
+            )
+            .toList()
+          ..sort((a, b) {
+            final aOnline = _isUserOnline(a.username);
+            final bOnline = _isUserOnline(b.username);
+            if (aOnline && !bOnline) return -1;
+            if (!aOnline && bOnline) return 1;
+            return a.username.compareTo(b.username);
+          });
 
     return CustomScrollView(
       slivers: [
         // ── GRUPOS ────────────────────────────────────────────────────────
-        SliverToBoxAdapter(
-          child: _buildSectionLabel('GRUPOS', '◈', isMobile),
-        ),
+        SliverToBoxAdapter(child: _buildSectionLabel('GRUPOS', '◈', isMobile)),
 
         // Broadcast global
         SliverToBoxAdapter(
@@ -639,6 +641,7 @@ class _LobbyScreenState extends State<LobbyScreen>
             accentColor: kMatrix,
             tag: 'GLOBAL',
             isMobile: isMobile,
+            groupId: 'broadcast', // ← añadir
             onTap: () {
               _playClick();
               _openBroadcastChat();
@@ -671,27 +674,25 @@ class _LobbyScreenState extends State<LobbyScreen>
             child: _buildSectionLabel('MIS GRUPOS', '◆', isMobile),
           ),
           SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (_, i) {
-                final group = _peer.availableGroups[i];
-                final isCreator = group.creatorId == _peer.myId;
-                return _buildGroupCard(
-                  name: group.name.toUpperCase(),
-                  subtitle:
-                      'MIN_J${group.minHierarchyToJoin} · ${isCreator ? 'OWNER' : 'MEMBER'}',
-                  icon: isCreator ? Icons.lock : Icons.group,
-                  accentColor: isCreator ? kPink : kPurple,
-                  tag: isCreator ? 'OWNER' : 'MBR',
-                  isMobile: isMobile,
-                  onTap: () {
-                    _playClick();
-                    _openGroupChat(group);
-                  },
-                  onLongPress: () => _showGroupOptions(group),
-                );
-              },
-              childCount: _peer.availableGroups.length,
-            ),
+            delegate: SliverChildBuilderDelegate((_, i) {
+              final group = _peer.availableGroups[i];
+              final isCreator = group.creatorId == _peer.myId;
+              return _buildGroupCard(
+                name: group.name.toUpperCase(),
+                subtitle:
+                    'MIN_J${group.minHierarchyToJoin} · ${isCreator ? 'OWNER' : 'MEMBER'}',
+                icon: isCreator ? Icons.lock : Icons.group,
+                accentColor: isCreator ? kPink : kPurple,
+                tag: isCreator ? 'OWNER' : 'MBR',
+                isMobile: isMobile,
+                groupId: group.id, // ← añadir
+                onTap: () {
+                  _playClick();
+                  _openGroupChat(group);
+                },
+                onLongPress: () => _showGroupOptions(group),
+              );
+            }, childCount: _peer.availableGroups.length),
           ),
         ],
 
@@ -704,27 +705,24 @@ class _LobbyScreenState extends State<LobbyScreen>
           SliverToBoxAdapter(child: _buildEmptyUsers(isMobile))
         else
           SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (_, i) {
-                final user = allUsers[i];
-                final online = _onlineCache[user.username] ?? false;
-                final ip = _getIpForUser(user.username);
-                return _buildUserCard(
-                  user: user,
-                  isOnline: online,
-                  isMobile: isMobile,
-                  onTap: () {
-                    _playClick();
-                    if (ip != null) {
-                      _openPeerChat(ip, user.username);
-                    } else {
-                      _openOfflineUserChat(user.username);
-                    }
-                  },
-                );
-              },
-              childCount: allUsers.length,
-            ),
+            delegate: SliverChildBuilderDelegate((_, i) {
+              final user = allUsers[i];
+              final online = _onlineCache[user.username] ?? false;
+              final ip = _getIpForUser(user.username);
+              return _buildUserCard(
+                user: user,
+                isOnline: online,
+                isMobile: isMobile,
+                onTap: () {
+                  _playClick();
+                  if (ip != null) {
+                    _openPeerChat(ip, user.username);
+                  } else {
+                    _openOfflineUserChat(user.username);
+                  }
+                },
+              );
+            }, childCount: allUsers.length),
           ),
 
         // Ver nodos técnicos
@@ -738,10 +736,11 @@ class _LobbyScreenState extends State<LobbyScreen>
               onTap: _showRawNodesDialog,
               child: Container(
                 padding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 8),
+                  horizontal: 14,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
-                  border: Border.all(
-                      color: kTextSecondary.withOpacity(0.3)),
+                  border: Border.all(color: kTextSecondary.withOpacity(0.3)),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -783,10 +782,7 @@ class _LobbyScreenState extends State<LobbyScreen>
         children: [
           Text(
             prefix,
-            style: TextStyle(
-              color: kMatrix.withOpacity(0.7),
-              fontSize: 12,
-            ),
+            style: TextStyle(color: kMatrix.withOpacity(0.7), fontSize: 12),
           ),
           const SizedBox(width: 8),
           Text(
@@ -805,10 +801,7 @@ class _LobbyScreenState extends State<LobbyScreen>
               height: 1,
               decoration: BoxDecoration(
                 gradient: LinearGradient(
-                  colors: [
-                    kMatrix.withOpacity(0.5),
-                    kMatrix.withOpacity(0.0),
-                  ],
+                  colors: [kMatrix.withOpacity(0.5), kMatrix.withOpacity(0.0)],
                 ),
               ),
             ),
@@ -827,6 +820,7 @@ class _LobbyScreenState extends State<LobbyScreen>
     required bool isMobile,
     required VoidCallback onTap,
     VoidCallback? onLongPress,
+    String? groupId,
   }) {
     return _MatrixCard(
       isMobile: isMobile,
@@ -871,6 +865,25 @@ class _LobbyScreenState extends State<LobbyScreen>
               ],
             ),
           ),
+          // Badge de no leídos
+          if ((ChatService().unreadCounts[groupId] ?? 0) > 0)
+            Container(
+              margin: const EdgeInsets.only(right: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+              decoration: BoxDecoration(
+                color: kPink,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '${ChatService().unreadCounts[groupId]}',
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 8,
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
@@ -915,8 +928,9 @@ class _LobbyScreenState extends State<LobbyScreen>
             height: isMobile ? 36 : 42,
             decoration: BoxDecoration(
               border: Border.all(
-                  color: kMatrix.withOpacity(0.4),
-                  style: BorderStyle.solid),
+                color: kMatrix.withOpacity(0.4),
+                style: BorderStyle.solid,
+              ),
               color: kMatrixDark.withOpacity(0.5),
             ),
             child: const Icon(Icons.add, color: kMatrix, size: 18),
@@ -1009,10 +1023,10 @@ class _LobbyScreenState extends State<LobbyScreen>
     final jColor = j >= 10
         ? kPink
         : j >= 7
-            ? kPurple
-            : j >= 4
-                ? kMatrix
-                : kTextSecondary;
+        ? kPurple
+        : j >= 4
+        ? kMatrix
+        : kTextSecondary;
 
     return _MatrixCard(
       isMobile: isMobile,
@@ -1031,11 +1045,9 @@ class _LobbyScreenState extends State<LobbyScreen>
                         : kTextSecondary.withOpacity(0.3),
                   ),
                 ),
-                child: UserAvatar(
-                  user: user,
-                  size: isMobile ? 42 : 48,
-                ),
+                child: UserAvatar(user: user, size: isMobile ? 42 : 48),
               ),
+              // Indicador online
               Positioned(
                 bottom: 2,
                 right: 2,
@@ -1052,12 +1064,39 @@ class _LobbyScreenState extends State<LobbyScreen>
                               color: kMatrix.withOpacity(0.7),
                               blurRadius: 6,
                               spreadRadius: 1,
-                            )
+                            ),
                           ]
                         : null,
                   ),
                 ),
               ),
+              // Badge de no leídos
+              if ((ChatService().unreadCounts[user.id] ?? 0) > 0)
+                Positioned(
+                  top: 0,
+                  right: 0,
+                  child: Container(
+                    padding: const EdgeInsets.all(3),
+                    decoration: const BoxDecoration(
+                      color: kPink,
+                      shape: BoxShape.circle,
+                    ),
+                    constraints: const BoxConstraints(
+                      minWidth: 16,
+                      minHeight: 16,
+                    ),
+                    child: Text(
+                      '${ChatService().unreadCounts[user.id]}',
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 8,
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
             ],
           ),
           const SizedBox(width: 14),
@@ -1082,10 +1121,11 @@ class _LobbyScreenState extends State<LobbyScreen>
                     const SizedBox(width: 8),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 4, vertical: 1),
+                        horizontal: 4,
+                        vertical: 1,
+                      ),
                       decoration: BoxDecoration(
-                        border: Border.all(
-                            color: jColor.withOpacity(0.5)),
+                        border: Border.all(color: jColor.withOpacity(0.5)),
                         color: jColor.withOpacity(0.08),
                       ),
                       child: Text(
@@ -1118,9 +1158,7 @@ class _LobbyScreenState extends State<LobbyScreen>
 
           // Acción
           Icon(
-            isOnline
-                ? Icons.chevron_right
-                : Icons.schedule_outlined,
+            isOnline ? Icons.chevron_right : Icons.schedule_outlined,
             color: isOnline
                 ? kMatrix.withOpacity(0.6)
                 : kTextSecondary.withOpacity(0.3),
@@ -1141,8 +1179,7 @@ class _LobbyScreenState extends State<LobbyScreen>
       ),
       child: Column(
         children: [
-          Icon(Icons.people_outline,
-              size: 36, color: kMatrix.withOpacity(0.3)),
+          Icon(Icons.people_outline, size: 36, color: kMatrix.withOpacity(0.3)),
           const SizedBox(height: 12),
           const Text(
             '> NO_USERS_REGISTERED',
@@ -1226,8 +1263,8 @@ class _MatrixCardState extends State<_MatrixCard> {
               color: _pressed
                   ? widget.accentColor.withOpacity(0.08)
                   : _hovered
-                      ? widget.accentColor.withOpacity(0.04)
-                      : kCard,
+                  ? widget.accentColor.withOpacity(0.04)
+                  : kCard,
               border: Border.all(
                 color: _pressed || _hovered
                     ? widget.accentColor.withOpacity(0.7)
@@ -1311,10 +1348,12 @@ class _TerminalDialog extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: actions
-                  .map((a) => Padding(
-                        padding: const EdgeInsets.only(left: 8),
-                        child: a,
-                      ))
+                  .map(
+                    (a) => Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: a,
+                    ),
+                  )
                   .toList(),
             ),
           ],
@@ -1448,7 +1487,8 @@ class _MatrixScanlinePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     // Scanlines horizontales fijas
-    final linePaint = Paint()..color = const Color(0xFF00FF41).withOpacity(0.025);
+    final linePaint = Paint()
+      ..color = const Color(0xFF00FF41).withOpacity(0.025);
     for (double y = 0; y < size.height; y += 4) {
       canvas.drawRect(Rect.fromLTWH(0, y, size.width, 1.5), linePaint);
     }
@@ -1466,10 +1506,11 @@ class _MatrixScanlinePainter extends CustomPainter {
           const Color(0xFF00FF41).withOpacity(0.03),
           Colors.transparent,
         ],
-      ).createShader(
-          Rect.fromLTWH(0, scanY.toDouble(), size.width, 60));
+      ).createShader(Rect.fromLTWH(0, scanY.toDouble(), size.width, 60));
     canvas.drawRect(
-        Rect.fromLTWH(0, scanY.toDouble(), size.width, 60), scanPaint);
+      Rect.fromLTWH(0, scanY.toDouble(), size.width, 60),
+      scanPaint,
+    );
   }
 
   @override

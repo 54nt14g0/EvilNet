@@ -42,7 +42,8 @@ class _MenuScreenState extends State<MenuScreen>
   final _musicPlayer = AudioPlayer();
   bool _initialized = false;
   bool _isRouteActive = false;
-
+  int _totalUnread = 0;
+  StreamSubscription? _unreadSub;
   // Fondo y canción aleatorios
   late final String _selectedBackground;
   late final String _selectedSong;
@@ -120,6 +121,9 @@ class _MenuScreenState extends State<MenuScreen>
     )..repeat();
 
     _startMusic();
+    _unreadSub = ChatService().unreadStream.listen((counts) {
+      if (mounted) setState(() => _totalUnread = ChatService().totalUnread);
+    });
     Future.microtask(() async {
       await _initService();
       await Future.delayed(const Duration(seconds: 1));
@@ -473,17 +477,17 @@ class _MenuScreenState extends State<MenuScreen>
 
   // ── Lifecycle ────────────────────────────────────────────────────────────────
 
-  @override
-  void dispose() {
-    _glitchCtrl.dispose();
-    _scanlineCtrl.dispose();
-    _pulseCtrl.dispose();
-    _rainCtrl.dispose();
-    _videoCtrl?.dispose();
-    _musicPlayer.dispose();
-    super.dispose();
-  }
-
+ @override
+void dispose() {
+  _unreadSub?.cancel();
+  _glitchCtrl.dispose();
+  _scanlineCtrl.dispose();
+  _pulseCtrl.dispose();
+  _rainCtrl.dispose();
+  _videoCtrl?.dispose();
+  _musicPlayer.dispose();
+  super.dispose();
+}
   // ── Helpers ─────────────────────────────────────────────────────────────────
 
   // 🔐 MERGE: Helper para colores según jerarquía
@@ -779,12 +783,12 @@ class _MenuScreenState extends State<MenuScreen>
   Widget _buildMenuItem(int index, _MenuItem item, {bool isMobile = false}) {
     final isHovered = _hoveredIndex == index;
     final isExit = item.label == 'Exit';
-    final isSpecial = item.isSpecial; // 🔐 MERGE: Usar isSpecial del item
+    final isSpecial = item.isSpecial;
     final activeColor = isExit
         ? kPink
         : isSpecial
         ? kPurple
-        : kNeon; // 🔐 MERGE: Color según tipo
+        : kNeon;
 
     final fontSizeNumber = isMobile ? 10.0 : 11.0;
     final fontSizeLabel = isMobile ? 13.0 : 14.0;
@@ -797,6 +801,8 @@ class _MenuScreenState extends State<MenuScreen>
     final spacingNumber = isMobile ? 12.0 : 16.0;
     final marginItem = isMobile ? 6.0 : 8.0;
     final shadowBlur = isMobile ? 4.0 : 8.0;
+
+    final showBadge = item.label == 'Lobby' && _totalUnread > 0;
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hoveredIndex = index),
@@ -866,6 +872,27 @@ class _MenuScreenState extends State<MenuScreen>
                   ),
                 ),
               ),
+              if (showBadge)
+                Container(
+                  margin: const EdgeInsets.only(right: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: kPink,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    _totalUnread > 99 ? '99+' : '$_totalUnread',
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 9,
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
               if (isHovered)
                 Text(
                   '▶',

@@ -7,23 +7,23 @@ import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
 import '../widgets/user_avatar.dart';
 import 'package:share_plus/share_plus.dart';
-
+import '../services/notification_service.dart';
 import '../models/message.dart';
 import '../services/auth_service.dart';
 import '../services/chat_service.dart';
 import '../services/peer_service.dart';
 
 // ─── Paleta Matrix Terminal ───────────────────────────────────────────────────
-const Color kMatrix        = Color(0xFF00FF41);
-const Color kMatrixDim     = Color(0xFF00BB30);
-const Color kMatrixDark    = Color(0xFF003B0C);
-const Color kPink          = Color(0xFFFF2D78);
-const Color kPurple        = Color(0xFF9B00FF);
-const Color kDark          = Color(0xFF000000);
-const Color kDarkPanel     = Color(0xFF010801);
-const Color kCard          = Color(0xFF010F03);
-const Color kBorder        = Color(0xFF003B0C);
-const Color kTextPrimary   = Color(0xFFCCFFD6);
+const Color kMatrix = Color(0xFF00FF41);
+const Color kMatrixDim = Color(0xFF00BB30);
+const Color kMatrixDark = Color(0xFF003B0C);
+const Color kPink = Color(0xFFFF2D78);
+const Color kPurple = Color(0xFF9B00FF);
+const Color kDark = Color(0xFF000000);
+const Color kDarkPanel = Color(0xFF010801);
+const Color kCard = Color(0xFF010F03);
+const Color kBorder = Color(0xFF003B0C);
+const Color kTextPrimary = Color(0xFFCCFFD6);
 const Color kTextSecondary = Color(0xFF3D7A47);
 
 class ChatScreen extends StatefulWidget {
@@ -43,10 +43,10 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
-  final _chat   = ChatService();
-  final _auth   = AuthService();
-  final _peer   = PeerService();
-  final _ctrl   = TextEditingController();
+  final _chat = ChatService();
+  final _auth = AuthService();
+  final _peer = PeerService();
+  final _ctrl = TextEditingController();
   final _scroll = ScrollController();
 
   StreamSubscription<ChatEvent>? _sub;
@@ -58,8 +58,13 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   late AnimationController _pulseCtrl;
 
   bool get _isBroadcast => widget.recipientId == null && widget.groupId == null;
-  bool get _isGroup     => widget.groupId != null;
-  bool get _isPrivate   => widget.recipientId != null;
+  bool get _isGroup => widget.groupId != null;
+  bool get _isPrivate => widget.recipientId != null;
+  String get _chatId {
+  if (_isBroadcast) return 'broadcast';
+  if (_isGroup) return widget.groupId!;
+  return widget.recipientId!;
+}
 
   @override
   void initState() {
@@ -100,6 +105,16 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (mounted) setState(() => _initialized = true);
     _scrollToBottom();
     _sub = _chat.events.listen(_onChatEvent);
+    // Marcar como leído al abrir el chat
+    final String chatId;
+    if (_isBroadcast) {
+      chatId = 'broadcast';
+    } else if (_isGroup) {
+      chatId = widget.groupId!;
+    } else {
+      chatId = widget.recipientId!;
+    }
+    _chat.markRead(chatId);
   }
 
   void _onChatEvent(ChatEvent event) {
@@ -154,8 +169,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (_isBroadcast) return msg.recipientId == null && msg.groupId == null;
     if (_isGroup) return msg.groupId == widget.groupId;
     if (msg.groupId != null) return false;
-    if (msg.senderId == myId && msg.recipientId == widget.recipientId) return true;
-    if (msg.senderId == widget.recipientId && msg.recipientId == myId) return true;
+    if (msg.senderId == myId && msg.recipientId == widget.recipientId)
+      return true;
+    if (msg.senderId == widget.recipientId && msg.recipientId == myId)
+      return true;
     return false;
   }
 
@@ -197,8 +214,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
     MessageType type = MessageType.file;
     if (['mp4', 'mov', 'avi', 'mkv'].contains(ext)) type = MessageType.video;
-    if (['jpg', 'jpeg', 'png', 'gif', 'webp'].contains(ext)) type = MessageType.image;
-    if (['mp3', 'aac', 'ogg', 'm4a', 'wav'].contains(ext)) type = MessageType.audio;
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp'].contains(ext))
+      type = MessageType.image;
+    if (['mp3', 'aac', 'ogg', 'm4a', 'wav'].contains(ext))
+      type = MessageType.audio;
 
     if (_isBroadcast) {
       await _chat.sendBroadcastFile(path, type);
@@ -275,19 +294,28 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   icon: Icons.open_in_new_outlined,
                   label: 'OPEN_FILE',
                   color: kMatrix,
-                  onTap: () { Navigator.pop(context); _openFile(msg); },
+                  onTap: () {
+                    Navigator.pop(context);
+                    _openFile(msg);
+                  },
                 ),
                 _SheetOption(
                   icon: Icons.share_outlined,
                   label: 'SHARE_FILE',
                   color: kMatrix,
-                  onTap: () { Navigator.pop(context); _shareFile(msg); },
+                  onTap: () {
+                    Navigator.pop(context);
+                    _shareFile(msg);
+                  },
                 ),
                 _SheetOption(
                   icon: Icons.download_outlined,
                   label: 'SAVE_TO_DEVICE',
                   color: kMatrix,
-                  onTap: () { Navigator.pop(context); _saveFile(msg); },
+                  onTap: () {
+                    Navigator.pop(context);
+                    _saveFile(msg);
+                  },
                 ),
               ],
 
@@ -428,15 +456,17 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (msg.type == MessageType.text) return;
     final file = File(msg.content);
     if (!file.existsSync()) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: const Text(
-          '> ERROR: Archivo no disponible localmente',
-          style: TextStyle(fontFamily: 'monospace', fontSize: 11),
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            '> ERROR: Archivo no disponible localmente',
+            style: TextStyle(fontFamily: 'monospace', fontSize: 11),
+          ),
+          backgroundColor: kDarkPanel,
+          behavior: SnackBarBehavior.floating,
+          shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
         ),
-        backgroundColor: kDarkPanel,
-        behavior: SnackBarBehavior.floating,
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-      ));
+      );
       return;
     }
     OpenFilex.open(msg.content);
@@ -481,24 +511,28 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       await source.copy(dest);
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-          '> SAVED: $dest',
-          style: const TextStyle(fontFamily: 'monospace', fontSize: 10),
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '> SAVED: $dest',
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 10),
+          ),
+          backgroundColor: kDarkPanel,
+          behavior: SnackBarBehavior.floating,
+          shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
         ),
-        backgroundColor: kDarkPanel,
-        behavior: SnackBarBehavior.floating,
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-      ));
+      );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-          '> ERROR: $e',
-          style: const TextStyle(fontFamily: 'monospace', fontSize: 10),
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '> ERROR: $e',
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 10),
+          ),
+          backgroundColor: kDarkPanel,
         ),
-        backgroundColor: kDarkPanel,
-      ));
+      );
     }
   }
 
@@ -535,7 +569,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 icon: Icons.delete_sweep_outlined,
                 label: 'CLEAR_CHAT',
                 color: kPink,
-                onTap: () { Navigator.pop(context); _confirmClear(); },
+                onTap: () {
+                  Navigator.pop(context);
+                  _confirmClear();
+                },
               ),
               const SizedBox(height: 8),
             ],
@@ -600,9 +637,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           Positioned.fill(
             child: AnimatedBuilder(
               animation: _scanCtrl,
-              builder: (_, __) => CustomPaint(
-                painter: _ChatScanlinePainter(_scanCtrl.value),
-              ),
+              builder: (_, __) =>
+                  CustomPaint(painter: _ChatScanlinePainter(_scanCtrl.value)),
             ),
           ),
           SafeArea(
@@ -649,9 +685,9 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                             itemBuilder: (_, i) {
                               final msg = _messages[i];
                               final prevMsg = i > 0 ? _messages[i - 1] : null;
-                              final showDateSep = prevMsg == null ||
-                                  !_sameDay(
-                                      prevMsg.timestamp, msg.timestamp);
+                              final showDateSep =
+                                  prevMsg == null ||
+                                  !_sameDay(prevMsg.timestamp, msg.timestamp);
                               return Column(
                                 children: [
                                   if (showDateSep)
@@ -695,12 +731,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       padding: const EdgeInsets.symmetric(vertical: 12),
       child: Row(
         children: [
-          Expanded(
-            child: Container(
-              height: 1,
-              color: kMatrixDark,
-            ),
-          ),
+          Expanded(child: Container(height: 1, color: kMatrixDark)),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Text(
@@ -713,12 +744,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               ),
             ),
           ),
-          Expanded(
-            child: Container(
-              height: 1,
-              color: kMatrixDark,
-            ),
-          ),
+          Expanded(child: Container(height: 1, color: kMatrixDark)),
         ],
       ),
     );
@@ -759,147 +785,185 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildAppBar(bool isMobile) {
-    return AnimatedBuilder(
-      animation: _glowCtrl,
-      builder: (_, __) {
-        final glow = 0.4 + _glowCtrl.value * 0.6;
-        final channelType = _isBroadcast
-            ? 'BROADCAST'
-            : _isGroup
-                ? 'GROUP'
-                : 'PRIVATE';
+  return AnimatedBuilder(
+    animation: _glowCtrl,
+    builder: (_, __) {
+      final glow = 0.4 + _glowCtrl.value * 0.6;
+      final channelType = _isBroadcast
+          ? 'BROADCAST'
+          : _isGroup
+          ? 'GROUP'
+          : 'PRIVATE';
 
-        return Container(
-          padding: EdgeInsets.symmetric(
-            horizontal: isMobile ? 10 : 16,
-            vertical: isMobile ? 10 : 12,
-          ),
-          decoration: BoxDecoration(
-            color: kDarkPanel,
-            border: Border(
-              bottom: BorderSide(color: kMatrix.withOpacity(0.4)),
+      return Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: isMobile ? 10 : 16,
+          vertical: isMobile ? 10 : 12,
+        ),
+        decoration: BoxDecoration(
+          color: kDarkPanel,
+          border: Border(bottom: BorderSide(color: kMatrix.withOpacity(0.4))),
+          boxShadow: [
+            BoxShadow(
+              color: kMatrix.withOpacity(0.06 * glow),
+              blurRadius: 16,
             ),
-            boxShadow: [
-              BoxShadow(
-                color: kMatrix.withOpacity(0.06 * glow),
-                blurRadius: 16,
-              ),
-            ],
-          ),
-          child: Row(
-            children: [
-              // Back
-              GestureDetector(
-                onTap: () => Navigator.pop(context),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: kMatrix.withOpacity(0.5)),
-                    color: kMatrixDark.withOpacity(0.3),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.arrow_back_ios_new,
-                          color: kMatrix, size: 12),
-                      const SizedBox(width: 4),
-                      const Text(
-                        'ESC',
-                        style: TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 10,
-                          color: kMatrix,
-                          letterSpacing: 1,
-                        ),
-                      ),
-                    ],
-                  ),
+          ],
+        ),
+        child: Row(
+          children: [
+            // Back
+            GestureDetector(
+              onTap: () => Navigator.pop(context),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
                 ),
-              ),
-              const SizedBox(width: 12),
-
-              // Info del chat
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                decoration: BoxDecoration(
+                  border: Border.all(color: kMatrix.withOpacity(0.5)),
+                  color: kMatrixDark.withOpacity(0.3),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      widget.peerName.toUpperCase(),
+                    const Icon(
+                      Icons.arrow_back_ios_new,
+                      color: kMatrix,
+                      size: 12,
+                    ),
+                    const SizedBox(width: 4),
+                    const Text(
+                      'ESC',
                       style: TextStyle(
                         fontFamily: 'monospace',
-                        fontSize: isMobile ? 13 : 15,
-                        fontWeight: FontWeight.bold,
-                        color: kTextPrimary,
-                        letterSpacing: 2,
-                        shadows: [
-                          Shadow(
-                            color: kMatrix.withOpacity(0.5 * glow),
-                            blurRadius: 8,
-                          ),
-                        ],
+                        fontSize: 10,
+                        color: kMatrix,
+                        letterSpacing: 1,
                       ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    Row(
-                      children: [
-                        AnimatedBuilder(
-                          animation: _pulseCtrl,
-                          builder: (_, __) => Container(
-                            width: 6,
-                            height: 6,
-                            margin: const EdgeInsets.only(right: 6),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: kMatrix,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: kMatrix.withOpacity(
-                                      0.6 + _pulseCtrl.value * 0.4),
-                                  blurRadius: 6,
-                                  spreadRadius: 1,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        Text(
-                          channelType,
-                          style: const TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 9,
-                            color: kTextSecondary,
-                            letterSpacing: 2,
-                          ),
-                        ),
-                      ],
                     ),
                   ],
                 ),
               ),
+            ),
+            const SizedBox(width: 12),
 
-              // Opciones
-              GestureDetector(
-                onTap: _showChatOptions,
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    border: Border.all(
-                        color: kMatrix.withOpacity(0.3)),
+            // Info del chat
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.peerName.toUpperCase(),
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: isMobile ? 13 : 15,
+                      fontWeight: FontWeight.bold,
+                      color: kTextPrimary,
+                      letterSpacing: 2,
+                      shadows: [
+                        Shadow(
+                          color: kMatrix.withOpacity(0.5 * glow),
+                          blurRadius: 8,
+                        ),
+                      ],
+                    ),
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  child: const Icon(
-                    Icons.more_vert,
-                    color: kMatrixDim,
-                    size: 16,
+                  Row(
+                    children: [
+                      AnimatedBuilder(
+                        animation: _pulseCtrl,
+                        builder: (_, __) => Container(
+                          width: 6,
+                          height: 6,
+                          margin: const EdgeInsets.only(right: 6),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: kMatrix,
+                            boxShadow: [
+                              BoxShadow(
+                                color: kMatrix.withOpacity(
+                                  0.6 + _pulseCtrl.value * 0.4,
+                                ),
+                                blurRadius: 6,
+                                spreadRadius: 1,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      Text(
+                        channelType,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 9,
+                          color: kTextSecondary,
+                          letterSpacing: 2,
+                        ),
+                      ),
+                    ],
                   ),
+                ],
+              ),
+            ),
+
+            // Botón silenciar/activar notificaciones
+            FutureBuilder<bool>(
+              future: NotificationService().isChatEnabled(_chatId),
+              builder: (context, snap) {
+                final enabled = snap.data ?? true;
+                return GestureDetector(
+                  onTap: () async {
+                    await NotificationService().setChatEnabled(
+                      _chatId,
+                      !enabled,
+                    );
+                    setState(() {});
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    margin: const EdgeInsets.only(right: 8),
+                    decoration: BoxDecoration(
+                      border: Border.all(
+                        color: enabled
+                            ? kMatrix.withOpacity(0.3)
+                            : kPink.withOpacity(0.5),
+                      ),
+                    ),
+                    child: Icon(
+                      enabled
+                          ? Icons.notifications_outlined
+                          : Icons.notifications_off_outlined,
+                      color: enabled ? kMatrixDim : kPink,
+                      size: 16,
+                    ),
+                  ),
+                );
+              },
+            ),
+
+            // Opciones
+            GestureDetector(
+              onTap: _showChatOptions,
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  border: Border.all(color: kMatrix.withOpacity(0.3)),
+                ),
+                child: const Icon(
+                  Icons.more_vert,
+                  color: kMatrixDim,
+                  size: 16,
                 ),
               ),
-            ],
-          ),
-        );
-      },
-    );
-  }
+            ),
+          ],
+        ),
+      );
+    },
+  );
+}
 
   Widget _buildInputBar(bool isMobile) {
     return Container(
@@ -911,9 +975,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       ),
       decoration: BoxDecoration(
         color: kDarkPanel,
-        border: Border(
-          top: BorderSide(color: kMatrix.withOpacity(0.3)),
-        ),
+        border: Border(top: BorderSide(color: kMatrix.withOpacity(0.3))),
       ),
       child: Row(
         children: [
@@ -927,11 +989,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 border: Border.all(color: kMatrixDark),
                 color: kMatrixDark.withOpacity(0.3),
               ),
-              child: const Icon(
-                Icons.attach_file,
-                color: kMatrixDim,
-                size: 16,
-              ),
+              child: const Icon(Icons.attach_file, color: kMatrixDim, size: 16),
             ),
           ),
 
@@ -956,7 +1014,9 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 fillColor: kCard,
                 isDense: true,
                 contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 10),
+                  horizontal: 12,
+                  vertical: 10,
+                ),
                 enabledBorder: const OutlineInputBorder(
                   borderRadius: BorderRadius.zero,
                   borderSide: BorderSide(color: kBorder),
@@ -977,16 +1037,16 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               animation: _glowCtrl,
               builder: (_, __) => Container(
                 padding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 9),
+                  horizontal: 14,
+                  vertical: 9,
+                ),
                 margin: const EdgeInsets.only(left: 8),
                 decoration: BoxDecoration(
-                  border: Border.all(
-                      color: kMatrix.withOpacity(0.7)),
+                  border: Border.all(color: kMatrix.withOpacity(0.7)),
                   color: kMatrixDark.withOpacity(0.5),
                   boxShadow: [
                     BoxShadow(
-                      color: kMatrix.withOpacity(
-                          0.15 + _glowCtrl.value * 0.1),
+                      color: kMatrix.withOpacity(0.15 + _glowCtrl.value * 0.1),
                       blurRadius: 8,
                     ),
                   ],
@@ -1058,8 +1118,9 @@ class _MessageBubble extends StatelessWidget {
       child: Padding(
         padding: EdgeInsets.symmetric(vertical: isMobile ? 3 : 4),
         child: Row(
-          mainAxisAlignment:
-              isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+          mainAxisAlignment: isMe
+              ? MainAxisAlignment.end
+              : MainAxisAlignment.start,
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             // Avatar izquierdo (otros)
@@ -1069,15 +1130,19 @@ class _MessageBubble extends StatelessWidget {
             ],
 
             // Burbuja
+            // Burbuja
             Flexible(
               child: Container(
                 constraints: BoxConstraints(
-                  maxWidth: MediaQuery.of(context).size.width *
+                  maxWidth:
+                      MediaQuery.of(context).size.width *
                       (isMobile ? 0.75 : 0.65),
                 ),
                 decoration: BoxDecoration(
                   color: bgColor,
-                  border: Border.all(color: borderColor),
+                  border: Border.all(
+                    color: borderColor.withOpacity(0.18),
+                  ), // menos marcado
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1090,10 +1155,12 @@ class _MessageBubble extends StatelessWidget {
                       ),
                       decoration: BoxDecoration(
                         color: isMe
-                            ? kMatrix.withOpacity(0.08)
-                            : kPurple.withOpacity(0.08),
+                            ? kMatrix.withOpacity(0.05) // más suave
+                            : kPurple.withOpacity(0.05),
                         border: Border(
-                          bottom: BorderSide(color: borderColor),
+                          bottom: BorderSide(
+                            color: borderColor.withOpacity(0.15),
+                          ),
                         ),
                       ),
                       child: Row(
@@ -1145,7 +1212,6 @@ class _MessageBubble extends StatelessWidget {
                         ],
                       ),
                     ),
-
                     // Contenido
                     Padding(
                       padding: EdgeInsets.all(isMobile ? 8 : 10),
@@ -1172,9 +1238,7 @@ class _MessageBubble extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         border: Border.all(
-          color: isMe
-              ? kMatrix.withOpacity(0.5)
-              : kPurple.withOpacity(0.4),
+          color: isMe ? kMatrix.withOpacity(0.5) : kPurple.withOpacity(0.4),
         ),
       ),
       child: UserAvatar(
@@ -1202,35 +1266,23 @@ class _MessageBubble extends StatelessWidget {
         if (file.existsSync()) {
           return GestureDetector(
             onTap: onTapFile,
-            child: Stack(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                ClipRect(
-                  child: Image.file(
-                    file,
-                    height: 180,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => _fileChip(
-                      Icons.image_outlined,
-                      msg.fileName ?? 'imagen',
-                    ),
-                  ),
+                Image.file(
+                  file,
+                  width: double.infinity,
+                  fit: BoxFit.contain, // sin recorte
+                  errorBuilder: (_, __, ___) =>
+                      _fileChip(Icons.image_outlined, msg.fileName ?? 'imagen'),
                 ),
-                Positioned(
-                  bottom: 6,
-                  right: 6,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 6, vertical: 2),
-                    color: kDark.withOpacity(0.7),
-                    child: const Text(
-                      'TAP_TO_OPEN',
-                      style: TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 8,
-                        color: kMatrix,
-                      ),
-                    ),
+                const SizedBox(height: 4),
+                Text(
+                  '[TAP_TO_OPEN]',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 8,
+                    color: kMatrix.withOpacity(0.6),
                   ),
                 ),
               ],
@@ -1277,8 +1329,8 @@ class _MessageBubble extends StatelessWidget {
     final color = unavailable
         ? kTextSecondary
         : tappable
-            ? kMatrix
-            : kMatrixDim;
+        ? kMatrix
+        : kMatrixDim;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -1414,10 +1466,12 @@ class _TerminalDialog extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: actions
-                  .map((a) => Padding(
-                        padding: const EdgeInsets.only(left: 8),
-                        child: a,
-                      ))
+                  .map(
+                    (a) => Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: a,
+                    ),
+                  )
                   .toList(),
             ),
           ],
@@ -1488,10 +1542,11 @@ class _ChatScanlinePainter extends CustomPainter {
           const Color(0xFF00FF41).withOpacity(0.025),
           Colors.transparent,
         ],
-      ).createShader(
-          Rect.fromLTWH(0, scanY.toDouble(), size.width, 60));
+      ).createShader(Rect.fromLTWH(0, scanY.toDouble(), size.width, 60));
     canvas.drawRect(
-        Rect.fromLTWH(0, scanY.toDouble(), size.width, 60), scanPaint);
+      Rect.fromLTWH(0, scanY.toDouble(), size.width, 60),
+      scanPaint,
+    );
   }
 
   @override
