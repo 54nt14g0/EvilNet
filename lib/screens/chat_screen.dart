@@ -61,10 +61,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   bool get _isGroup => widget.groupId != null;
   bool get _isPrivate => widget.recipientId != null;
   String get _chatId {
-  if (_isBroadcast) return 'broadcast';
-  if (_isGroup) return widget.groupId!;
-  return widget.recipientId!;
-}
+    if (_isBroadcast) return 'broadcast';
+    if (_isGroup) return widget.groupId!;
+    return widget.recipientId!;
+  }
 
   @override
   void initState() {
@@ -105,6 +105,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (mounted) setState(() => _initialized = true);
     _scrollToBottom();
     _sub = _chat.events.listen(_onChatEvent);
+    // Enviar receipts de mensajes no leídos del otro
+    for (final msg in _messages) {
+      if (!msg.isMe && !msg.isRead) {
+        _chat.sendReadReceipt(msg);
+      }
+    }
     // Marcar como leído al abrir el chat
     final String chatId;
     if (_isBroadcast) {
@@ -125,6 +131,9 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         if (!_isForThisChat(msg)) return;
         if (_messages.any((m) => m.id == msg.id)) return;
         setState(() => _messages.add(msg));
+        if (!msg.isMe) {
+          _chat.sendReadReceipt(msg);
+        }
         _scrollToBottom();
         break;
 
@@ -153,6 +162,16 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               isEdited: true,
               isBackgroundVideo: old.isBackgroundVideo,
             );
+          }
+        });
+        break;
+      case 'message_read':
+        final id = event.data as String;
+        setState(() {
+          final idx = _messages.indexWhere((m) => m.id == id);
+          if (idx != -1) {
+            final old = _messages[idx];
+            _messages[idx] = old.copyWith(isRead: true);
           }
         });
         break;
@@ -785,185 +804,185 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildAppBar(bool isMobile) {
-  return AnimatedBuilder(
-    animation: _glowCtrl,
-    builder: (_, __) {
-      final glow = 0.4 + _glowCtrl.value * 0.6;
-      final channelType = _isBroadcast
-          ? 'BROADCAST'
-          : _isGroup
-          ? 'GROUP'
-          : 'PRIVATE';
+    return AnimatedBuilder(
+      animation: _glowCtrl,
+      builder: (_, __) {
+        final glow = 0.4 + _glowCtrl.value * 0.6;
+        final channelType = _isBroadcast
+            ? 'BROADCAST'
+            : _isGroup
+            ? 'GROUP'
+            : 'PRIVATE';
 
-      return Container(
-        padding: EdgeInsets.symmetric(
-          horizontal: isMobile ? 10 : 16,
-          vertical: isMobile ? 10 : 12,
-        ),
-        decoration: BoxDecoration(
-          color: kDarkPanel,
-          border: Border(bottom: BorderSide(color: kMatrix.withOpacity(0.4))),
-          boxShadow: [
-            BoxShadow(
-              color: kMatrix.withOpacity(0.06 * glow),
-              blurRadius: 16,
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            // Back
-            GestureDetector(
-              onTap: () => Navigator.pop(context),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  border: Border.all(color: kMatrix.withOpacity(0.5)),
-                  color: kMatrixDark.withOpacity(0.3),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.arrow_back_ios_new,
-                      color: kMatrix,
-                      size: 12,
-                    ),
-                    const SizedBox(width: 4),
-                    const Text(
-                      'ESC',
-                      style: TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 10,
-                        color: kMatrix,
-                        letterSpacing: 1,
-                      ),
-                    ),
-                  ],
-                ),
+        return Container(
+          padding: EdgeInsets.symmetric(
+            horizontal: isMobile ? 10 : 16,
+            vertical: isMobile ? 10 : 12,
+          ),
+          decoration: BoxDecoration(
+            color: kDarkPanel,
+            border: Border(bottom: BorderSide(color: kMatrix.withOpacity(0.4))),
+            boxShadow: [
+              BoxShadow(
+                color: kMatrix.withOpacity(0.06 * glow),
+                blurRadius: 16,
               ),
-            ),
-            const SizedBox(width: 12),
-
-            // Info del chat
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.peerName.toUpperCase(),
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: isMobile ? 13 : 15,
-                      fontWeight: FontWeight.bold,
-                      color: kTextPrimary,
-                      letterSpacing: 2,
-                      shadows: [
-                        Shadow(
-                          color: kMatrix.withOpacity(0.5 * glow),
-                          blurRadius: 8,
-                        ),
-                      ],
-                    ),
-                    overflow: TextOverflow.ellipsis,
+            ],
+          ),
+          child: Row(
+            children: [
+              // Back
+              GestureDetector(
+                onTap: () => Navigator.pop(context),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
                   ),
-                  Row(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: kMatrix.withOpacity(0.5)),
+                    color: kMatrixDark.withOpacity(0.3),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      AnimatedBuilder(
-                        animation: _pulseCtrl,
-                        builder: (_, __) => Container(
-                          width: 6,
-                          height: 6,
-                          margin: const EdgeInsets.only(right: 6),
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: kMatrix,
-                            boxShadow: [
-                              BoxShadow(
-                                color: kMatrix.withOpacity(
-                                  0.6 + _pulseCtrl.value * 0.4,
-                                ),
-                                blurRadius: 6,
-                                spreadRadius: 1,
-                              ),
-                            ],
-                          ),
-                        ),
+                      const Icon(
+                        Icons.arrow_back_ios_new,
+                        color: kMatrix,
+                        size: 12,
                       ),
-                      Text(
-                        channelType,
-                        style: const TextStyle(
+                      const SizedBox(width: 4),
+                      const Text(
+                        'ESC',
+                        style: TextStyle(
                           fontFamily: 'monospace',
-                          fontSize: 9,
-                          color: kTextSecondary,
-                          letterSpacing: 2,
+                          fontSize: 10,
+                          color: kMatrix,
+                          letterSpacing: 1,
                         ),
                       ),
                     ],
                   ),
-                ],
+                ),
               ),
-            ),
+              const SizedBox(width: 12),
 
-            // Botón silenciar/activar notificaciones
-            FutureBuilder<bool>(
-              future: NotificationService().isChatEnabled(_chatId),
-              builder: (context, snap) {
-                final enabled = snap.data ?? true;
-                return GestureDetector(
-                  onTap: () async {
-                    await NotificationService().setChatEnabled(
-                      _chatId,
-                      !enabled,
-                    );
-                    setState(() {});
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.all(8),
-                    margin: const EdgeInsets.only(right: 8),
-                    decoration: BoxDecoration(
-                      border: Border.all(
-                        color: enabled
-                            ? kMatrix.withOpacity(0.3)
-                            : kPink.withOpacity(0.5),
+              // Info del chat
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.peerName.toUpperCase(),
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: isMobile ? 13 : 15,
+                        fontWeight: FontWeight.bold,
+                        color: kTextPrimary,
+                        letterSpacing: 2,
+                        shadows: [
+                          Shadow(
+                            color: kMatrix.withOpacity(0.5 * glow),
+                            blurRadius: 8,
+                          ),
+                        ],
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Row(
+                      children: [
+                        AnimatedBuilder(
+                          animation: _pulseCtrl,
+                          builder: (_, __) => Container(
+                            width: 6,
+                            height: 6,
+                            margin: const EdgeInsets.only(right: 6),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: kMatrix,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: kMatrix.withOpacity(
+                                    0.6 + _pulseCtrl.value * 0.4,
+                                  ),
+                                  blurRadius: 6,
+                                  spreadRadius: 1,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        Text(
+                          channelType,
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 9,
+                            color: kTextSecondary,
+                            letterSpacing: 2,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              // Botón silenciar/activar notificaciones
+              FutureBuilder<bool>(
+                future: NotificationService().isChatEnabled(_chatId),
+                builder: (context, snap) {
+                  final enabled = snap.data ?? true;
+                  return GestureDetector(
+                    onTap: () async {
+                      await NotificationService().setChatEnabled(
+                        _chatId,
+                        !enabled,
+                      );
+                      setState(() {});
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      margin: const EdgeInsets.only(right: 8),
+                      decoration: BoxDecoration(
+                        border: Border.all(
+                          color: enabled
+                              ? kMatrix.withOpacity(0.3)
+                              : kPink.withOpacity(0.5),
+                        ),
+                      ),
+                      child: Icon(
+                        enabled
+                            ? Icons.notifications_outlined
+                            : Icons.notifications_off_outlined,
+                        color: enabled ? kMatrixDim : kPink,
+                        size: 16,
                       ),
                     ),
-                    child: Icon(
-                      enabled
-                          ? Icons.notifications_outlined
-                          : Icons.notifications_off_outlined,
-                      color: enabled ? kMatrixDim : kPink,
-                      size: 16,
-                    ),
-                  ),
-                );
-              },
-            ),
+                  );
+                },
+              ),
 
-            // Opciones
-            GestureDetector(
-              onTap: _showChatOptions,
-              child: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  border: Border.all(color: kMatrix.withOpacity(0.3)),
-                ),
-                child: const Icon(
-                  Icons.more_vert,
-                  color: kMatrixDim,
-                  size: 16,
+              // Opciones
+              GestureDetector(
+                onTap: _showChatOptions,
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: kMatrix.withOpacity(0.3)),
+                  ),
+                  child: const Icon(
+                    Icons.more_vert,
+                    color: kMatrixDim,
+                    size: 16,
+                  ),
                 ),
               ),
-            ),
-          ],
-        ),
-      );
-    },
-  );
-}
+            ],
+          ),
+        );
+      },
+    );
+  }
 
   Widget _buildInputBar(bool isMobile) {
     return Container(
@@ -1207,6 +1226,14 @@ class _MessageBubble extends StatelessWidget {
                                 color: kTextSecondary,
                                 fontStyle: FontStyle.italic,
                               ),
+                            ),
+                          ],
+                          if (msg.isMe) ...[
+                            const SizedBox(width: 4),
+                            Icon(
+                              msg.isRead ? Icons.done_all : Icons.done,
+                              size: 11,
+                              color: msg.isRead ? kMatrix : kTextSecondary,
                             ),
                           ],
                         ],

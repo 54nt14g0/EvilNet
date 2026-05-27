@@ -4,10 +4,11 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_quill/flutter_quill.dart' as quill;
 import 'screens/auth_screen.dart';
 import 'screens/menu_screen.dart';
+import 'services/notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
+  await NotificationService().init();
   if (Platform.isWindows) {
     await _setupFirewall();
   }
@@ -17,13 +18,13 @@ void main() async {
 
 Future<void> _setupFirewall() async {
   final rules = {
-    'EvilNet Auth':        '9001',
+    'EvilNet Auth': '9001',
     'EvilNet PeerService': '45000',
-    'EvilNet StudyRoom':   '45001',
-    'EvilNet Material':    '45002',
-    'EvilNet Chat':        '45003',
-    'EvilNet Universe':    '45004',
-    'EvilNet Nooks':       '45005',
+    'EvilNet StudyRoom': '45001',
+    'EvilNet Material': '45002',
+    'EvilNet Chat': '45003',
+    'EvilNet Universe': '45004',
+    'EvilNet Nooks': '45005',
   };
 
   final scriptLines = StringBuffer();
@@ -56,15 +57,12 @@ if (-not \$exists) {
     await scriptFile.writeAsString(scriptLines.toString());
 
     // Verificar si ya tenemos permisos (primera vez vs subsecuentes arranques)
-    final checkResult = await Process.run(
-      'powershell',
-      [
-        '-ExecutionPolicy', 'Bypass',
-        '-Command',
-        'Get-NetFirewallRule -DisplayName "EvilNet Auth" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Enabled',
-      ],
-      runInShell: true,
-    );
+    final checkResult = await Process.run('powershell', [
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      'Get-NetFirewallRule -DisplayName "EvilNet Auth" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Enabled',
+    ], runInShell: true);
 
     final alreadyConfigured = checkResult.stdout.toString().trim().isNotEmpty;
 
@@ -77,17 +75,13 @@ if (-not \$exists) {
     // Primera vez: necesitamos elevar permisos
     print('[Firewall] 🔧 Configurando reglas por primera vez...');
 
-    final result = await Process.run(
-      'powershell',
-      [
-        '-ExecutionPolicy', 'Bypass',
-        '-Command',
-        // -Wait asegura que esperamos a que el proceso elevado termine
-        'Start-Process powershell -Verb RunAs -Wait '
-        '-ArgumentList \'-ExecutionPolicy Bypass -NonInteractive -File "${scriptFile.path}"\'',
-      ],
-      runInShell: true,
-    );
+    final result = await Process.run('powershell', [
+      '-ExecutionPolicy', 'Bypass',
+      '-Command',
+      // -Wait asegura que esperamos a que el proceso elevado termine
+      'Start-Process powershell -Verb RunAs -Wait '
+          '-ArgumentList \'-ExecutionPolicy Bypass -NonInteractive -File "${scriptFile.path}"\'',
+    ], runInShell: true);
 
     final stdout = result.stdout.toString().trim();
     final stderr = result.stderr.toString().trim();

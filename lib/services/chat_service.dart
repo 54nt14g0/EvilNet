@@ -351,6 +351,9 @@ class ChatService {
           // El socket se cierra dentro de este método tras enviar la respuesta
           await _handleBroadcastHistoryRequest(socket, all, headerLen);
           return;
+        case 'read_receipt':
+          await _handleReadReceipt(header);
+          break;
         case 'request_private_history':
           await _handlePrivateHistoryRequest(socket, header);
           return;
@@ -782,8 +785,7 @@ class ChatService {
 
     _controller.add(ChatEvent('message', msg));
 
-    // Determinar el chatId para notificaciones
-    final notif = NotificationService();
+    // Determinar chatId para badge y notificación
     final String chatId;
     if (isGroup) {
       chatId = header['groupId'] as String;
@@ -792,8 +794,19 @@ class ChatService {
     } else {
       chatId = header['senderId'] as String? ?? 'unknown';
     }
+
     incrementUnread(chatId);
-    notif.notify(chatId);
+
+    final senderName = header['senderUsername'] as String?;
+    final msgPreview = type == MessageType.text
+        ? (content.length > 40 ? '${content.substring(0, 40)}...' : content)
+        : '📎 Archivo';
+
+    NotificationService().notify(
+      chatId,
+      senderName: senderName,
+      preview: msgPreview,
+    );
   }
 
   Future<void> _handleEditPacket(Map<String, dynamic> header) async {
@@ -1135,12 +1148,6 @@ class ChatService {
       print('[ChatService] syncBroadcastWithPeer($ip) failed: $e');
     }
   }
-
-  void dispose() {
-    _server?.close();
-    _controller.close();
-  }
-
   // ── Contador de no leídos ──────────────────────────────────────────────────
 
   final Map<String, int> _unreadCounts = {};
@@ -1166,5 +1173,56 @@ class ChatService {
   void markAllRead() {
     _unreadCounts.clear();
     _unreadController.add({});
+  }
+
+  // ── Visto ──────────────────────────────────────────────────────────────────
+
+  Future<void> sendReadReceipt(Message msg) async {
+    if (msg.isMe) return;
+    final senderIp = PeerService().ipForUserId(msg.senderId);
+    if (senderIp == null) return;
+    await _sendPacket(senderIp, {
+      'type': 'read_receipt',
+      'messageId': msg.id,
+      'readerId': _myId,
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+  }
+
+  Future<void> markMessageRead(String messageId) async {
+    final myId = _myId;
+    final prefs = await SharedPreferences.getInstance();
+    for (final key in [kBroadcastKey, _privateKey(myId)]) {
+      final list = prefs.getStringList(key) ?? [];
+      bool changed = false;
+      final updated = list.map((s) {
+        try {
+          final j = jsonDecode(s) as Map<String, dynamic>;
+          if (j['id'] == messageId && j['isRead'] != true) {
+            j['isRead'] = true;
+            changed = true;
+            return jsonEncode(j);
+          }
+          return s;
+        } catch (_) {
+          return s;
+        }
+      }).toList();
+      if (changed) {
+        await prefs.setStringList(key, updated);
+        _controller.add(ChatEvent('message_read', messageId));
+      }
+    }
+  }
+
+  Future<void> _handleReadReceipt(Map<String, dynamic> header) async {
+    final messageId = header['messageId'] as String?;
+    if (messageId == null) return;
+    await markMessageRead(messageId);
+  }
+
+  void dispose() {
+    _server?.close();
+    _controller.close();
   }
 }

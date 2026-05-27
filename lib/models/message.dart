@@ -21,6 +21,7 @@ class Message {
 
   final bool isEdited;
   final bool isBackgroundVideo;
+  final bool isRead;
 
   const Message({
     required this.id,
@@ -38,6 +39,7 @@ class Message {
     this.recipientUsername,
     this.isEdited = false,
     this.isBackgroundVideo = false,
+    this.isRead = false,
   });
 
   Map<String, dynamic> toJson() => {
@@ -55,6 +57,7 @@ class Message {
     'recipientUsername': recipientUsername,
     'isEdited': isEdited,
     'isBackgroundVideo': isBackgroundVideo,
+    'isRead': isRead,
   };
 
   factory Message.fromJson(Map<String, dynamic> j, bool isMe) => Message(
@@ -73,11 +76,13 @@ class Message {
     recipientUsername: j['recipientUsername'] as String?,
     isEdited: j['isEdited'] as bool? ?? false,
     isBackgroundVideo: j['isBackgroundVideo'] as bool? ?? false,
+    isRead: j['isRead'] as bool? ?? false,
   );
 
   Message copyWith({
     String? content,
     bool? isEdited,
+    bool? isRead,
   }) => Message(
     id: id,
     senderId: senderId,
@@ -94,10 +99,12 @@ class Message {
     recipientUsername: recipientUsername,
     isEdited: isEdited ?? this.isEdited,
     isBackgroundVideo: isBackgroundVideo,
+    isRead: isRead ?? this.isRead,
   );
 }
 
-// ─── Comentarios y temas de estudio (sin cambios) ─────────────────────────────
+// ─── Comentarios y temas de estudio ─────────────────────────────
+
 enum CommentStatus { pending, approved }
 
 class StudyComment {
