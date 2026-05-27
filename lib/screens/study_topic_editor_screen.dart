@@ -8,6 +8,8 @@ import '../models/study_topic.dart';
 import '../services/study_room_service.dart';
 import '../widgets/quill_image_embed.dart';
 import 'package:path_provider/path_provider.dart';
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import '../services/peer_service.dart';
 import 'study_room_screen.dart'
     show kSRed, kSRedGlow, kSRedDim, kSBg, kSPanel, kSBorder, kSText, kSTextDim;
@@ -36,6 +38,9 @@ class _StudyTopicEditorScreenState extends State<StudyTopicEditorScreen> {
   bool _requiresApproval = false;
   int _minHierarchy = 1;
   String? _coverImagePath;
+  final _passCtrl = TextEditingController();
+  bool _obscurePass = true;
+  bool _hasPassword = false;
 
   /// IDs de temas que deben comentarse para desbloquear ESTE
   List<String> _requiredTopicIds = [];
@@ -53,6 +58,7 @@ class _StudyTopicEditorScreenState extends State<StudyTopicEditorScreen> {
     super.initState();
 
     final existing = widget.existing;
+    _hasPassword = existing?.passwordHash != null;
     if (existing != null) {
       _titleCtrl.text = existing.title;
       _isSequential = existing.isSequential;
@@ -87,6 +93,7 @@ class _StudyTopicEditorScreenState extends State<StudyTopicEditorScreen> {
     _quillCtrl.dispose();
     _focusNode.dispose();
     _scrollCtrl.dispose();
+    _passCtrl.dispose();
     super.dispose();
   }
 
@@ -123,29 +130,28 @@ class _StudyTopicEditorScreenState extends State<StudyTopicEditorScreen> {
 
   // ─── Guardar ──────────────────────────────────────────────────────────────
 
-  
   Future<void> _insertImageInBody() async {
-  final result = await FilePicker.platform.pickFiles(
-    type: FileType.image,
-    allowMultiple: false,
-  );
-  if (result == null || result.files.isEmpty) return;
-  final originalPath = result.files.first.path;
-  if (originalPath == null) return;
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      allowMultiple: false,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final originalPath = result.files.first.path;
+    if (originalPath == null) return;
 
-  // Copiar con nombre estable a documentos
-  final dir = await getApplicationDocumentsDirectory();
-  final ext = originalPath.split('.').last;
-  final fileName = 'body_img_${const Uuid().v4()}.$ext';
-  final destPath = '${dir.path}/$fileName';
-  await File(originalPath).copy(destPath);
+    // Copiar con nombre estable a documentos
+    final dir = await getApplicationDocumentsDirectory();
+    final ext = originalPath.split('.').last;
+    final fileName = 'body_img_${const Uuid().v4()}.$ext';
+    final destPath = '${dir.path}/$fileName';
+    await File(originalPath).copy(destPath);
 
-  // Insertar en el Delta en la posición actual del cursor
-  final index = _quillCtrl.selection.baseOffset;
-  final safeIndex = index < 0 ? _quillCtrl.document.length - 1 : index;
-  _quillCtrl.document.insert(safeIndex, quill.BlockEmbed.image(destPath));
-}
-  
+    // Insertar en el Delta en la posición actual del cursor
+    final index = _quillCtrl.selection.baseOffset;
+    final safeIndex = index < 0 ? _quillCtrl.document.length - 1 : index;
+    _quillCtrl.document.insert(safeIndex, quill.BlockEmbed.image(destPath));
+  }
+
   Future<void> _save() async {
     final title = _titleCtrl.text.trim();
     if (title.isEmpty) {
@@ -161,6 +167,14 @@ class _StudyTopicEditorScreenState extends State<StudyTopicEditorScreen> {
 
       final now = DateTime.now();
       final existing = widget.existing;
+      String? newPasswordHash = existing?.passwordHash;
+      if (_hasPassword) {
+        if (_passCtrl.text.isNotEmpty) {
+          newPasswordHash = md5.convert(utf8.encode(_passCtrl.text)).toString();
+        }
+      } else {
+        newPasswordHash = null;
+      }
 
       final topic = StudyTopic(
         id: existing?.id ?? _uuidE.v4(),
@@ -176,6 +190,7 @@ class _StudyTopicEditorScreenState extends State<StudyTopicEditorScreen> {
         creatorId: _peer.myId,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
+        passwordHash: newPasswordHash,
       );
 
       await _service.upsertTopic(topic);
@@ -209,7 +224,7 @@ class _StudyTopicEditorScreenState extends State<StudyTopicEditorScreen> {
         child: Column(
           children: [
             _buildHeader(),
-           
+
             // Contenido principal scrolleable
             Expanded(
               child: SingleChildScrollView(
@@ -431,96 +446,100 @@ class _StudyTopicEditorScreenState extends State<StudyTopicEditorScreen> {
     );
   }
 
- Widget _buildEditorArea() {
-  return Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      const _FieldLabel(label: 'CONTENIDO'),
-      const SizedBox(height: 6),
-      Container(
-        color: kSPanel,
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-        child: Row(
-          children: [
-            Expanded(
-              child: quill.QuillSimpleToolbar(
-                controller: _quillCtrl,
-                config: const quill.QuillSimpleToolbarConfig(
-                  showDividers: true,
-                  showFontFamily: false,
-                  showFontSize: true,
-                  showBoldButton: true,
-                  showItalicButton: true,
-                  showUnderLineButton: true,
-                  showStrikeThrough: true,
-                  showInlineCode: true,
-                  showColorButton: false,
-                  showBackgroundColorButton: false,
-                  showListNumbers: true,
-                  showListBullets: true,
-                  showListCheck: false,
-                  showCodeBlock: true,
-                  showQuote: true,
-                  showLink: false,
-                  showSearchButton: false,
-                  showSubscript: false,
-                  showSuperscript: false,
-                ),
-              ),
-            ),
-            GestureDetector(
-              onTap: _insertImageInBody,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                decoration: BoxDecoration(
-                  border: Border.all(color: kSRed.withOpacity(0.4)),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.image_outlined, color: kSRedGlow, size: 16),
-                    SizedBox(width: 4),
-                    Text(
-                      'IMG',
-                      style: TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 9,
-                        color: kSRedGlow,
-                        letterSpacing: 1,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-      Container(
-        constraints: const BoxConstraints(minHeight: 200),
-        decoration: BoxDecoration(
+  Widget _buildEditorArea() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const _FieldLabel(label: 'CONTENIDO'),
+        const SizedBox(height: 6),
+        Container(
           color: kSPanel,
-          border: Border.all(color: kSRed.withOpacity(0.2)),
-          borderRadius: BorderRadius.circular(2),
-        ),
-        padding: const EdgeInsets.all(14),
-        child: quill.QuillEditor(
-          controller: _quillCtrl,
-          focusNode: _focusNode,
-          scrollController: ScrollController(), // ← controller propio, no compartido
-          config: quill.QuillEditorConfig(
-            autoFocus: false,
-            expands: false,
-            padding: EdgeInsets.zero,
-            placeholder: '// escribe el contenido del tema aquí...',
-            embedBuilders: [LocalImageEmbedBuilder()],
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+          child: Row(
+            children: [
+              Expanded(
+                child: quill.QuillSimpleToolbar(
+                  controller: _quillCtrl,
+                  config: const quill.QuillSimpleToolbarConfig(
+                    showDividers: true,
+                    showFontFamily: false,
+                    showFontSize: true,
+                    showBoldButton: true,
+                    showItalicButton: true,
+                    showUnderLineButton: true,
+                    showStrikeThrough: true,
+                    showInlineCode: true,
+                    showColorButton: false,
+                    showBackgroundColorButton: false,
+                    showListNumbers: true,
+                    showListBullets: true,
+                    showListCheck: false,
+                    showCodeBlock: true,
+                    showQuote: true,
+                    showLink: false,
+                    showSearchButton: false,
+                    showSubscript: false,
+                    showSuperscript: false,
+                  ),
+                ),
+              ),
+              GestureDetector(
+                onTap: _insertImageInBody,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: kSRed.withOpacity(0.4)),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.image_outlined, color: kSRedGlow, size: 16),
+                      SizedBox(width: 4),
+                      Text(
+                        'IMG',
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 9,
+                          color: kSRedGlow,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
-      ),
-    ],
-  );
-}
+        Container(
+          constraints: const BoxConstraints(minHeight: 200),
+          decoration: BoxDecoration(
+            color: kSPanel,
+            border: Border.all(color: kSRed.withOpacity(0.2)),
+            borderRadius: BorderRadius.circular(2),
+          ),
+          padding: const EdgeInsets.all(14),
+          child: quill.QuillEditor(
+            controller: _quillCtrl,
+            focusNode: _focusNode,
+            scrollController:
+                ScrollController(), // ← controller propio, no compartido
+            config: quill.QuillEditorConfig(
+              autoFocus: false,
+              expands: false,
+              padding: EdgeInsets.zero,
+              placeholder: '// escribe el contenido del tema aquí...',
+              embedBuilders: [LocalImageEmbedBuilder()],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
   Widget _buildConfigSection() {
     return Container(
@@ -590,6 +609,79 @@ class _StudyTopicEditorScreenState extends State<StudyTopicEditorScreen> {
             subtitle: 'Los comentarios deben ser aprobados antes de contar',
             value: _requiresApproval,
             onChanged: (v) => setState(() => _requiresApproval = v),
+          ),
+          const SizedBox(height: 12),
+          _Divider(),
+
+          // Contraseña
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _SwitchRow(
+                  label: 'PROTEGER CON CONTRASEÑA',
+                  subtitle:
+                      'Los usuarios deben introducir una clave para acceder',
+                  value: _hasPassword,
+                  onChanged: (v) => setState(() {
+                    _hasPassword = v;
+                    if (!v) _passCtrl.clear();
+                  }),
+                ),
+                if (_hasPassword) ...[
+                  const SizedBox(height: 10),
+                  StatefulBuilder(
+                    builder: (ctx, setSt) => TextField(
+                      controller: _passCtrl,
+                      obscureText: _obscurePass,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                        color: kSText,
+                      ),
+                      decoration: InputDecoration(
+                        hintText: widget.existing?.passwordHash != null
+                            ? '••••••  (dejar vacío para no cambiar)'
+                            : 'nueva contraseña...',
+                        hintStyle: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 11,
+                          color: kSTextDim,
+                        ),
+                        filled: true,
+                        fillColor: kSBg,
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            _obscurePass
+                                ? Icons.visibility_off
+                                : Icons.visibility,
+                            color: kSTextDim,
+                            size: 16,
+                          ),
+                          onPressed: () =>
+                              setState(() => _obscurePass = !_obscurePass),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.zero,
+                          borderSide: BorderSide(
+                            color: kSRed.withOpacity(0.25),
+                          ),
+                        ),
+                        focusedBorder: const OutlineInputBorder(
+                          borderRadius: BorderRadius.zero,
+                          borderSide: BorderSide(color: kSRedGlow),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
         ],
       ),

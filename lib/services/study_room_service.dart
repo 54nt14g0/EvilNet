@@ -545,6 +545,7 @@ Timer? _saveDebounce;
           creatorId: topic.creatorId,
           createdAt: topic.createdAt,
           updatedAt: topic.updatedAt,
+          passwordHash: topic.passwordHash,  
         );
         await _upsertTopicLocal(topicToSave);
         break;
@@ -1061,6 +1062,7 @@ Timer? _saveDebounce;
         creatorId: remote.creatorId,
         createdAt: remote.createdAt,
         updatedAt: remote.updatedAt,
+        passwordHash: remote.passwordHash,
       );
       changed = true;
     }

@@ -34,6 +34,7 @@ class StudyTopic {
 
   final DateTime createdAt;
   final DateTime updatedAt;
+  final String? passwordHash;
 
   const StudyTopic({
     required this.id,
@@ -49,6 +50,7 @@ class StudyTopic {
     required this.creatorId,
     required this.createdAt,
     required this.updatedAt,
+    this.passwordHash,
   });
 
   StudyTopic copyWith({
@@ -63,13 +65,16 @@ class StudyTopic {
     bool? requiresApproval,
     int? order,
     DateTime? updatedAt,
+    String? passwordHash,
+    bool clearTopicPassword = false,
   }) {
     return StudyTopic(
       id: id,
       title: title ?? this.title,
       contentDelta: contentDelta ?? this.contentDelta,
-      coverImagePath:
-          clearCover ? null : (coverImagePath ?? this.coverImagePath),
+      coverImagePath: clearCover
+          ? null
+          : (coverImagePath ?? this.coverImagePath),
       minHierarchy: minHierarchy ?? this.minHierarchy,
       isSequential: isSequential ?? this.isSequential,
       requiredTopicIds: requiredTopicIds ?? this.requiredTopicIds,
@@ -79,38 +84,41 @@ class StudyTopic {
       creatorId: creatorId,
       createdAt: createdAt,
       updatedAt: updatedAt ?? DateTime.now(),
+      passwordHash: clearTopicPassword ? null : (passwordHash ?? this.passwordHash),
     );
   }
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'title': title,
-        'contentDelta': contentDelta,
-        'coverImagePath': coverImagePath,
-        'minHierarchy': minHierarchy,
-        'isSequential': isSequential,
-        'requiredTopicIds': requiredTopicIds,
-        'unlocksTopicIds': unlocksTopicIds,
-        'requiresApproval': requiresApproval,
-        'order': order,
-        'creatorId': creatorId,
-        'createdAt': createdAt.toIso8601String(),
-        'updatedAt': updatedAt.toIso8601String(),
-      };
+    'id': id,
+    'title': title,
+    'contentDelta': contentDelta,
+    'coverImagePath': coverImagePath,
+    'minHierarchy': minHierarchy,
+    'isSequential': isSequential,
+    'requiredTopicIds': requiredTopicIds,
+    'unlocksTopicIds': unlocksTopicIds,
+    'requiresApproval': requiresApproval,
+    'order': order,
+    'creatorId': creatorId,
+    'createdAt': createdAt.toIso8601String(),
+    'updatedAt': updatedAt.toIso8601String(),
+    'passwordHash': passwordHash,
+  };
 
   factory StudyTopic.fromJson(Map<String, dynamic> j) => StudyTopic(
-        id: j['id'] as String,
-        title: j['title'] as String,
-        contentDelta: j['contentDelta'] as String? ?? '[]',
-        coverImagePath: j['coverImagePath'] as String?,
-        minHierarchy: j['minHierarchy'] as int? ?? 1,
-        isSequential: j['isSequential'] as bool? ?? false,
-        requiredTopicIds: List<String>.from(j['requiredTopicIds'] as List? ?? []),
-        unlocksTopicIds: List<String>.from(j['unlocksTopicIds'] as List? ?? []),
-        requiresApproval: j['requiresApproval'] as bool? ?? false,
-        order: j['order'] as int? ?? 0,
-        creatorId: j['creatorId'] as String? ?? '',
-        createdAt: DateTime.parse(j['createdAt'] as String),
-        updatedAt: DateTime.parse(j['updatedAt'] as String),
-      );
+    id: j['id'] as String,
+    title: j['title'] as String,
+    contentDelta: j['contentDelta'] as String? ?? '[]',
+    coverImagePath: j['coverImagePath'] as String?,
+    minHierarchy: j['minHierarchy'] as int? ?? 1,
+    isSequential: j['isSequential'] as bool? ?? false,
+    requiredTopicIds: List<String>.from(j['requiredTopicIds'] as List? ?? []),
+    unlocksTopicIds: List<String>.from(j['unlocksTopicIds'] as List? ?? []),
+    requiresApproval: j['requiresApproval'] as bool? ?? false,
+    order: j['order'] as int? ?? 0,
+    creatorId: j['creatorId'] as String? ?? '',
+    createdAt: DateTime.parse(j['createdAt'] as String),
+    updatedAt: DateTime.parse(j['updatedAt'] as String),
+    passwordHash: j['passwordHash'] as String?,
+  );
 }

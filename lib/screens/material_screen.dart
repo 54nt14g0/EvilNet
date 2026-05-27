@@ -9,26 +9,29 @@ import '../services/material_service.dart';
 import 'package:open_filex/open_filex.dart';
 import '../services/auth_service.dart';
 import '../services/peer_service.dart';
+import '../models/material_file.dart'; // ya existe, solo verificar que esté
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
 
 // ─── PALETA UMBRELLA / GOB. SECRETO ──────────────────────────────────────────
-const Color kBg         = Color(0xFF070707);
-const Color kSurface    = Color(0xFF0F0A0A);
-const Color kPanel      = Color(0xFF140808);
-const Color kBorder     = Color(0xFF2A0A0A);
-const Color kRed        = Color(0xFFCC0000);
-const Color kRedGlow    = Color(0xFFFF1A1A);
-const Color kRedDeep    = Color(0xFF8B0000);
-const Color kCold       = Color(0xFFE8E8E0);
-const Color kSteel      = Color(0xFF5A5A5A);
-const Color kGreenScan  = Color(0xFF00FF41);
-const Color kAmber      = Color(0xFFFFAA00);
+const Color kBg = Color(0xFF070707);
+const Color kSurface = Color(0xFF0F0A0A);
+const Color kPanel = Color(0xFF140808);
+const Color kBorder = Color(0xFF2A0A0A);
+const Color kRed = Color(0xFFCC0000);
+const Color kRedGlow = Color(0xFFFF1A1A);
+const Color kRedDeep = Color(0xFF8B0000);
+const Color kCold = Color(0xFFE8E8E0);
+const Color kSteel = Color(0xFF5A5A5A);
+const Color kGreenScan = Color(0xFF00FF41);
+const Color kAmber = Color(0xFFFFAA00);
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 String _militaryTime(DateTime dt) =>
-    '${dt.year}${dt.month.toString().padLeft(2,'0')}${dt.day.toString().padLeft(2,'0')}'
-    '-${dt.hour.toString().padLeft(2,'0')}${dt.minute.toString().padLeft(2,'0')}';
+    '${dt.year}${dt.month.toString().padLeft(2, '0')}${dt.day.toString().padLeft(2, '0')}'
+    '-${dt.hour.toString().padLeft(2, '0')}${dt.minute.toString().padLeft(2, '0')}';
 
-String _fileCode(String id) => 'EXP-${id.substring(0,6).toUpperCase()}';
+String _fileCode(String id) => 'EXP-${id.substring(0, 6).toUpperCase()}';
 
 // ─── MAIN SCREEN ──────────────────────────────────────────────────────────────
 class MaterialScreen extends StatefulWidget {
@@ -39,21 +42,23 @@ class MaterialScreen extends StatefulWidget {
 
 class _MaterialScreenState extends State<MaterialScreen>
     with TickerProviderStateMixin {
-
   final _material = MaterialService();
-  final _auth     = AuthService();
-  final _peer     = PeerService();
+  final _auth = AuthService();
+  final _peer = PeerService();
 
   StreamSubscription<String>? _subscription;
 
-  String?          _currentFolderId;
-  String           _searchQuery    = '';
-  MaterialFileType? _filterType;
-  String           _sortBy         = 'date';
-  bool             _sortAscending  = false;
-  bool             _showSearch     = false;
+  // ── Tabs ──────────────────────────────────────────────────────────────────
+  late TabController _tabCtrl;
+  MaterialSection _currentSection = MaterialSection.obligatorio;
 
-  // Animaciones
+  String? _currentFolderId;
+  String _searchQuery = '';
+  MaterialFileType? _filterType;
+  String _sortBy = 'date';
+  bool _sortAscending = false;
+  bool _showSearch = false;
+
   late AnimationController _scanCtrl;
   late AnimationController _flickerCtrl;
   late AnimationController _fabCtrl;
@@ -65,16 +70,33 @@ class _MaterialScreenState extends State<MaterialScreen>
   void initState() {
     super.initState();
 
+    _tabCtrl = TabController(length: 2, vsync: this);
+    _tabCtrl.addListener(() {
+      if (!_tabCtrl.indexIsChanging) {
+        setState(() {
+          _currentSection = _tabCtrl.index == 0
+              ? MaterialSection.obligatorio
+              : MaterialSection.publico;
+          _currentFolderId = null; // reset navegación al cambiar tab
+          _fabOpen = false;
+          _fabCtrl.reverse();
+        });
+      }
+    });
+
     _scanCtrl = AnimationController(
-      vsync: this, duration: const Duration(seconds: 4),
+      vsync: this,
+      duration: const Duration(seconds: 4),
     )..repeat();
 
     _flickerCtrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 80),
+      vsync: this,
+      duration: const Duration(milliseconds: 80),
     )..repeat(reverse: true);
 
     _fabCtrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 220),
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
     );
 
     _subscription = _material.events.listen(_onEvent);
@@ -88,6 +110,7 @@ class _MaterialScreenState extends State<MaterialScreen>
   @override
   void dispose() {
     _subscription?.cancel();
+    _tabCtrl.dispose();
     _scanCtrl.dispose();
     _flickerCtrl.dispose();
     _fabCtrl.dispose();
@@ -95,12 +118,18 @@ class _MaterialScreenState extends State<MaterialScreen>
     super.dispose();
   }
 
-  bool get _canManage => (_auth.currentUser?.jerarquia ?? 0) >= 7;
+  bool get _canManage {
+    final j = _auth.currentUser?.jerarquia ?? 0;
+    if (_currentSection == MaterialSection.obligatorio) return j >= 10;
+    return j >= 1; // cualquiera puede subir a público
+  }
+
+  bool get _isJ10 => (_auth.currentUser?.jerarquia ?? 0) >= 10;
 
   // ── BUILD ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final size   = MediaQuery.of(context).size;
+    final size = MediaQuery.of(context).size;
     final mobile = size.width < 600;
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -115,6 +144,7 @@ class _MaterialScreenState extends State<MaterialScreen>
               child: Column(
                 children: [
                   _buildHeader(mobile),
+                  _buildTabs(),
                   _buildStatusBar(mobile),
                   _buildBreadcrumb(mobile),
                   if (_showSearch) _buildSearchBar(),
@@ -124,11 +154,7 @@ class _MaterialScreenState extends State<MaterialScreen>
               ),
             ),
             if (_canManage)
-              Positioned(
-                bottom: 24,
-                right: 20,
-                child: _buildExpandableFab(),
-              ),
+              Positioned(bottom: 24, right: 20, child: _buildExpandableFab()),
           ],
         ),
       ),
@@ -146,11 +172,7 @@ class _MaterialScreenState extends State<MaterialScreen>
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              colors: [
-                Color(0xF0070707),
-                Color(0xE8070707),
-                Color(0xF5070707),
-              ],
+              colors: [Color(0xF0070707), Color(0xE8070707), Color(0xF5070707)],
             ),
           ),
         ),
@@ -159,10 +181,7 @@ class _MaterialScreenState extends State<MaterialScreen>
             gradient: RadialGradient(
               center: Alignment.center,
               radius: 1.4,
-              colors: [
-                Colors.transparent,
-                kBg.withOpacity(0.6),
-              ],
+              colors: [Colors.transparent, kBg.withOpacity(0.6)],
             ),
           ),
         ),
@@ -174,19 +193,15 @@ class _MaterialScreenState extends State<MaterialScreen>
   Widget _buildScanlines() {
     return AnimatedBuilder(
       animation: _scanCtrl,
-      builder: (_, __) => CustomPaint(
-        painter: _ScanlinePainter(_scanCtrl.value),
-      ),
+      builder: (_, __) =>
+          CustomPaint(painter: _ScanlinePainter(_scanCtrl.value)),
     );
   }
 
   // ── HEADER ────────────────────────────────────────────────────────────────
   Widget _buildHeader(bool mobile) {
     return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: mobile ? 12 : 24,
-        vertical: 12,
-      ),
+      padding: EdgeInsets.symmetric(horizontal: mobile ? 12 : 24, vertical: 12),
       decoration: BoxDecoration(
         color: kPanel,
         border: Border(
@@ -208,7 +223,8 @@ class _MaterialScreenState extends State<MaterialScreen>
           ),
           const SizedBox(width: 12),
           Container(
-            width: 32, height: 32,
+            width: 32,
+            height: 32,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(color: kRed, width: 2),
@@ -274,11 +290,89 @@ class _MaterialScreenState extends State<MaterialScreen>
     );
   }
 
+  Widget _buildTabs() {
+    return Container(
+      color: kPanel,
+      child: TabBar(
+        controller: _tabCtrl,
+        indicatorColor: kRed,
+        indicatorWeight: 2,
+        labelColor: kCold,
+        unselectedLabelColor: kSteel,
+        labelStyle: const TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 2,
+        ),
+        unselectedLabelStyle: const TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 11,
+          letterSpacing: 2,
+        ),
+        tabs: [
+          Tab(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.lock_outline, size: 13),
+                const SizedBox(width: 6),
+                const Text('OBLIGATORIO'),
+                const SizedBox(width: 6),
+                _sectionBadge(MaterialSection.obligatorio),
+              ],
+            ),
+          ),
+          Tab(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.public, size: 13),
+                const SizedBox(width: 6),
+                const Text('PÚBLICO'),
+                const SizedBox(width: 6),
+                _sectionBadge(MaterialSection.publico),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionBadge(MaterialSection section) {
+    final count = _material.files
+        .where(
+          (f) =>
+              f.section == section &&
+              f.parentId == null &&
+              _material.isFileVisible(f),
+        )
+        .length;
+    if (count == 0) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+        color: kRed.withOpacity(0.3),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: kRed.withOpacity(0.5)),
+      ),
+      child: Text(
+        '$count',
+        style: const TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 8,
+          color: kCold,
+        ),
+      ),
+    );
+  }
+
   // ── STATUS BAR ────────────────────────────────────────────────────────────
   Widget _buildStatusBar(bool mobile) {
-    final user  = _auth.currentUser;
+    final user = _auth.currentUser;
     final peers = _peer.knownPeers.length;
-    final ip    = _peer.myIp;
+    final ip = _peer.myIp;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
@@ -338,15 +432,15 @@ class _MaterialScreenState extends State<MaterialScreen>
     final canGoBack = _currentFolderId != null;
     final String? parentId = folders.length >= 2
         ? folders[folders.length - 2].id
-        : canGoBack ? null : null;
+        : canGoBack
+        ? null
+        : null;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
       decoration: BoxDecoration(
         color: kSurface,
-        border: Border(
-          bottom: BorderSide(color: kBorder, width: 1),
-        ),
+        border: Border(bottom: BorderSide(color: kBorder, width: 1)),
       ),
       child: Row(
         children: [
@@ -370,23 +464,25 @@ class _MaterialScreenState extends State<MaterialScreen>
                     active: _currentFolderId == null,
                     onTap: () => setState(() => _currentFolderId = null),
                   ),
-                  ...folders.map((f) => Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: Text(
-                          '›',
-                          style: TextStyle(color: kSteel, fontSize: 12),
+                  ...folders.map(
+                    (f) => Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          child: Text(
+                            '›',
+                            style: TextStyle(color: kSteel, fontSize: 12),
+                          ),
                         ),
-                      ),
-                      _BreadcrumbItem(
-                        label: f.name.toUpperCase(),
-                        active: f.id == _currentFolderId,
-                        onTap: () => setState(() => _currentFolderId = f.id),
-                      ),
-                    ],
-                  )),
+                        _BreadcrumbItem(
+                          label: f.name.toUpperCase(),
+                          active: f.id == _currentFolderId,
+                          onTap: () => setState(() => _currentFolderId = f.id),
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -434,7 +530,9 @@ class _MaterialScreenState extends State<MaterialScreen>
         final f = _material.files.firstWhere((f) => f.id == id);
         result.insert(0, f);
         id = f.parentId;
-      } catch (_) { break; }
+      } catch (_) {
+        break;
+      }
     }
     return result;
   }
@@ -482,7 +580,10 @@ class _MaterialScreenState extends State<MaterialScreen>
             borderRadius: BorderRadius.circular(2),
             borderSide: BorderSide(color: kGreenScan.withOpacity(0.2)),
           ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 10,
+          ),
         ),
         onChanged: (v) => setState(() => _searchQuery = v),
       ),
@@ -492,10 +593,7 @@ class _MaterialScreenState extends State<MaterialScreen>
   // ── TOOLBAR ───────────────────────────────────────────────────────────────
   Widget _buildToolbar(bool mobile) {
     return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: mobile ? 12 : 16,
-        vertical: 6,
-      ),
+      padding: EdgeInsets.symmetric(horizontal: mobile ? 12 : 16, vertical: 6),
       decoration: BoxDecoration(
         color: kSurface.withOpacity(0.95),
         border: Border(bottom: BorderSide(color: kBorder)),
@@ -572,24 +670,41 @@ class _MaterialScreenState extends State<MaterialScreen>
 
   // ── LISTA DE ARCHIVOS ─────────────────────────────────────────────────────
   List<MaterialFile> _getFilteredFiles() {
-    var files = _material.getFilesInFolder(_currentFolderId);
+    var files = _material.getFilesInFolder(
+      _currentFolderId,
+      section: _currentSection,
+    );
+
     if (_searchQuery.isNotEmpty) {
-      files = files.where(
-        (f) => f.name.toLowerCase().contains(_searchQuery.toLowerCase()),
-      ).toList();
+      files = files
+          .where(
+            (f) => f.name.toLowerCase().contains(_searchQuery.toLowerCase()),
+          )
+          .toList();
     }
     if (_filterType != null) {
       files = files.where((f) => f.type == _filterType).toList();
     }
     files.sort((a, b) {
-      if (a.type == MaterialFileType.folder && b.type != MaterialFileType.folder) return -1;
-      if (a.type != MaterialFileType.folder && b.type == MaterialFileType.folder) return 1;
+      if (a.type == MaterialFileType.folder &&
+          b.type != MaterialFileType.folder)
+        return -1;
+      if (a.type != MaterialFileType.folder &&
+          b.type == MaterialFileType.folder)
+        return 1;
       int r;
       switch (_sortBy) {
-        case 'name': r = a.name.compareTo(b.name); break;
-        case 'date': r = a.uploadedAt.compareTo(b.uploadedAt); break;
-        case 'size': r = a.fileSize.compareTo(b.fileSize); break;
-        default: r = 0;
+        case 'name':
+          r = a.name.compareTo(b.name);
+          break;
+        case 'date':
+          r = a.uploadedAt.compareTo(b.uploadedAt);
+          break;
+        case 'size':
+          r = a.fileSize.compareTo(b.fileSize);
+          break;
+        default:
+          r = 0;
       }
       return _sortAscending ? r : -r;
     });
@@ -610,6 +725,7 @@ class _MaterialScreenState extends State<MaterialScreen>
       itemBuilder: (_, i) => _FileCard(
         file: files[i],
         canManage: _canManage,
+        isJ10: _isJ10,
         onTap: () => _handleFileTap(files[i]),
         onAction: (action) => _handleFileAction(files[i], action),
       ),
@@ -632,7 +748,10 @@ class _MaterialScreenState extends State<MaterialScreen>
               Transform.rotate(
                 angle: -0.3,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
                   decoration: BoxDecoration(
                     border: Border.all(color: kRed.withOpacity(0.5), width: 2),
                   ),
@@ -770,14 +889,17 @@ class _MaterialScreenState extends State<MaterialScreen>
 
   /// Abre carpetas navegando, archivos descargados con la app del sistema,
   /// archivos no descargados los descarga primero.
-  void _handleFileTap(MaterialFile file) {
-    // Carpeta → navegar dentro
+  void _handleFileTap(MaterialFile file) async {
     if (file.type == MaterialFileType.folder) {
+      // J10 entra sin contraseña
+      if (file.passwordHash != null && !_isJ10) {
+        final ok = await _promptFolderPassword(file);
+        if (!ok) return;
+      }
       setState(() => _currentFolderId = file.id);
       return;
     }
 
-    // No descargado → iniciar descarga y avisar
     if (!file.isDownloaded || file.filePath == null) {
       _material.downloadFile(file.id);
       ScaffoldMessenger.of(context).showSnackBar(
@@ -785,16 +907,20 @@ class _MaterialScreenState extends State<MaterialScreen>
           content: Row(
             children: [
               const SizedBox(
-                width: 14, height: 14,
+                width: 14,
+                height: 14,
                 child: CircularProgressIndicator(
-                  color: kGreenScan, strokeWidth: 2,
+                  color: kGreenScan,
+                  strokeWidth: 2,
                 ),
               ),
               const SizedBox(width: 10),
               Text(
                 'DESCARGANDO ${file.name.toUpperCase()}...',
                 style: const TextStyle(
-                  fontFamily: 'monospace', fontSize: 11, color: kCold,
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                  color: kCold,
                 ),
               ),
             ],
@@ -811,38 +937,172 @@ class _MaterialScreenState extends State<MaterialScreen>
       return;
     }
 
-    // Verificar que el archivo exista físicamente en disco
     final path = file.filePath!;
     if (!File(path).existsSync()) {
-      // Archivo perdido del disco → resetear y re-descargar
       _material.downloadFile(file.id);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text(
+        const SnackBar(
+          content: Text(
             'ARCHIVO NO ENCONTRADO — RE-DESCARGANDO...',
-            style: TextStyle(fontFamily: 'monospace', fontSize: 11, color: kCold),
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 11,
+              color: kCold,
+            ),
           ),
-          backgroundColor: const Color(0xFF0A0505),
+          backgroundColor: Color(0xFF0A0505),
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(2),
-            side: BorderSide(color: kRed.withOpacity(0.4)),
-          ),
-          duration: const Duration(seconds: 3),
+          duration: Duration(seconds: 3),
         ),
       );
       return;
     }
 
-    // ── Abrir con la app del sistema, sin importar el tipo ─────────────────
     OpenFilex.open(path);
+  }
+
+  Future<bool> _promptFolderPassword(MaterialFile folder) async {
+    final ctrl = TextEditingController();
+    bool _obscure = true;
+    bool _wrong = false;
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setSt) => _CorpDialog(
+          title: 'ACCESO RESTRINGIDO',
+          titleColor: kAmber,
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.lock_outline, color: kAmber, size: 14),
+                  const SizedBox(width: 8),
+                  Text(
+                    folder.name.toUpperCase(),
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      color: kCold,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ctrl,
+                obscureText: _obscure,
+                autofocus: true,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 13,
+                  color: kAmber,
+                ),
+                cursorColor: kAmber,
+                decoration: InputDecoration(
+                  hintText: 'CONTRASEÑA',
+                  hintStyle: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    color: kSteel.withOpacity(0.6),
+                  ),
+                  errorText: _wrong ? 'CONTRASEÑA INCORRECTA' : null,
+                  errorStyle: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 9,
+                    color: kRedGlow,
+                  ),
+                  filled: true,
+                  fillColor: kBg,
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscure ? Icons.visibility_off : Icons.visibility,
+                      color: kSteel,
+                      size: 16,
+                    ),
+                    onPressed: () => setSt(() => _obscure = !_obscure),
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(2),
+                    borderSide: BorderSide(color: kAmber.withOpacity(0.3)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(2),
+                    borderSide: BorderSide(color: kAmber),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(2),
+                    borderSide: BorderSide(color: kAmber.withOpacity(0.2)),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            _CorpDialogAction(
+              label: 'CANCELAR',
+              onTap: () => Navigator.pop(ctx, false),
+            ),
+            _CorpDialogAction(
+              label: 'ACCEDER',
+              color: kAmber,
+              onTap: () {
+                final hash = md5.convert(utf8.encode(ctrl.text)).toString();
+                if (hash == folder.passwordHash) {
+                  Navigator.pop(ctx, true);
+                } else {
+                  setSt(() => _wrong = true);
+                }
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+    return result ?? false;
   }
 
   void _handleFileAction(MaterialFile file, String action) {
     switch (action) {
-      case 'rename':   _showRenameDialog(file); break;
-      case 'delete_all': _showDeleteDialog(file, DeleteMode.forEveryone); break;
-      case 'delete_me':  _showDeleteDialog(file, DeleteMode.onlyForMe); break;
+      case 'rename':
+        _showRenameDialog(file);
+        break;
+      case 'delete_all':
+        _showDeleteDialog(file, DeleteMode.forEveryone);
+        break;
+      case 'delete_me':
+        _showDeleteDialog(file, DeleteMode.onlyForMe);
+        break;
+      case 'download_folder':
+        _material.downloadFolder(file.id);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'DESCARGANDO CARPETA ${file.name.toUpperCase()}...',
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 11,
+                color: kCold,
+              ),
+            ),
+            backgroundColor: const Color(0xFF0A0505),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+        break;
+      case 'move_to_publico':
+        _material.moveToSection(file.id, MaterialSection.publico);
+        break;
+      case 'move_to_obligatorio':
+        _material.moveToSection(file.id, MaterialSection.obligatorio);
+        break;
     }
   }
 
@@ -853,9 +1113,16 @@ class _MaterialScreenState extends State<MaterialScreen>
       builder: (_) => _CorpDialog(
         title: 'RENOMBRAR EXPEDIENTE',
         titleColor: kAmber,
-        content: _CorpTextField(controller: ctrl, hint: 'NUEVO DESIGNADOR', autofocus: true),
+        content: _CorpTextField(
+          controller: ctrl,
+          hint: 'NUEVO DESIGNADOR',
+          autofocus: true,
+        ),
         actions: [
-          _CorpDialogAction(label: 'CANCELAR', onTap: () => Navigator.pop(context)),
+          _CorpDialogAction(
+            label: 'CANCELAR',
+            onTap: () => Navigator.pop(context),
+          ),
           _CorpDialogAction(
             label: 'CONFIRMAR',
             color: kAmber,
@@ -887,7 +1154,10 @@ class _MaterialScreenState extends State<MaterialScreen>
                   ? 'El expediente ${_fileCode(file.id)} será PURGADO de todos los nodos de la red. Acción irreversible.'
                   : 'El expediente se eliminará de tu dispositivo. Podrás descargarlo nuevamente.',
               style: const TextStyle(
-                fontFamily: 'monospace', fontSize: 11, color: kSteel, height: 1.5,
+                fontFamily: 'monospace',
+                fontSize: 11,
+                color: kSteel,
+                height: 1.5,
               ),
             ),
             if (forAll) ...[
@@ -906,8 +1176,10 @@ class _MaterialScreenState extends State<MaterialScreen>
                       child: Text(
                         'REQUIERE AUTORIZACIÓN NIVEL 7+',
                         style: TextStyle(
-                          fontFamily: 'monospace', fontSize: 9,
-                          color: kRedGlow, letterSpacing: 1,
+                          fontFamily: 'monospace',
+                          fontSize: 9,
+                          color: kRedGlow,
+                          letterSpacing: 1,
                         ),
                       ),
                     ),
@@ -918,7 +1190,10 @@ class _MaterialScreenState extends State<MaterialScreen>
           ],
         ),
         actions: [
-          _CorpDialogAction(label: 'CANCELAR', onTap: () => Navigator.pop(context)),
+          _CorpDialogAction(
+            label: 'CANCELAR',
+            onTap: () => Navigator.pop(context),
+          ),
           _CorpDialogAction(
             label: forAll ? 'PURGAR' : 'BORRAR LOCAL',
             color: forAll ? kRedGlow : kAmber,
@@ -934,7 +1209,8 @@ class _MaterialScreenState extends State<MaterialScreen>
 
   Future<void> _pickAndUploadFile() async {
     final result = await FilePicker.platform.pickFiles(
-      type: FileType.any, allowMultiple: false,
+      type: FileType.any,
+      allowMultiple: false,
     );
     if (result == null || result.files.isEmpty) return;
     final path = result.files.first.path;
@@ -945,7 +1221,11 @@ class _MaterialScreenState extends State<MaterialScreen>
         const SnackBar(
           content: Text(
             'TRANSMITIENDO A LA RED...',
-            style: TextStyle(fontFamily: 'monospace', fontSize: 11, color: kCold),
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 11,
+              color: kCold,
+            ),
           ),
           backgroundColor: Color(0xFF0A0505),
           behavior: SnackBarBehavior.floating,
@@ -953,41 +1233,102 @@ class _MaterialScreenState extends State<MaterialScreen>
         ),
       );
     }
-    await _material.uploadFile(path, _currentFolderId ?? '');
+    await _material.uploadFile(
+      path,
+      _currentFolderId ?? '',
+      section: _currentSection,
+    );
   }
 
   Future<void> _createFolder() async {
-    final ctrl = TextEditingController();
+    final nameCtrl = TextEditingController();
+    final passCtrl = TextEditingController();
+    bool obscure = true;
+
     await showDialog(
       context: context,
-      builder: (_) => _CorpDialog(
-        title: 'CREAR SECTOR',
-        titleColor: kGreenScan,
-        content: _CorpTextField(
-          controller: ctrl,
-          hint: 'DESIGNADOR DE SECTOR',
-          autofocus: true,
-          color: kGreenScan,
-          onSubmit: (v) {
-            if (v.trim().isNotEmpty) {
-              _material.createFolder(v.trim(), _currentFolderId ?? '');
-              Navigator.pop(context);
-            }
-          },
-        ),
-        actions: [
-          _CorpDialogAction(label: 'CANCELAR', onTap: () => Navigator.pop(context)),
-          _CorpDialogAction(
-            label: 'CREAR SECTOR',
-            color: kGreenScan,
-            onTap: () {
-              if (ctrl.text.trim().isNotEmpty) {
-                _material.createFolder(ctrl.text.trim(), _currentFolderId ?? '');
-                Navigator.pop(context);
-              }
-            },
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setSt) => _CorpDialog(
+          title: 'CREAR SECTOR',
+          titleColor: kGreenScan,
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _CorpTextField(
+                controller: nameCtrl,
+                hint: 'DESIGNADOR DE SECTOR',
+                autofocus: true,
+                color: kGreenScan,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: passCtrl,
+                obscureText: obscure,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 13,
+                  color: kAmber,
+                ),
+                cursorColor: kAmber,
+                decoration: InputDecoration(
+                  hintText: 'CONTRASEÑA (opcional)',
+                  hintStyle: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    color: kSteel.withOpacity(0.6),
+                  ),
+                  filled: true,
+                  fillColor: kBg,
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      obscure ? Icons.visibility_off : Icons.visibility,
+                      color: kSteel,
+                      size: 16,
+                    ),
+                    onPressed: () => setSt(() => obscure = !obscure),
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(2),
+                    borderSide: BorderSide(color: kAmber.withOpacity(0.3)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(2),
+                    borderSide: const BorderSide(color: kAmber),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(2),
+                    borderSide: BorderSide(color: kAmber.withOpacity(0.2)),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
+          actions: [
+            _CorpDialogAction(
+              label: 'CANCELAR',
+              onTap: () => Navigator.pop(context),
+            ),
+            _CorpDialogAction(
+              label: 'CREAR SECTOR',
+              color: kGreenScan,
+              onTap: () {
+                if (nameCtrl.text.trim().isNotEmpty) {
+                  _material.createFolder(
+                    nameCtrl.text.trim(),
+                    _currentFolderId ?? '',
+                    password: passCtrl.text.isNotEmpty ? passCtrl.text : null,
+                    section: _currentSection,
+                  );
+                  Navigator.pop(context);
+                }
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -997,12 +1338,14 @@ class _MaterialScreenState extends State<MaterialScreen>
 class _FileCard extends StatefulWidget {
   final MaterialFile file;
   final bool canManage;
+  final bool isJ10;
   final VoidCallback onTap;
   final void Function(String) onAction;
 
   const _FileCard({
     required this.file,
     required this.canManage,
+    required this.isJ10,
     required this.onTap,
     required this.onAction,
   });
@@ -1013,7 +1356,6 @@ class _FileCard extends StatefulWidget {
 
 class _FileCardState extends State<_FileCard>
     with SingleTickerProviderStateMixin {
-
   late AnimationController _hoverCtrl;
   bool _pressed = false;
 
@@ -1021,7 +1363,8 @@ class _FileCardState extends State<_FileCard>
   void initState() {
     super.initState();
     _hoverCtrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 160),
+      vsync: this,
+      duration: const Duration(milliseconds: 160),
     );
   }
 
@@ -1033,195 +1376,314 @@ class _FileCardState extends State<_FileCard>
 
   Color get _typeAccent {
     switch (widget.file.type) {
-      case MaterialFileType.folder:   return kAmber;
-      case MaterialFileType.image:    return const Color(0xFF4FC3F7);
-      case MaterialFileType.video:    return const Color(0xFFCE93D8);
-      case MaterialFileType.audio:    return const Color(0xFF80CBC4);
-      case MaterialFileType.document: return const Color(0xFFFFCC80);
-      default: return kSteel;
+      case MaterialFileType.folder:
+        return kAmber;
+      case MaterialFileType.image:
+        return const Color(0xFF4FC3F7);
+      case MaterialFileType.video:
+        return const Color(0xFFCE93D8);
+      case MaterialFileType.audio:
+        return const Color(0xFF80CBC4);
+      case MaterialFileType.document:
+        return const Color(0xFFFFCC80);
+      default:
+        return kSteel;
     }
   }
 
   IconData get _typeIcon {
     switch (widget.file.type) {
-      case MaterialFileType.folder:   return Icons.folder_special_outlined;
-      case MaterialFileType.image:    return Icons.image_outlined;
-      case MaterialFileType.video:    return Icons.movie_outlined;
-      case MaterialFileType.audio:    return Icons.graphic_eq;
-      case MaterialFileType.document: return Icons.article_outlined;
-      default: return Icons.insert_drive_file_outlined;
+      case MaterialFileType.folder:
+        return Icons.folder_special_outlined;
+      case MaterialFileType.image:
+        return Icons.image_outlined;
+      case MaterialFileType.video:
+        return Icons.movie_outlined;
+      case MaterialFileType.audio:
+        return Icons.graphic_eq;
+      case MaterialFileType.document:
+        return Icons.article_outlined;
+      default:
+        return Icons.insert_drive_file_outlined;
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final file = widget.file;
-    final isFolder = file.type == MaterialFileType.folder;
+ @override
+Widget build(BuildContext context) {
+  final file = widget.file;
+  final isFolder = file.type == MaterialFileType.folder;
 
-    return GestureDetector(
-      onTapDown: (_) { setState(() => _pressed = true); _hoverCtrl.forward(); },
-      onTapUp: (_)   { setState(() => _pressed = false); _hoverCtrl.reverse(); },
-      onTapCancel: () { setState(() => _pressed = false); _hoverCtrl.reverse(); },
-      onTap: widget.onTap,
-      child: AnimatedBuilder(
-        animation: _hoverCtrl,
-        builder: (_, __) {
-          final t = _hoverCtrl.value;
-          return Container(
-            margin: const EdgeInsets.only(bottom: 6),
-            decoration: BoxDecoration(
-              color: Color.lerp(kSurface, kPanel, t),
-              border: Border(
-                left: BorderSide(
-                  color: Color.lerp(
-                    _typeAccent.withOpacity(0.3),
-                    _typeAccent,
-                    t,
-                  )!,
-                  width: 3,
-                ),
-                top: BorderSide(color: kBorder),
-                right: BorderSide(color: kBorder),
-                bottom: BorderSide(color: kBorder),
+  return GestureDetector(
+    onTapDown: (_) {
+      setState(() => _pressed = true);
+      _hoverCtrl.forward();
+    },
+    onTapUp: (_) {
+      setState(() => _pressed = false);
+      _hoverCtrl.reverse();
+    },
+    onTapCancel: () {
+      setState(() => _pressed = false);
+      _hoverCtrl.reverse();
+    },
+    onTap: widget.onTap,
+    child: AnimatedBuilder(
+      animation: _hoverCtrl,
+      builder: (_, __) {
+        final t = _hoverCtrl.value;
+        return Container(
+          margin: const EdgeInsets.only(bottom: 6),
+          decoration: BoxDecoration(
+            color: Color.lerp(kSurface, kPanel, t),
+            border: Border(
+              left: BorderSide(
+                color: Color.lerp(
+                  _typeAccent.withOpacity(0.3),
+                  _typeAccent,
+                  t,
+                )!,
+                width: 3,
               ),
-              boxShadow: t > 0 ? [
-                BoxShadow(
-                  color: _typeAccent.withOpacity(0.08 * t),
-                  blurRadius: 12,
-                  offset: const Offset(0, 2),
-                ),
-              ] : null,
+              top: BorderSide(color: kBorder),
+              right: BorderSide(color: kBorder),
+              bottom: BorderSide(color: kBorder),
             ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              child: Row(
-                children: [
-                  // ── Icono ──
-                  Container(
-                    width: 40, height: 40,
-                    decoration: BoxDecoration(
-                      color: _typeAccent.withOpacity(0.08),
-                      border: Border.all(color: _typeAccent.withOpacity(0.25)),
-                      borderRadius: BorderRadius.circular(3),
+            boxShadow: t > 0
+                ? [
+                    BoxShadow(
+                      color: _typeAccent.withOpacity(0.08 * t),
+                      blurRadius: 12,
+                      offset: const Offset(0, 2),
                     ),
-                    // Para imágenes descargadas: miniatura real
-                    child: file.type == MaterialFileType.image &&
-                        file.isDownloaded && file.filePath != null &&
-                        File(file.filePath!).existsSync()
-                        ? ClipRRect(
-                            borderRadius: BorderRadius.circular(2),
-                            child: Image.file(
-                              File(file.filePath!),
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) =>
-                                Icon(_typeIcon, color: _typeAccent, size: 20),
-                            ),
-                          )
-                        : Icon(_typeIcon, color: _typeAccent, size: 20),
+                  ]
+                : null,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                // ── Icono ──
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: _typeAccent.withOpacity(0.08),
+                    border: Border.all(color: _typeAccent.withOpacity(0.25)),
+                    borderRadius: BorderRadius.circular(3),
                   ),
-                  const SizedBox(width: 12),
-                  // ── Info ──
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          file.name,
-                          style: TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: kCold,
-                            letterSpacing: 0.5,
+                  child: file.type == MaterialFileType.image &&
+                          file.isDownloaded &&
+                          file.filePath != null &&
+                          File(file.filePath!).existsSync()
+                      ? ClipRRect(
+                          borderRadius: BorderRadius.circular(2),
+                          child: Image.file(
+                            File(file.filePath!),
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) =>
+                                Icon(_typeIcon, color: _typeAccent, size: 20),
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                        )
+                      : Icon(_typeIcon, color: _typeAccent, size: 20),
+                ),
+                const SizedBox(width: 12),
+                // ── Info ──
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        file.name,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: kCold,
+                          letterSpacing: 0.5,
                         ),
-                        const SizedBox(height: 3),
-                        Row(
-                          children: [
-                            Text(
-                              _fileCode(file.id),
-                              style: TextStyle(
-                                fontFamily: 'monospace',
-                                fontSize: 8,
-                                color: _typeAccent.withOpacity(0.7),
-                                letterSpacing: 1,
-                              ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 3),
+                      Row(
+                        children: [
+                          Text(
+                            _fileCode(file.id),
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 8,
+                              color: _typeAccent.withOpacity(0.7),
+                              letterSpacing: 1,
                             ),
-                            const SizedBox(width: 8),
-                            if (!isFolder)
-                              Text(
-                                file.formattedSize,
-                                style: const TextStyle(
-                                  fontFamily: 'monospace',
-                                  fontSize: 8,
-                                  color: kSteel,
-                                ),
-                              ),
-                            const Spacer(),
+                          ),
+                          const SizedBox(width: 8),
+                          if (!isFolder)
                             Text(
-                              _militaryTime(file.uploadedAt),
+                              file.formattedSize,
                               style: const TextStyle(
                                 fontFamily: 'monospace',
                                 fontSize: 8,
                                 color: kSteel,
                               ),
                             ),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            _StatusBadge(
-                              label: 'por ${file.uploadedByName.toUpperCase()}',
+                          const Spacer(),
+                          Text(
+                            _militaryTime(file.uploadedAt),
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 8,
                               color: kSteel,
                             ),
-                            const SizedBox(width: 4),
-                            if (isFolder)
-                              _StatusBadge(label: 'SECTOR', color: kAmber)
-                            else if (file.isDownloaded && file.filePath != null &&
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      // ── Badges ──
+                      Row(
+                        children: [
+                          _StatusBadge(
+                            label: 'por ${file.uploadedByName.toUpperCase()}',
+                            color: kSteel,
+                          ),
+                          const SizedBox(width: 4),
+                          if (isFolder) ...[
+                            _StatusBadge(label: 'SECTOR', color: kAmber),
+                            if (file.passwordHash != null) ...[
+                              const SizedBox(width: 4),
+                              _StatusBadge(label: '🔒', color: kAmber),
+                            ],
+                          ] else ...[
+                            if (file.downloadStatus ==
+                                    DownloadStatus.downloaded &&
+                                file.filePath != null &&
                                 File(file.filePath!).existsSync())
                               _StatusBadge(label: 'LOCAL', color: kGreenScan)
+                            else if (file.downloadStatus ==
+                                DownloadStatus.downloading)
+                              _StatusBadge(
+                                label: '⬇ DESCARGANDO',
+                                color: kGreenScan,
+                                pulse: true,
+                              )
+                            else if (file.downloadStatus ==
+                                DownloadStatus.paused)
+                              _StatusBadge(
+                                label: '⏸ EN ESPERA',
+                                color: kAmber,
+                                pulse: true,
+                              )
                             else
-                              _StatusBadge(label: '⬇ PENDIENTE', color: kRedGlow, pulse: true),
+                              _StatusBadge(
+                                label: '⬇ PENDIENTE',
+                                color: kRedGlow,
+                                pulse: true,
+                              ),
                           ],
-                        ),
-                      ],
-                    ),
+                          const SizedBox(width: 4),
+                          // Badge de sección
+                          _StatusBadge(
+                            label: file.section == MaterialSection.obligatorio
+                                ? 'OBL'
+                                : 'PUB',
+                            color: file.section == MaterialSection.obligatorio
+                                ? kRedGlow.withOpacity(0.8)
+                                : kGreenScan.withOpacity(0.8),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 8),
-                  _buildActionMenu(file),
-                ],
-              ),
+                ),
+                const SizedBox(width: 8),
+                _buildActionMenu(file),
+              ],
             ),
-          );
-        },
-      ),
-    );
-  }
+          ),
+        );
+      },
+    ),
+  );
+}
 
   Widget _buildActionMenu(MaterialFile file) {
     final items = <PopupMenuEntry<String>>[];
+    final isFolder = file.type == MaterialFileType.folder;
+    final isJ10 = widget.isJ10;
 
+    // Opciones de gestión (rename + purge) solo para quien puede gestionar
     if (widget.canManage) {
       items.addAll([
         const PopupMenuItem(
           value: 'rename',
-          child: _MenuRow(icon: Icons.edit_outlined, label: 'RENOMBRAR', color: kAmber),
+          child: _MenuRow(
+            icon: Icons.edit_outlined,
+            label: 'RENOMBRAR',
+            color: kAmber,
+          ),
         ),
         const PopupMenuDivider(height: 1),
         const PopupMenuItem(
           value: 'delete_all',
-          child: _MenuRow(icon: Icons.delete_sweep_outlined, label: 'PURGAR (TODOS)', color: kRedGlow),
+          child: _MenuRow(
+            icon: Icons.delete_sweep_outlined,
+            label: 'PURGAR (TODOS)',
+            color: kRedGlow,
+          ),
         ),
       ]);
     }
+
+    // Descarga de carpeta completa (público, no descargada)
+    if (isFolder && file.section == MaterialSection.publico) {
+      items.add(
+        const PopupMenuItem(
+          value: 'download_folder',
+          child: _MenuRow(
+            icon: Icons.folder_zip_outlined,
+            label: 'DESCARGAR TODO',
+            color: kGreenScan,
+          ),
+        ),
+      );
+    }
+
+    // Mover entre secciones (solo J10)
+    if (isJ10) {
+      items.add(const PopupMenuDivider(height: 1));
+      if (file.section == MaterialSection.obligatorio) {
+        items.add(
+          const PopupMenuItem(
+            value: 'move_to_publico',
+            child: _MenuRow(
+              icon: Icons.move_up,
+              label: 'MOVER A PÚBLICO',
+              color: kSteel,
+            ),
+          ),
+        );
+      } else {
+        items.add(
+          const PopupMenuItem(
+            value: 'move_to_obligatorio',
+            child: _MenuRow(
+              icon: Icons.move_down,
+              label: 'MOVER A OBLIGATORIO',
+              color: kSteel,
+            ),
+          ),
+        );
+      }
+    }
+
     items.add(
       const PopupMenuItem(
         value: 'delete_me',
-        child: _MenuRow(icon: Icons.delete_outline, label: 'BORRAR LOCAL', color: kSteel),
+        child: _MenuRow(
+          icon: Icons.delete_outline,
+          label: 'BORRAR LOCAL',
+          color: kSteel,
+        ),
       ),
     );
 
@@ -1244,7 +1706,11 @@ class _StatusBadge extends StatefulWidget {
   final String label;
   final Color color;
   final bool pulse;
-  const _StatusBadge({required this.label, required this.color, this.pulse = false});
+  const _StatusBadge({
+    required this.label,
+    required this.color,
+    this.pulse = false,
+  });
 
   @override
   State<_StatusBadge> createState() => _StatusBadgeState();
@@ -1257,12 +1723,17 @@ class _StatusBadgeState extends State<_StatusBadge>
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 800))
-      ..repeat(reverse: true);
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    )..repeat(reverse: true);
   }
 
   @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1299,14 +1770,19 @@ class _HeaderButton extends StatelessWidget {
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
-  const _HeaderButton({required this.icon, required this.onTap, this.color = kSteel});
+  const _HeaderButton({
+    required this.icon,
+    required this.onTap,
+    this.color = kSteel,
+  });
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: 32, height: 32,
+        width: 32,
+        height: 32,
         decoration: BoxDecoration(
           border: Border.all(color: color.withOpacity(0.3)),
           borderRadius: BorderRadius.circular(2),
@@ -1372,25 +1848,32 @@ class _StatusDotState extends State<_StatusDot>
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 1))
-      ..repeat(reverse: true);
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 1),
+    )..repeat(reverse: true);
   }
 
   @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     if (!widget.active) {
       return Container(
-        width: 6, height: 6,
+        width: 6,
+        height: 6,
         decoration: BoxDecoration(shape: BoxShape.circle, color: kSteel),
       );
     }
     return AnimatedBuilder(
       animation: _ctrl,
       builder: (_, __) => Container(
-        width: 6, height: 6,
+        width: 6,
+        height: 6,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           color: kGreenScan,
@@ -1410,7 +1893,11 @@ class _BreadcrumbItem extends StatelessWidget {
   final String label;
   final bool active;
   final VoidCallback onTap;
-  const _BreadcrumbItem({required this.label, required this.active, required this.onTap});
+  const _BreadcrumbItem({
+    required this.label,
+    required this.active,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1435,7 +1922,12 @@ class _ToolbarButton extends StatelessWidget {
   final String label;
   final bool active;
   final VoidCallback onTap;
-  const _ToolbarButton({required this.icon, required this.label, required this.active, required this.onTap});
+  const _ToolbarButton({
+    required this.icon,
+    required this.label,
+    required this.active,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1475,7 +1967,11 @@ class _FabItem extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
-  const _FabItem({required this.icon, required this.label, required this.onTap});
+  const _FabItem({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1503,7 +1999,8 @@ class _FabItem extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Container(
-            width: 38, height: 38,
+            width: 38,
+            height: 38,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: kSurface,
@@ -1524,8 +2021,10 @@ class _CorpDialog extends StatelessWidget {
   final Widget content;
   final List<Widget> actions;
   const _CorpDialog({
-    required this.title, required this.titleColor,
-    required this.content, required this.actions,
+    required this.title,
+    required this.titleColor,
+    required this.content,
+    required this.actions,
   });
 
   @override
@@ -1546,12 +2045,15 @@ class _CorpDialog extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
                 color: titleColor.withOpacity(0.08),
-                border: Border(bottom: BorderSide(color: titleColor.withOpacity(0.3))),
+                border: Border(
+                  bottom: BorderSide(color: titleColor.withOpacity(0.3)),
+                ),
               ),
               child: Row(
                 children: [
                   Container(
-                    width: 3, height: 16,
+                    width: 3,
+                    height: 16,
                     color: titleColor,
                     margin: const EdgeInsets.only(right: 10),
                   ),
@@ -1568,10 +2070,7 @@ class _CorpDialog extends StatelessWidget {
                 ],
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: content,
-            ),
+            Padding(padding: const EdgeInsets.all(16), child: content),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
@@ -1580,10 +2079,12 @@ class _CorpDialog extends StatelessWidget {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: actions
-                    .map((a) => Padding(
-                          padding: const EdgeInsets.only(left: 8),
-                          child: a,
-                        ))
+                    .map(
+                      (a) => Padding(
+                        padding: const EdgeInsets.only(left: 8),
+                        child: a,
+                      ),
+                    )
                     .toList(),
               ),
             ),
@@ -1620,8 +2121,10 @@ class _CorpTextField extends StatelessWidget {
       decoration: InputDecoration(
         hintText: hint,
         hintStyle: TextStyle(
-          fontFamily: 'monospace', fontSize: 11,
-          color: kSteel.withOpacity(0.6), letterSpacing: 1,
+          fontFamily: 'monospace',
+          fontSize: 11,
+          color: kSteel.withOpacity(0.6),
+          letterSpacing: 1,
         ),
         filled: true,
         fillColor: kBg,
@@ -1637,7 +2140,10 @@ class _CorpTextField extends StatelessWidget {
           borderRadius: BorderRadius.circular(2),
           borderSide: BorderSide(color: color.withOpacity(0.2)),
         ),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 10,
+        ),
       ),
     );
   }
@@ -1647,7 +2153,11 @@ class _CorpDialogAction extends StatelessWidget {
   final String label;
   final Color color;
   final VoidCallback onTap;
-  const _CorpDialogAction({required this.label, required this.onTap, this.color = kSteel});
+  const _CorpDialogAction({
+    required this.label,
+    required this.onTap,
+    this.color = kSteel,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1679,7 +2189,11 @@ class _MenuRow extends StatelessWidget {
   final IconData icon;
   final String label;
   final Color color;
-  const _MenuRow({required this.icon, required this.label, required this.color});
+  const _MenuRow({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1710,13 +2224,13 @@ class _FilterBottomSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final opts = <(MaterialFileType?, String, IconData)>[
-      (null,                       'TODOS',      Icons.all_inclusive),
-      (MaterialFileType.folder,    'SECTORES',   Icons.folder_outlined),
-      (MaterialFileType.image,     'IMÁGENES',   Icons.image_outlined),
-      (MaterialFileType.video,     'VIDEO',      Icons.movie_outlined),
-      (MaterialFileType.audio,     'AUDIO',      Icons.graphic_eq),
-      (MaterialFileType.document,  'DOCUMENTOS', Icons.article_outlined),
-      (MaterialFileType.other,     'OTROS',      Icons.insert_drive_file_outlined),
+      (null, 'TODOS', Icons.all_inclusive),
+      (MaterialFileType.folder, 'SECTORES', Icons.folder_outlined),
+      (MaterialFileType.image, 'IMÁGENES', Icons.image_outlined),
+      (MaterialFileType.video, 'VIDEO', Icons.movie_outlined),
+      (MaterialFileType.audio, 'AUDIO', Icons.graphic_eq),
+      (MaterialFileType.document, 'DOCUMENTOS', Icons.article_outlined),
+      (MaterialFileType.other, 'OTROS', Icons.insert_drive_file_outlined),
     ];
     return _BottomSheetContainer(
       title: 'FILTRAR POR TIPO',
@@ -1729,11 +2243,15 @@ class _FilterBottomSheet extends StatelessWidget {
             title: Text(
               o.$2,
               style: TextStyle(
-                fontFamily: 'monospace', fontSize: 11,
-                color: active ? kCold : kSteel, letterSpacing: 1,
+                fontFamily: 'monospace',
+                fontSize: 11,
+                color: active ? kCold : kSteel,
+                letterSpacing: 1,
               ),
             ),
-            trailing: active ? const Icon(Icons.check, color: kRedGlow, size: 14) : null,
+            trailing: active
+                ? const Icon(Icons.check, color: kRedGlow, size: 14)
+                : null,
             onTap: () => onSelect(o.$1),
           );
         }).toList(),
@@ -1747,15 +2265,17 @@ class _SortBottomSheet extends StatelessWidget {
   final bool ascending;
   final void Function(String, bool) onSelect;
   const _SortBottomSheet({
-    required this.currentSort, required this.ascending, required this.onSelect,
+    required this.currentSort,
+    required this.ascending,
+    required this.onSelect,
   });
 
   @override
   Widget build(BuildContext context) {
     final opts = <(String, String, IconData)>[
-      ('date', 'FECHA',   Icons.access_time),
-      ('name', 'NOMBRE',  Icons.sort_by_alpha),
-      ('size', 'TAMAÑO',  Icons.data_usage),
+      ('date', 'FECHA', Icons.access_time),
+      ('name', 'NOMBRE', Icons.sort_by_alpha),
+      ('size', 'TAMAÑO', Icons.data_usage),
     ];
     return _BottomSheetContainer(
       title: 'ORDENAR POR',
@@ -1769,14 +2289,17 @@ class _SortBottomSheet extends StatelessWidget {
               title: Text(
                 o.$2,
                 style: TextStyle(
-                  fontFamily: 'monospace', fontSize: 11,
-                  color: active ? kCold : kSteel, letterSpacing: 1,
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                  color: active ? kCold : kSteel,
+                  letterSpacing: 1,
                 ),
               ),
               trailing: active
                   ? Icon(
                       ascending ? Icons.arrow_upward : Icons.arrow_downward,
-                      color: kAmber, size: 14,
+                      color: kAmber,
+                      size: 14,
                     )
                   : null,
               onTap: () => onSelect(o.$1, active ? !ascending : false),
@@ -1805,12 +2328,20 @@ class _BottomSheetContainer extends StatelessWidget {
           ),
           child: Row(
             children: [
-              Container(width: 3, height: 14, color: kRed, margin: const EdgeInsets.only(right: 10)),
+              Container(
+                width: 3,
+                height: 14,
+                color: kRed,
+                margin: const EdgeInsets.only(right: 10),
+              ),
               Text(
                 title,
                 style: const TextStyle(
-                  fontFamily: 'monospace', fontSize: 11,
-                  color: kCold, letterSpacing: 2, fontWeight: FontWeight.w700,
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                  color: kCold,
+                  letterSpacing: 2,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
               const Spacer(),

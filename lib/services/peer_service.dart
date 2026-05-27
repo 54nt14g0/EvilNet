@@ -106,18 +106,18 @@ class PeerService {
   // ─── Persistencia de peers conocidos ─────────────────────────────────────────
 
   Future<void> _loadKnownPeers() async {
-  final prefs = await SharedPreferences.getInstance();
-  final saved = prefs.getStringList('known_peer_ips') ?? [];
-  for (final ip in saved) {
-    if (ip != myIp && !knownPeers.containsKey(ip)) {
-      knownPeers[ip] = DateTime.now();
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getStringList('known_peer_ips') ?? [];
+    for (final ip in saved) {
+      if (ip != myIp && !knownPeers.containsKey(ip)) {
+        knownPeers[ip] = DateTime.now();
+      }
     }
+    // Resetear lastSync al iniciar para que al reconectar
+    // siempre se fuerce un sync completo con cada peer
+    _lastSync.clear();
+    print('[PeerService] Loaded ${saved.length} known peers from storage');
   }
-  // Resetear lastSync al iniciar para que al reconectar
-  // siempre se fuerce un sync completo con cada peer
-  _lastSync.clear();
-  print('[PeerService] Loaded ${saved.length} known peers from storage');
-}
 
   Future<void> _saveKnownPeers() async {
     final prefs = await SharedPreferences.getInstance();
@@ -172,25 +172,25 @@ class PeerService {
   }
 
   void _onPeerDiscovered(String ip, String name, {bool isNew = false}) {
-  peerNames[ip] = name;
-  knownPeers[ip] = DateTime.now();
-  _saveKnownPeers();
+    peerNames[ip] = name;
+    knownPeers[ip] = DateTime.now();
+    _saveKnownPeers();
 
-  final lastSync = _lastSync[ip];
-  // isNew: peer nunca visto
-  // lastSync == null: primer sync de esta sesión (se reseteó al iniciar)
-  // inMinutes >= 2: han pasado más de 2 minutos desde el último sync
-  final needsSync =
-      isNew ||
-      lastSync == null ||
-      DateTime.now().difference(lastSync).inMinutes >= 2;
+    final lastSync = _lastSync[ip];
+    // isNew: peer nunca visto
+    // lastSync == null: primer sync de esta sesión (se reseteó al iniciar)
+    // inMinutes >= 2: han pasado más de 2 minutos desde el último sync
+    final needsSync =
+        isNew ||
+        lastSync == null ||
+        DateTime.now().difference(lastSync).inMinutes >= 2;
 
-  if (needsSync) {
-    _lastSync[ip] = DateTime.now();
-    _controller.add(PeerEvent('peer_online', {'ip': ip, 'name': name}));
-    _triggerSync(ip);
+    if (needsSync) {
+      _lastSync[ip] = DateTime.now();
+      _controller.add(PeerEvent('peer_online', {'ip': ip, 'name': name}));
+      _triggerSync(ip);
+    }
   }
-}
 
   void _triggerSync(String ip) {
     Future.microtask(() async {
@@ -876,7 +876,11 @@ class PeerService {
     return _groups.values.where((g) => g.canJoin(_myHierarchy)).toList();
   }
 
-  Future<void> createGroup(String name, int minHierarchy) async {
+  Future<void> createGroup(
+    String name,
+    int minHierarchy, {
+    String? password,
+  }) async {
     if (_myHierarchy < 8) return;
     if (minHierarchy < 1 || minHierarchy > 10) return;
 
@@ -885,6 +889,7 @@ class PeerService {
       creatorId: myId,
       creatorIp: myIp,
       minHierarchyToJoin: minHierarchy,
+      password: password,
     );
 
     _groups[group.id] = group;

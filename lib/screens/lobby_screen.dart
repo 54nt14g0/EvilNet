@@ -9,6 +9,8 @@ import '../models/app_user.dart';
 import '../widgets/user_avatar.dart';
 import '../services/auth_service.dart' show kSeedAdmin;
 import '../services/chat_service.dart';
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
 
 // ─── Paleta Matrix Terminal ───────────────────────────────────────────────────
 const Color kMatrix = Color(0xFF00FF41); // Verde matrix principal
@@ -152,14 +154,112 @@ class _LobbyScreenState extends State<LobbyScreen>
     );
   }
 
-  void _openGroupChat(Group group) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ChatScreen(groupId: group.id, peerName: group.name),
-      ),
-    );
+  void _openGroupChat(Group group) async {
+  if (group.passwordHash != null) {
+    final ok = await _promptGroupPassword(group);
+    if (!ok) return;
   }
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => ChatScreen(groupId: group.id, peerName: group.name),
+    ),
+  );
+}
+
+Future<bool> _promptGroupPassword(Group group) async {
+  final ctrl = TextEditingController();
+  bool _obscure = true;
+  bool _wrong = false;
+
+  final result = await showDialog<bool>(
+    context: context,
+    builder: (_) => StatefulBuilder(
+      builder: (ctx, setSt) => _TerminalDialog(
+        title: 'GROUP_ACCESS.exe',
+        accentColor: kPurple,
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '> ${group.name.toUpperCase()}',
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 11,
+                color: kTextSecondary,
+                letterSpacing: 1,
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              obscureText: _obscure,
+              autofocus: true,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                color: kMatrix,
+                fontSize: 13,
+              ),
+              cursorColor: kMatrix,
+              decoration: InputDecoration(
+                labelText: '> CONTRASEÑA',
+                labelStyle: TextStyle(
+                  color: kMatrixDim,
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                ),
+                errorText: _wrong ? 'ACCESO DENEGADO' : null,
+                errorStyle: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 9,
+                  color: kPink,
+                ),
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscure ? Icons.visibility_off : Icons.visibility,
+                    color: kMatrixDim,
+                    size: 16,
+                  ),
+                  onPressed: () => setSt(() => _obscure = !_obscure),
+                ),
+                filled: true,
+                fillColor: kMatrixDark.withOpacity(0.3),
+                enabledBorder: const OutlineInputBorder(
+                  borderRadius: BorderRadius.zero,
+                  borderSide: BorderSide(color: kBorder),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.zero,
+                  borderSide: BorderSide(color: kPurple),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          _TerminalButton(
+            label: 'ABORT',
+            color: kTextSecondary,
+            onTap: () => Navigator.pop(ctx, false),
+          ),
+          _TerminalButton(
+            label: 'ACCEDER',
+            color: kPurple,
+            onTap: () {
+              final hash = md5.convert(utf8.encode(ctrl.text)).toString();
+              if (hash == group.passwordHash) {
+                Navigator.pop(ctx, true);
+              } else {
+                setSt(() => _wrong = true);
+              }
+            },
+          ),
+        ],
+      ),
+    ),
+  );
+  return result ?? false;
+}
 
   bool _isUserOnline(String username) {
     for (final ip in _peer.knownPeers.keys) {
@@ -186,59 +286,97 @@ class _LobbyScreenState extends State<LobbyScreen>
 
   // ─── Grupos ───────────────────────────────────────────────────────────────
 
-  void _showCreateGroupDialog() {
-    if (_peer.myHierarchy < 8) return;
-    final nameCtrl = TextEditingController();
-    int minHierarchy = 1;
+ void _showCreateGroupDialog() {
+  if (_peer.myHierarchy < 8) return;
+  final nameCtrl = TextEditingController();
+  final passCtrl = TextEditingController();
+  int minHierarchy = 1;
+  bool _obscure = true;
 
-    showDialog(
-      context: context,
-      builder: (_) => _TerminalDialog(
+  showDialog(
+    context: context,
+    builder: (_) => StatefulBuilder(
+      builder: (ctx, setSt) => _TerminalDialog(
         title: 'NEW_GROUP.exe',
-        content: StatefulBuilder(
-          builder: (ctx, setSt) => Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _TerminalTextField(
-                controller: nameCtrl,
-                hint: 'group_name',
-                label: 'NOMBRE',
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _TerminalTextField(
+              controller: nameCtrl,
+              hint: 'group_name',
+              label: 'NOMBRE',
+            ),
+            const SizedBox(height: 16),
+            DropdownButtonFormField<int>(
+              value: minHierarchy,
+              dropdownColor: kDarkPanel,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                color: kMatrix,
+                fontSize: 13,
               ),
-              const SizedBox(height: 16),
-              DropdownButtonFormField<int>(
-                value: minHierarchy,
-                dropdownColor: kDarkPanel,
-                style: const TextStyle(
+              decoration: InputDecoration(
+                labelText: '> MIN_HIERARCHY',
+                labelStyle: TextStyle(
+                  color: kMatrixDim,
                   fontFamily: 'monospace',
-                  color: kMatrix,
-                  fontSize: 13,
+                  fontSize: 11,
                 ),
-                decoration: InputDecoration(
-                  labelText: '> MIN_HIERARCHY',
-                  labelStyle: TextStyle(
-                    color: kMatrixDim,
-                    fontFamily: 'monospace',
-                    fontSize: 11,
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.zero,
-                    borderSide: BorderSide(color: kMatrixDark),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.zero,
-                    borderSide: BorderSide(color: kMatrix),
-                  ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.zero,
+                  borderSide: BorderSide(color: kMatrixDark),
                 ),
-                items: List.generate(10, (i) => i + 1)
-                    .map(
-                      (h) =>
-                          DropdownMenuItem(value: h, child: Text('LEVEL_$h+')),
-                    )
-                    .toList(),
-                onChanged: (v) => setSt(() => minHierarchy = v!),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.zero,
+                  borderSide: BorderSide(color: kMatrix),
+                ),
               ),
-            ],
-          ),
+              items: List.generate(10, (i) => i + 1)
+                  .map((h) => DropdownMenuItem(
+                        value: h,
+                        child: Text('LEVEL_$h+'),
+                      ))
+                  .toList(),
+              onChanged: (v) => setSt(() => minHierarchy = v!),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: passCtrl,
+              obscureText: _obscure,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                color: kMatrix,
+                fontSize: 13,
+              ),
+              cursorColor: kMatrix,
+              decoration: InputDecoration(
+                labelText: '> CONTRASEÑA (opcional)',
+                labelStyle: TextStyle(
+                  color: kMatrixDim,
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                ),
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscure ? Icons.visibility_off : Icons.visibility,
+                    color: kMatrixDim,
+                    size: 16,
+                  ),
+                  onPressed: () => setSt(() => _obscure = !_obscure),
+                ),
+                filled: true,
+                fillColor: kMatrixDark.withOpacity(0.3),
+                enabledBorder: const OutlineInputBorder(
+                  borderRadius: BorderRadius.zero,
+                  borderSide: BorderSide(color: kBorder),
+                ),
+                focusedBorder: const OutlineInputBorder(
+                  borderRadius: BorderRadius.zero,
+                  borderSide: BorderSide(color: kMatrix),
+                ),
+              ),
+            ),
+          ],
         ),
         actions: [
           _TerminalButton(
@@ -251,15 +389,20 @@ class _LobbyScreenState extends State<LobbyScreen>
             color: kMatrix,
             onTap: () {
               if (nameCtrl.text.trim().isNotEmpty) {
-                _peer.createGroup(nameCtrl.text.trim(), minHierarchy);
+                _peer.createGroup(
+                  nameCtrl.text.trim(),
+                  minHierarchy,
+                  password: passCtrl.text.isNotEmpty ? passCtrl.text : null,
+                );
                 Navigator.pop(context);
               }
             },
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   void _showGroupOptions(Group group) {
     final canManage =

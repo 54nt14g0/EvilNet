@@ -8,6 +8,8 @@ import '../services/peer_service.dart';
 import 'study_topic_detail_screen.dart';
 import 'dart:async'; //
 import 'study_topic_editor_screen.dart';
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
 
 // ─── Paleta Cámara de Estudios ────────────────────────────────────────────────
 const Color kSRed = Color(0xFFCC0000); // Rojo sangre principal
@@ -132,9 +134,15 @@ class _StudyRoomScreenState extends State<StudyRoomScreen>
     userHierarchy: _myHierarchy,
   );
 
-  void _openTopic(StudyTopic topic) {
-    // Admin puede abrir cualquier tema aunque esté bloqueado
+  void _openTopic(StudyTopic topic) async {
     if (_lockReason(topic) != null && !_canCreate) return;
+
+    // Verificar contraseña si tiene
+    if (topic.passwordHash != null) {
+      final ok = await _promptTopicPassword(topic);
+      if (!ok) return;
+    }
+
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => StudyTopicDetailScreen(topic: topic)),
@@ -164,6 +172,122 @@ class _StudyRoomScreenState extends State<StudyRoomScreen>
     }
   }
 
+Future<bool> _promptTopicPassword(StudyTopic topic) async {
+  final ctrl = TextEditingController();
+  bool _obscure = true;
+  bool _wrong = false;
+
+  final result = await showDialog<bool>(
+    context: context,
+    builder: (_) => StatefulBuilder(
+      builder: (ctx, setSt) => AlertDialog(
+        backgroundColor: kSPanel,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(3),
+          side: BorderSide(color: kSRed.withOpacity(0.4)),
+        ),
+        title: Row(
+          children: [
+            const Icon(Icons.lock_outline, color: kSRed, size: 16),
+            const SizedBox(width: 8),
+            const Text(
+              'ACCESO RESTRINGIDO',
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 12,
+                color: kSRedGlow,
+                letterSpacing: 2,
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              topic.title,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 11,
+                color: kSTextDim,
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              obscureText: _obscure,
+              autofocus: true,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 13,
+                color: kSText,
+              ),
+              decoration: InputDecoration(
+                hintText: 'contraseña...',
+                hintStyle: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                  color: kSTextDim,
+                ),
+                errorText: _wrong ? 'CONTRASEÑA INCORRECTA' : null,
+                errorStyle: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 9,
+                  color: kSRedGlow,
+                ),
+                filled: true,
+                fillColor: kSBg,
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscure ? Icons.visibility_off : Icons.visibility,
+                    color: kSTextDim,
+                    size: 16,
+                  ),
+                  onPressed: () => setSt(() => _obscure = !_obscure),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.zero,
+                  borderSide: BorderSide(color: kSRed.withOpacity(0.3)),
+                ),
+                focusedBorder: const OutlineInputBorder(
+                  borderRadius: BorderRadius.zero,
+                  borderSide: BorderSide(color: kSRedGlow),
+                ),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12, vertical: 10,
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text(
+              'CANCELAR',
+              style: TextStyle(fontFamily: 'monospace', color: kSTextDim),
+            ),
+          ),
+          TextButton(
+            onPressed: () {
+              final hash = md5.convert(utf8.encode(ctrl.text)).toString();
+              if (hash == topic.passwordHash) {
+                Navigator.pop(ctx, true);
+              } else {
+                setSt(() => _wrong = true);
+              }
+            },
+            child: const Text(
+              'ACCEDER',
+              style: TextStyle(fontFamily: 'monospace', color: kSRedGlow),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+  return result ?? false;
+}
   // ─── Reorder ──────────────────────────────────────────────────────────────
 
   void _saveReorder(List<StudyTopic> reordered) async {
@@ -528,7 +652,7 @@ class _TopicTileState extends State<_TopicTile>
     super.dispose();
   }
 
-    @override
+  @override
   Widget build(BuildContext context) {
     return MouseRegion(
       onEnter: (_) {
@@ -618,7 +742,7 @@ class _TopicTileState extends State<_TopicTile>
                   // ← overlay ANTES que el EditMenu para que no lo tape
                   if (_locked) _buildLockedOverlay(),
                   // ← EditMenu SIEMPRE al final del Stack para estar encima de todo
-                  if (widget.canEdit)  // ← CAMBIO: se quitó "&& _hovered"
+                  if (widget.canEdit) // ← CAMBIO: se quitó "&& _hovered"
                     Positioned(
                       top: 28,
                       right: 4,
@@ -665,74 +789,74 @@ class _TopicTileState extends State<_TopicTile>
     );
   }
 
- Widget _buildStatusBadge() {
-  // Para admins: mostrar badge de "restringido para otros" si el tema
-  // tiene requisitos, pero sin bloquear el acceso
-  if (widget.canEdit && widget.topic.requiredTopicIds.isNotEmpty) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-      decoration: BoxDecoration(
-        color: Colors.orange.withOpacity(0.15),
-        border: Border.all(color: Colors.orange.withOpacity(0.5)),
-        borderRadius: BorderRadius.circular(2),
-      ),
-      child: const Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.lock_clock_outlined, color: Colors.orange, size: 9),
-          SizedBox(width: 3),
-          Text(
-            'RESTRINGIDO',
-            style: TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 8,
-              color: Colors.orange,
-              letterSpacing: 1,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Para usuarios normales bloqueados
-  if (_locked) {
-    return const Icon(Icons.lock_outline, color: kSTextDim, size: 14);
-  }
-
-  if (_unlocked) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-      decoration: BoxDecoration(
-        color: Colors.green.withOpacity(0.2),
-        border: Border.all(color: Colors.green.withOpacity(0.5)),
-        borderRadius: BorderRadius.circular(2),
-      ),
-      child: const Text(
-        '✓',
-        style: TextStyle(
-          fontFamily: 'monospace',
-          fontSize: 9,
-          color: Colors.green,
+  Widget _buildStatusBadge() {
+    // Para admins: mostrar badge de "restringido para otros" si el tema
+    // tiene requisitos, pero sin bloquear el acceso
+    if (widget.canEdit && widget.topic.requiredTopicIds.isNotEmpty) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        decoration: BoxDecoration(
+          color: Colors.orange.withOpacity(0.15),
+          border: Border.all(color: Colors.orange.withOpacity(0.5)),
+          borderRadius: BorderRadius.circular(2),
         ),
-      ),
-    );
-  }
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.lock_clock_outlined, color: Colors.orange, size: 9),
+            SizedBox(width: 3),
+            Text(
+              'RESTRINGIDO',
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 8,
+                color: Colors.orange,
+                letterSpacing: 1,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
-  if (_pending) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-      decoration: BoxDecoration(
-        color: Colors.orange.withOpacity(0.15),
-        border: Border.all(color: Colors.orange.withOpacity(0.4)),
-        borderRadius: BorderRadius.circular(2),
-      ),
-      child: const Text('⏳', style: TextStyle(fontSize: 9)),
-    );
-  }
+    // Para usuarios normales bloqueados
+    if (_locked) {
+      return const Icon(Icons.lock_outline, color: kSTextDim, size: 14);
+    }
 
-  return const SizedBox.shrink();
-}
+    if (_unlocked) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        decoration: BoxDecoration(
+          color: Colors.green.withOpacity(0.2),
+          border: Border.all(color: Colors.green.withOpacity(0.5)),
+          borderRadius: BorderRadius.circular(2),
+        ),
+        child: const Text(
+          '✓',
+          style: TextStyle(
+            fontFamily: 'monospace',
+            fontSize: 9,
+            color: Colors.green,
+          ),
+        ),
+      );
+    }
+
+    if (_pending) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        decoration: BoxDecoration(
+          color: Colors.orange.withOpacity(0.15),
+          border: Border.all(color: Colors.orange.withOpacity(0.4)),
+          borderRadius: BorderRadius.circular(2),
+        ),
+        child: const Text('⏳', style: TextStyle(fontSize: 9)),
+      );
+    }
+
+    return const SizedBox.shrink();
+  }
 
   Widget _buildInfo() {
     return Container(
