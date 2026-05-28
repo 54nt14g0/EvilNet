@@ -15,6 +15,8 @@ import '../services/material_service.dart';
 import '../services/study_room_service.dart';
 import '../services/nook_service.dart';
 import 'nook_worlds_screen.dart';
+import '../services/task_service.dart';
+import 'tasks_screen.dart';
 
 import '../services/universe_service.dart';
 import 'universe_list_screen.dart';
@@ -69,13 +71,13 @@ class _MenuScreenState extends State<MenuScreen>
       _MenuItem('03', 'Recovecos', Icons.explore_outlined),
       _MenuItem('04', 'Material', Icons.layers_outlined),
       _MenuItem('05', 'Rincón de Ideas', Icons.lightbulb_outlined),
+      _MenuItem('06', 'Tareas', Icons.assignment_outlined), // ← NUEVA
     ];
 
-    // Panel de Control solo para jerarquía >= 7
     if (user != null && user.jerarquia >= 7) {
       items.add(
         const _MenuItem(
-          '06',
+          '07',
           'Panel de Control',
           Icons.admin_panel_settings_outlined,
           isSpecial: true,
@@ -83,7 +85,6 @@ class _MenuScreenState extends State<MenuScreen>
       );
     }
 
-    // Mi Perfil y Exit siempre al final, numeración dinámica
     final nextNum = (items.length + 1).toString().padLeft(2, '0');
     items.add(_MenuItem(nextNum, 'Mi Perfil', Icons.person_outline));
     final exitNum = (items.length + 1).toString().padLeft(2, '0');
@@ -185,15 +186,16 @@ class _MenuScreenState extends State<MenuScreen>
         StudyRoomService().startLocal(),
         UniverseService().startLocal(),
         NookService().startLocal(),
+        TaskService().startLocal(), // ← AGREGAR
       ]).then((_) {
         print('✅ [MenuScreen] All background services started');
         final peerIps = _peer.knownPeers.keys.toList();
         StudyRoomService().startSync(peerIps);
         UniverseService().startSync(peerIps);
-        // NookService ya sincroniza via peer_online event, no duplicar
         if (peerIps.isNotEmpty) {
           for (final ip in peerIps) {
             NookService().syncWithNewPeer(ip);
+            TaskService().syncWithNewPeer(ip); // ← AGREGAR
           }
         }
       }),
@@ -210,6 +212,7 @@ class _MenuScreenState extends State<MenuScreen>
         if (ip != null) {
           StudyRoomService().syncWithNewPeer(ip);
           NookService().syncWithNewPeer(ip);
+          TaskService().syncWithNewPeer(ip); // ← AGREGAR
         }
       }
     });
@@ -413,6 +416,9 @@ class _MenuScreenState extends State<MenuScreen>
       case 'Material':
         _navigateTo(const MaterialScreen());
 
+        break;
+      case 'Tareas':
+        _navigateTo(const TasksScreen());
         break;
       case 'Rincón de Ideas':
         _navigateTo(const UniverseListScreen());

@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../models/app_user.dart';
 import '../services/peer_service.dart';
+import 'task_service.dart';
 
 import 'chat_service.dart';
 
@@ -413,33 +414,37 @@ class AuthService {
   // ─── Eliminar usuario (solo J10) ──────────────────────────────────────────
 
   Future<String?> deleteUser(String targetUserId) async {
-    if (_currentUser == null || _currentUser!.jerarquia < 10) {
-      return 'Sin permisos suficientes';
-    }
-    if (targetUserId == kSeedAdmin.id) {
-      return 'No se puede eliminar al admin semilla';
-    }
-    if (targetUserId == _currentUser!.id) {
-      return 'No puedes eliminarte a ti mismo';
-    }
-
-    final idx = _users.indexWhere((u) => u.id == targetUserId);
-    if (idx == -1) return 'Usuario no encontrado';
-
-    _users.removeAt(idx);
-    _version++;
-    await _saveLocalUsers();
-    _authController.add('users_updated');
-
-    final peerIps = PeerService().knownPeers.keys.toList();
-    if (peerIps.isNotEmpty) {
-      unawaited(
-        _broadcastUserDelete(targetUserId, peerIps, originIp: PeerService().myIp),
-      );
-    }
-
-    return null;
+  if (_currentUser == null || _currentUser!.jerarquia < 10) {
+    return 'Sin permisos suficientes';
   }
+  if (targetUserId == kSeedAdmin.id) {
+    return 'No se puede eliminar al admin semilla';
+  }
+  if (targetUserId == _currentUser!.id) {
+    return 'No puedes eliminarte a ti mismo';
+  }
+
+  final idx = _users.indexWhere((u) => u.id == targetUserId);
+  if (idx == -1) return 'Usuario no encontrado';
+
+  _users.removeAt(idx);
+  _version++;
+  await _saveLocalUsers();
+  _authController.add('users_updated');
+
+  // ── NUEVO: eliminar tareas del usuario borrado ──────────────────
+  await TaskService().deleteTasksForUser(targetUserId);
+  // ───────────────────────────────────────────────────────────────
+
+  final peerIps = PeerService().knownPeers.keys.toList();
+  if (peerIps.isNotEmpty) {
+    unawaited(
+      _broadcastUserDelete(targetUserId, peerIps, originIp: PeerService().myIp),
+    );
+  }
+
+  return null;
+}
 
   // ─── Servidor de sincronización ───────────────────────────────────────────
 

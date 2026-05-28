@@ -18,14 +18,15 @@ void main() async {
 
 Future<void> _setupFirewall() async {
   final rules = {
-    'EvilNet Auth': '9001',
-    'EvilNet PeerService': '45000',
-    'EvilNet StudyRoom': '45001',
-    'EvilNet Material': '45002',
-    'EvilNet Chat': '45003',
-    'EvilNet Universe': '45004',
-    'EvilNet Nooks': '45005',
-  };
+  'EvilNet Auth': '9001',
+  'EvilNet PeerService': '45000',
+  'EvilNet StudyRoom': '45001',
+  'EvilNet Material': '45002',
+  'EvilNet Chat': '45003',
+  'EvilNet Universe': '45004',
+  'EvilNet Nooks': '45005',
+  'EvilNet Tasks': '45006',  // ← AGREGAR ESTA LÍNEA
+};
 
   final scriptLines = StringBuffer();
 

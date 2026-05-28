@@ -3,6 +3,7 @@ import '../models/app_user.dart';
 import '../services/auth_service.dart';
 import '../widgets/user_avatar.dart';
 import '../services/peer_service.dart';
+import '../screens/tasks_screen.dart'; // TaskPermissionsWidget
 
 const Color kNeon = Color(0xFF00FFB2);
 const Color kPink = Color(0xFFFF2D78);
@@ -236,34 +237,50 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
   }
 
   // ─── Contenido J10 ────────────────────────────────────────────────────────
+Widget _buildJ10Content() {
+  final users = _filteredUsers;
 
-  Widget _buildJ10Content() {
-    final users = _filteredUsers;
+  return CustomScrollView(
+    slivers: [
+      // Stats bar
+      SliverToBoxAdapter(child: _buildStatsBar()),
 
-    return CustomScrollView(
-      slivers: [
-        // Stats bar
-        SliverToBoxAdapter(child: _buildStatsBar()),
+      // Sección label + búsqueda
+      SliverToBoxAdapter(child: _buildSectionLabel('GESTIÓN DE USUARIOS')),
+      SliverToBoxAdapter(child: _buildSearchField()),
 
-        // Sección label + búsqueda
-        SliverToBoxAdapter(child: _buildSectionLabel('GESTIÓN DE USUARIOS')),
-        SliverToBoxAdapter(child: _buildSearchField()),
-
-        // Lista de usuarios
-        if (users.isEmpty)
-          SliverToBoxAdapter(child: _buildEmptyUsers())
-        else
-          SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (_, i) => _buildUserCard(users[i]),
-              childCount: users.length,
-            ),
+      // Lista de usuarios
+      if (users.isEmpty)
+        SliverToBoxAdapter(child: _buildEmptyUsers())
+      else
+        SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (_, i) => _buildUserCard(users[i]),
+            childCount: users.length,
           ),
+        ),
 
-        const SliverToBoxAdapter(child: SizedBox(height: 40)),
-      ],
-    );
-  }
+      // Sección permisos de tareas
+      SliverToBoxAdapter(child: _buildSectionLabel('PERMISOS DE TAREAS')),
+      SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: kCard,
+              border: Border.all(color: kPurple.withOpacity(0.2)),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: const TaskPermissionsWidget(),
+          ),
+        ),
+      ),
+
+      const SliverToBoxAdapter(child: SizedBox(height: 40)),
+    ],
+  );
+}
 
   Widget _buildStatsBar() {
     final all = _auth.users.where((u) => u.id != kSeedAdmin.id).toList();
