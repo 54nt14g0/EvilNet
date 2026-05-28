@@ -294,79 +294,80 @@ class ChatService {
   // ─── Recepción de conexiones ───────────────────────────────────────────────
 
   void _handleConnection(Socket socket) async {
-    try {
-      final chunks = <int>[];
-      final completer = Completer<void>();
-      socket.listen(
-        chunks.addAll,
-        onDone: completer.complete,
-        onError: (_) => completer.complete(),
-        cancelOnError: true,
-      );
-      await completer.future;
+  final completer = Completer<void>();
+  final chunks = <int>[];
+  late StreamSubscription sub;
 
-      final all = Uint8List.fromList(chunks);
-      if (all.length < 4) {
-        try {
-          await socket.close();
-        } catch (_) {}
-        return;
-      }
+  sub = socket.listen(
+    (data) => chunks.addAll(data),
+    onDone: () {
+      sub.cancel();
+      if (!completer.isCompleted) completer.complete();
+    },
+    onError: (_) {
+      sub.cancel();
+      if (!completer.isCompleted) completer.complete();
+    },
+    cancelOnError: false,
+  );
 
-      final headerLen = ByteData.view(all.buffer, 0, 4).getInt32(0, Endian.big);
-      if (all.length < 4 + headerLen) {
-        try {
-          await socket.close();
-        } catch (_) {}
-        return;
-      }
-
-      final header =
-          jsonDecode(utf8.decode(all.sublist(4, 4 + headerLen)))
-              as Map<String, dynamic>;
-
-      final packetType = header['type'] as String?;
-
-      // Cerrar SOLO si no necesitamos el socket para responder
-      // Cerrar SOLO si no necesitamos el socket para responder
-      if (packetType != 'request_broadcast_history' &&
-          packetType != 'request_chat_file' &&
-          packetType != 'request_private_history') {
-        try {
-          await socket.close();
-        } catch (_) {}
-      }
-
-      switch (packetType) {
-        case 'message_edit':
-          await _handleEditPacket(header);
-          break;
-        case 'message_delete':
-          await _handleDeletePacket(header);
-          break;
-        case 'request_chat_file':
-          await _handleChatFileRequest(socket, header, all, headerLen);
-          return;
-        case 'request_broadcast_history':
-          // El socket se cierra dentro de este método tras enviar la respuesta
-          await _handleBroadcastHistoryRequest(socket, all, headerLen);
-          return;
-        case 'read_receipt':
-          await _handleReadReceipt(header);
-          break;
-        case 'request_private_history':
-          await _handlePrivateHistoryRequest(socket, header);
-          return;
-        default:
-          await _handleIncomingMessage(header, all, headerLen);
-      }
-    } catch (e) {
-      print('[ChatService] Connection error: $e');
-      try {
-        await socket.close();
-      } catch (_) {}
-    }
+  try {
+    await completer.future.timeout(const Duration(seconds: 15));
+  } catch (_) {
+    sub.cancel();
   }
+
+  try {
+    final all = Uint8List.fromList(chunks);
+    if (all.length < 4) {
+      try { socket.destroy(); } catch (_) {}
+      return;
+    }
+
+    final headerLen = ByteData.view(all.buffer, 0, 4).getInt32(0, Endian.big);
+    if (all.length < 4 + headerLen) {
+      try { socket.destroy(); } catch (_) {}
+      return;
+    }
+
+    final header =
+        jsonDecode(utf8.decode(all.sublist(4, 4 + headerLen)))
+            as Map<String, dynamic>;
+    final packetType = header['type'] as String?;
+
+    if (packetType != 'request_broadcast_history' &&
+        packetType != 'request_chat_file' &&
+        packetType != 'request_private_history') {
+      try { socket.destroy(); } catch (_) {}
+    }
+
+    switch (packetType) {
+      case 'message_edit':
+        await _handleEditPacket(header);
+        break;
+      case 'message_delete':
+        await _handleDeletePacket(header);
+        break;
+      case 'request_chat_file':
+        await _handleChatFileRequest(socket, header, all, headerLen);
+        return;
+      case 'request_broadcast_history':
+        await _handleBroadcastHistoryRequest(socket, all, headerLen);
+        return;
+      case 'read_receipt':
+        await _handleReadReceipt(header);
+        break;
+      case 'request_private_history':
+        await _handlePrivateHistoryRequest(socket, header);
+        return;
+      default:
+        await _handleIncomingMessage(header, all, headerLen);
+    }
+  } catch (e) {
+    print('[ChatService] Connection error: $e');
+    try { socket.destroy(); } catch (_) {}
+  }
+}
 
   Future<void> _handlePrivateHistoryRequest(
     Socket socket,
@@ -507,123 +508,101 @@ class ChatService {
   }
 
   Future<void> syncPrivateWithPeer(String ip, String myUserId) async {
-    try {
-      final socket = await Socket.connect(
-        ip,
-        kChatPort,
-        timeout: const Duration(seconds: 8),
-      );
-      final headerBytes = utf8.encode(
-        jsonEncode({'type': 'request_private_history', 'senderId': myUserId}),
-      );
-      final lenBytes = ByteData(4)..setInt32(0, headerBytes.length, Endian.big);
-      socket.add(lenBytes.buffer.asUint8List());
-      socket.add(headerBytes);
-      await socket.flush();
-      // NO cerrar aquí — esperar la respuesta primero
+  Socket? socket;
+  try {
+    socket = await Socket.connect(ip, kChatPort,
+        timeout: const Duration(seconds: 8));
+    final headerBytes = utf8.encode(
+      jsonEncode({'type': 'request_private_history', 'senderId': myUserId}),
+    );
+    final lenBytes = ByteData(4)..setInt32(0, headerBytes.length, Endian.big);
+    socket.add(lenBytes.buffer.asUint8List());
+    socket.add(headerBytes);
+    await socket.flush();
+    await socket.close();
 
-      final chunks = <int>[];
-      await for (final chunk in socket) {
-        chunks.addAll(chunk);
-      }
-      await socket.close();
+    final completer = Completer<Uint8List>();
+    final chunks = <int>[];
+    late StreamSubscription sub;
+    sub = socket.listen(
+      (data) => chunks.addAll(data),
+      onDone: () {
+        sub.cancel();
+        if (!completer.isCompleted) completer.complete(Uint8List.fromList(chunks));
+      },
+      onError: (_) {
+        sub.cancel();
+        if (!completer.isCompleted) completer.complete(Uint8List.fromList(chunks));
+      },
+      cancelOnError: false,
+    );
+    final all = await completer.future.timeout(
+      const Duration(seconds: 20),
+      onTimeout: () { sub.cancel(); return Uint8List.fromList(chunks); },
+    );
 
-      if (chunks.isEmpty) return;
+    if (all.length < 4) return;
+    final respHeaderLen = ByteData.view(all.buffer, 0, 4).getInt32(0, Endian.big);
+    if (all.length < 4 + respHeaderLen) return;
 
-      final all = Uint8List.fromList(chunks);
-      if (all.length < 4) return;
+    final response = jsonDecode(utf8.decode(all.sublist(4, 4 + respHeaderLen)))
+        as Map<String, dynamic>;
+    if (response['type'] != 'private_history_response') return;
 
-      final respHeaderLen = ByteData.view(
-        all.buffer,
-        0,
-        4,
-      ).getInt32(0, Endian.big);
-      if (all.length < 4 + respHeaderLen) return;
+    final messages = response['messages'] as List? ?? [];
+    final prefs = await SharedPreferences.getInstance();
+    final key = _privateKey(myUserId);
+    final existing = prefs.getStringList(key) ?? [];
+    final existingIds = existing.map((s) {
+      try { return (jsonDecode(s) as Map)['id'] as String?; } catch (_) { return null; }
+    }).whereType<String>().toSet();
 
-      final response =
-          jsonDecode(utf8.decode(all.sublist(4, 4 + respHeaderLen)))
-              as Map<String, dynamic>;
+    bool changed = false;
+    final newMessages = <Message>[];
+    for (final raw in messages) {
+      try {
+        final j = Map<String, dynamic>.from(raw as Map);
+        final id = j['id'] as String?;
+        if (id == null || existingIds.contains(id)) continue;
+        final msgType = j['type'] as String? ?? 'text';
+        if (msgType != 'text') j['content'] = '';
+        existing.add(jsonEncode(j));
+        existingIds.add(id);
+        changed = true;
+        newMessages.add(Message.fromJson(j, j['senderId'] == myUserId));
+      } catch (_) {}
+    }
 
-      if (response['type'] != 'private_history_response') return;
-
-      final messages = response['messages'] as List? ?? [];
-      final prefs = await SharedPreferences.getInstance();
-      final key = _privateKey(myUserId);
-      final existing = prefs.getStringList(key) ?? [];
-
-      final existingIds = existing
-          .map((s) {
-            try {
-              return (jsonDecode(s) as Map)['id'] as String?;
-            } catch (_) {
-              return null;
-            }
-          })
-          .whereType<String>()
-          .toSet();
-
-      bool changed = false;
-      final newMessages = <Message>[];
-
-      for (final raw in messages) {
+    if (changed) {
+      existing.sort((a, b) {
         try {
-          final j = Map<String, dynamic>.from(raw as Map);
-          final id = j['id'] as String?;
-          if (id == null || existingIds.contains(id)) continue;
-
-          final msgType = j['type'] as String? ?? 'text';
-          if (msgType != 'text') {
-            j['content'] = '';
-          }
-
-          existing.add(jsonEncode(j));
-          existingIds.add(id);
-          changed = true;
-          final isMe = j['senderId'] == myUserId;
-          newMessages.add(Message.fromJson(j, isMe));
-        } catch (_) {}
+          final ta = DateTime.parse((jsonDecode(a) as Map)['timestamp'] as String);
+          final tb = DateTime.parse((jsonDecode(b) as Map)['timestamp'] as String);
+          return ta.compareTo(tb);
+        } catch (_) { return 0; }
+      });
+      await prefs.setStringList(key, existing);
+      newMessages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      for (final msg in newMessages) {
+        _controller.add(ChatEvent('message', msg));
       }
-
-      if (changed) {
-        existing.sort((a, b) {
-          try {
-            final ta = DateTime.parse(
-              (jsonDecode(a) as Map)['timestamp'] as String,
-            );
-            final tb = DateTime.parse(
-              (jsonDecode(b) as Map)['timestamp'] as String,
-            );
-            return ta.compareTo(tb);
-          } catch (_) {
-            return 0;
-          }
-        });
-        await prefs.setStringList(key, existing);
-
-        newMessages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-        for (final msg in newMessages) {
-          _controller.add(ChatEvent('message', msg));
-        }
-
-        for (final msg in newMessages) {
-          if (msg.type == MessageType.text) continue;
-
-          final rawMsg = messages.firstWhere(
-            (m) => (m as Map)['id'] == msg.id,
-            orElse: () => null,
-          );
-          if (rawMsg == null) continue;
-
-          final fileName = (rawMsg as Map)['fileName'] as String?;
-          if (fileName == null || fileName.isEmpty) continue;
-
+      for (final msg in newMessages) {
+        if (msg.type == MessageType.text) continue;
+        final rawMsg = messages.firstWhere(
+          (m) => (m as Map)['id'] == msg.id, orElse: () => null);
+        if (rawMsg == null) continue;
+        final fileName = (rawMsg as Map)['fileName'] as String?;
+        if (fileName != null && fileName.isNotEmpty) {
           _requestFileFromPeer(ip, msg.id, fileName);
         }
       }
-    } catch (e) {
-      print('[ChatService] syncPrivateWithPeer($ip) failed: $e');
     }
+  } catch (e) {
+    print('[ChatService] syncPrivateWithPeer($ip) failed: $e');
+  } finally {
+    try { socket?.destroy(); } catch (_) {}
   }
+}
 
   Future<void> _handleBroadcastHistoryRequest(
     Socket socket,
@@ -1037,117 +1016,97 @@ class ChatService {
   // ─── Sync de broadcast histórico con peers ────────────────────────────────
 
   /// Pide el historial broadcast a un peer y hace merge local.
-  Future<void> syncBroadcastWithPeer(String ip) async {
-    try {
-      final socket = await Socket.connect(
-        ip,
-        kChatPort,
-        timeout: const Duration(seconds: 8),
-      );
-      final headerBytes = utf8.encode(
-        jsonEncode({'type': 'request_broadcast_history', 'senderId': _myId}),
-      );
-      final lenBytes = ByteData(4)..setInt32(0, headerBytes.length, Endian.big);
-      socket.add(lenBytes.buffer.asUint8List());
-      socket.add(headerBytes);
-      await socket.flush();
-      await socket.close();
+ Future<void> syncBroadcastWithPeer(String ip) async {
+  Socket? socket;
+  try {
+    socket = await Socket.connect(ip, kChatPort,
+        timeout: const Duration(seconds: 8));
+    final headerBytes = utf8.encode(
+      jsonEncode({'type': 'request_broadcast_history', 'senderId': _myId}),
+    );
+    final lenBytes = ByteData(4)..setInt32(0, headerBytes.length, Endian.big);
+    socket.add(lenBytes.buffer.asUint8List());
+    socket.add(headerBytes);
+    await socket.flush();
+    await socket.close();
 
-      // Leer respuesta
-      final chunks = <int>[];
-      await for (final chunk in socket) {
-        chunks.addAll(chunk);
-      }
-      if (chunks.isEmpty) return;
+    final completer = Completer<Uint8List>();
+    final chunks = <int>[];
+    late StreamSubscription sub;
+    sub = socket.listen(
+      (data) => chunks.addAll(data),
+      onDone: () {
+        sub.cancel();
+        if (!completer.isCompleted) completer.complete(Uint8List.fromList(chunks));
+      },
+      onError: (_) {
+        sub.cancel();
+        if (!completer.isCompleted) completer.complete(Uint8List.fromList(chunks));
+      },
+      cancelOnError: false,
+    );
+    final all = await completer.future.timeout(
+      const Duration(seconds: 20),
+      onTimeout: () { sub.cancel(); return Uint8List.fromList(chunks); },
+    );
 
-      final all = Uint8List.fromList(chunks);
-      if (all.length < 4) return;
+    if (all.length < 4) return;
+    final respHeaderLen = ByteData.view(all.buffer, 0, 4).getInt32(0, Endian.big);
+    if (all.length < 4 + respHeaderLen) return;
 
-      final respHeaderLen = ByteData.view(
-        all.buffer,
-        0,
-        4,
-      ).getInt32(0, Endian.big);
-      if (all.length < 4 + respHeaderLen) return;
+    final response = jsonDecode(utf8.decode(all.sublist(4, 4 + respHeaderLen)))
+        as Map<String, dynamic>;
+    if (response['type'] != 'broadcast_history_response') return;
 
-      final response =
-          jsonDecode(utf8.decode(all.sublist(4, 4 + respHeaderLen)))
-              as Map<String, dynamic>;
+    final messages = response['messages'] as List? ?? [];
+    final myId = _myId;
+    final prefs = await SharedPreferences.getInstance();
+    final existing = prefs.getStringList(kBroadcastKey) ?? [];
+    final existingIds = existing.map((s) {
+      try { return (jsonDecode(s) as Map)['id'] as String?; } catch (_) { return null; }
+    }).whereType<String>().toSet();
 
-      if (response['type'] != 'broadcast_history_response') return;
-
-      final messages = response['messages'] as List? ?? [];
-      final myId = _myId;
-      final prefs = await SharedPreferences.getInstance();
-      final existing = prefs.getStringList(kBroadcastKey) ?? [];
-
-      final existingIds = existing
-          .map((s) {
-            try {
-              return (jsonDecode(s) as Map)['id'] as String?;
-            } catch (_) {
-              return null;
-            }
-          })
-          .whereType<String>()
-          .toSet();
-
-      bool changed = false;
-      final newMessages = <Message>[];
-
-      for (final raw in messages) {
-        try {
-          final j = Map<String, dynamic>.from(raw as Map);
-          final id = j['id'] as String?;
-          if (id == null || existingIds.contains(id)) continue;
-          existing.add(jsonEncode(j));
-          existingIds.add(id);
-          changed = true;
-
-          final isMe = j['senderId'] == myId;
-          newMessages.add(Message.fromJson(j, isMe));
-        } catch (_) {}
-      }
-
-      if (changed) {
-        // Ordenar por timestamp antes de guardar
-        existing.sort((a, b) {
-          try {
-            final ta = DateTime.parse(
-              (jsonDecode(a) as Map)['timestamp'] as String,
-            );
-            final tb = DateTime.parse(
-              (jsonDecode(b) as Map)['timestamp'] as String,
-            );
-            return ta.compareTo(tb);
-          } catch (_) {
-            return 0;
-          }
-        });
-        await prefs.setStringList(kBroadcastKey, existing);
-
-        // Emitir mensajes nuevos ordenados
-        newMessages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-        for (final msg in newMessages) {
-          _controller.add(ChatEvent('message', msg));
-        }
-      }
-      // Recuperar archivos faltantes de mensajes sincronizados
-      if (newMessages.isNotEmpty) {
-        for (final msg in newMessages) {
-          if (msg.type == MessageType.text) continue;
-          final file = File(msg.content);
-          if (file.existsSync()) continue;
-          final fileName = msg.content.split('/').last.split('\\').last;
-          if (fileName.isEmpty) continue;
-          // Pedir el archivo al peer que lo tiene
-          _requestFileFromPeer(ip, msg.id, fileName);
-        }
-      }
-    } catch (e) {
-      print('[ChatService] syncBroadcastWithPeer($ip) failed: $e');
+    bool changed = false;
+    final newMessages = <Message>[];
+    for (final raw in messages) {
+      try {
+        final j = Map<String, dynamic>.from(raw as Map);
+        final id = j['id'] as String?;
+        if (id == null || existingIds.contains(id)) continue;
+        existing.add(jsonEncode(j));
+        existingIds.add(id);
+        changed = true;
+        newMessages.add(Message.fromJson(j, j['senderId'] == myId));
+      } catch (_) {}
     }
+
+    if (changed) {
+      existing.sort((a, b) {
+        try {
+          final ta = DateTime.parse((jsonDecode(a) as Map)['timestamp'] as String);
+          final tb = DateTime.parse((jsonDecode(b) as Map)['timestamp'] as String);
+          return ta.compareTo(tb);
+        } catch (_) { return 0; }
+      });
+      await prefs.setStringList(kBroadcastKey, existing);
+      newMessages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      for (final msg in newMessages) {
+        _controller.add(ChatEvent('message', msg));
+      }
+      for (final msg in newMessages) {
+        if (msg.type == MessageType.text) continue;
+        if (File(msg.content).existsSync()) continue;
+        final fileName = msg.content.split('/').last.split('\\').last;
+        if (fileName.isNotEmpty) _requestFileFromPeer(ip, msg.id, fileName);
+      }
+    }
+  } catch (e) {
+    print('[ChatService] syncBroadcastWithPeer($ip) failed: $e');
+  } finally {
+    try { socket?.destroy(); } catch (_) {}
   }
+}
+
   // ── Contador de no leídos ──────────────────────────────────────────────────
 
   final Map<String, int> _unreadCounts = {};

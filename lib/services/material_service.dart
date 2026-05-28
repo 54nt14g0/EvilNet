@@ -107,61 +107,79 @@ void _onPeerCameOnline(String ip) {
 
   // ─── MANEJO DE CONEXIONES ENTRANTES ──────────────────────────────────────
   void _handleConnection(Socket socket) async {
-    try {
-      final chunks = <int>[];
-      await for (final chunk in socket) {
-        chunks.addAll(chunk);
-        if (chunks.length >= 4) {
-          final expectedLen = ByteData.view(
-            Uint8List.fromList(chunks.sublist(0, 4)).buffer,
-          ).getInt32(0, Endian.big);
-          if (chunks.length >= 4 + expectedLen) {
-            break;
-          }
-        }
-      }
+  final completer = Completer<Uint8List>();
+  final chunks = <int>[];
+  late StreamSubscription sub;
 
-      if (chunks.length < 4) {
-        await socket.close();
-        return;
-      }
+  sub = socket.listen(
+    (data) => chunks.addAll(data),
+    onDone: () {
+      sub.cancel();
+      if (!completer.isCompleted) completer.complete(Uint8List.fromList(chunks));
+    },
+    onError: (_) {
+      sub.cancel();
+      if (!completer.isCompleted) completer.complete(Uint8List.fromList(chunks));
+    },
+    cancelOnError: false,
+  );
 
-      final headerLen = ByteData.view(
-        Uint8List.fromList(chunks.sublist(0, 4)).buffer,
-      ).getInt32(0, Endian.big);
-
-      if (chunks.length < 4 + headerLen) {
-        print('[MaterialService] ❌ Incomplete header received');
-        await socket.close();
-        return;
-      }
-
-      final headerBytes = chunks.sublist(4, 4 + headerLen);
-      final header =
-          jsonDecode(utf8.decode(headerBytes)) as Map<String, dynamic>;
-      final type = header['type'] as String?;
-
-      print('[MaterialService] 📥 Received packet type: $type');
-
-      switch (type) {
-        case 'request_file':
-          await _handleFileRequest(socket, header);
-          break;
-        case 'sync_request':
-          await _handleSyncRequest(socket);
-          break;
-        default:
-          print('[MaterialService] ⚠️ Unknown packet type: $type');
-          await socket.close();
-      }
-    } catch (e, stack) {
-      print('[MaterialService] ❌ Error handling connection: $e');
-      print('Stack: $stack');
-      try {
-        await socket.close();
-      } catch (_) {}
-    }
+  Uint8List allBytes;
+  try {
+    allBytes = await completer.future.timeout(
+      const Duration(seconds: 15),
+      onTimeout: () { sub.cancel(); return Uint8List.fromList(chunks); },
+    );
+  } catch (_) {
+    try { socket.destroy(); } catch (_) {}
+    return;
   }
+
+  if (allBytes.length < 4) {
+    try { socket.destroy(); } catch (_) {}
+    return;
+  }
+
+  final headerLen = ByteData.view(
+    allBytes.buffer, 0, 4,
+  ).getInt32(0, Endian.big);
+
+  if (allBytes.length < 4 + headerLen) {
+    print('[MaterialService] ❌ Incomplete header received');
+    try { socket.destroy(); } catch (_) {}
+    return;
+  }
+
+  Map<String, dynamic> header;
+  try {
+    header = jsonDecode(utf8.decode(allBytes.sublist(4, 4 + headerLen)))
+        as Map<String, dynamic>;
+  } catch (_) {
+    try { socket.destroy(); } catch (_) {}
+    return;
+  }
+
+  final type = header['type'] as String?;
+  print('[MaterialService] 📥 Received packet type: $type');
+
+  try {
+    switch (type) {
+      case 'request_file':
+        await _handleFileRequest(socket, header);
+        break;
+      case 'sync_request':
+        await _handleSyncRequest(socket);
+        break;
+      default:
+        print('[MaterialService] ⚠️ Unknown packet type: $type');
+        try { socket.destroy(); } catch (_) {}
+    }
+  } catch (e, stack) {
+    print('[MaterialService] ❌ Error handling connection: $e');
+    print('Stack: $stack');
+    try { socket.destroy(); } catch (_) {}
+  }
+}
 
   // ─── CARGAR/GUARDAR ───────────────────────────────────────────────────────
   Future<void> _loadFiles() async {

@@ -160,105 +160,134 @@ class UniverseService {
   }
 
   void _handleConnection(Socket socket) async {
-    try {
-      final chunks = <int>[];
-      await for (final chunk in socket) {
-        chunks.addAll(chunk);
-      }
-      if (chunks.isEmpty) return;
+  final completer = Completer<Uint8List>();
+  final chunks = <int>[];
+  late StreamSubscription sub;
 
-      Map<String, dynamic>? packet;
-      try {
-        packet = jsonDecode(utf8.decode(chunks)) as Map<String, dynamic>;
-      } catch (_) {
-        return;
-      }
+  sub = socket.listen(
+    (data) => chunks.addAll(data),
+    onDone: () {
+      sub.cancel();
+      if (!completer.isCompleted) completer.complete(Uint8List.fromList(chunks));
+    },
+    onError: (_) {
+      sub.cancel();
+      if (!completer.isCompleted) completer.complete(Uint8List.fromList(chunks));
+    },
+    cancelOnError: false,
+  );
 
-      final type = packet['type'] as String?;
-
-      switch (type) {
-        case 'request_data':
-          socket.add(utf8.encode(jsonEncode(_buildFullPayload())));
-          await socket.flush();
-          break;
-
-        case 'full_push':
-          await _mergeFullPayload(packet);
-          break;
-
-        case 'universe_upsert':
-          await _receiveUniverseUpsert(packet);
-          break;
-
-        case 'universe_delete':
-          await _deleteUniverseLocal(packet['universeId'] as String);
-          break;
-
-        case 'central_topic_upsert':
-          await _receiveCentralTopicUpsert(packet);
-          break;
-
-        case 'idea_upsert':
-          await _receiveIdeaUpsert(packet);
-          break;
-
-        case 'idea_delete':
-          await _deleteIdeaLocal(packet['ideaId'] as String);
-          break;
-
-        case 'idea_move':
-          final id = packet['ideaId'] as String;
-          final x = (packet['x'] as num).toDouble();
-          final y = (packet['y'] as num).toDouble();
-          final idea = _ideas[id];
-          if (idea != null) {
-            _ideas[id] = idea.copyWith(x: x, y: y);
-            await _saveLocal();
-            _emit();
-          }
-          break;
-
-        case 'idea_rate':
-          final ideaId = packet['ideaId'] as String;
-          final userId = packet['userId'] as String;
-          final rating = packet['rating'] as int;
-          final idea = _ideas[ideaId];
-          if (idea != null) {
-            final newRatings = Map<String, int>.from(idea.ratings);
-            newRatings[userId] = rating;
-            _ideas[ideaId] = idea.copyWith(ratings: newRatings);
-            await _saveLocal();
-            _emit();
-          }
-          break;
-
-        case 'request_cover_image':
-          final fileName = packet['fileName'] as String?;
-          if (fileName == null) break;
-          final dir = await getApplicationDocumentsDirectory();
-          final file = File('${dir.path}/$fileName');
-          if (await file.exists()) {
-            final bytes = await file.readAsBytes();
-            socket.add(
-              utf8.encode(
-                jsonEncode({
-                  'type': 'cover_image_response',
-                  'fileName': fileName,
-                  'imageBase64': base64Encode(bytes),
-                }),
-              ),
-            );
-            await socket.flush();
-          }
-          break;
-      }
-    } catch (e) {
-      print('[Universe] Connection error: $e');
-    } finally {
-      await socket.close();
-    }
+  Uint8List allBytes;
+  try {
+    allBytes = await completer.future.timeout(
+      const Duration(seconds: 30),
+      onTimeout: () { sub.cancel(); return Uint8List.fromList(chunks); },
+    );
+  } catch (_) {
+    try { socket.destroy(); } catch (_) {}
+    return;
   }
 
+  if (allBytes.isEmpty) {
+    try { socket.destroy(); } catch (_) {}
+    return;
+  }
+
+  Map<String, dynamic>? packet;
+  try {
+    packet = jsonDecode(utf8.decode(allBytes)) as Map<String, dynamic>;
+  } catch (_) {
+    try { socket.destroy(); } catch (_) {}
+    return;
+  }
+
+  final type = packet['type'] as String?;
+  final needsResponse = {'request_data', 'request_cover_image'};
+
+  if (!needsResponse.contains(type)) {
+    try { socket.destroy(); } catch (_) {}
+  }
+
+  try {
+    switch (type) {
+      case 'request_data':
+        socket.add(utf8.encode(jsonEncode(_buildFullPayload())));
+        await socket.flush();
+        try { socket.destroy(); } catch (_) {}
+        break;
+
+      case 'full_push':
+        await _mergeFullPayload(packet);
+        break;
+
+      case 'universe_upsert':
+        await _receiveUniverseUpsert(packet);
+        break;
+
+      case 'universe_delete':
+        await _deleteUniverseLocal(packet['universeId'] as String);
+        break;
+
+      case 'central_topic_upsert':
+        await _receiveCentralTopicUpsert(packet);
+        break;
+
+      case 'idea_upsert':
+        await _receiveIdeaUpsert(packet);
+        break;
+
+      case 'idea_delete':
+        await _deleteIdeaLocal(packet['ideaId'] as String);
+        break;
+
+      case 'idea_move':
+        final id = packet['ideaId'] as String;
+        final x = (packet['x'] as num).toDouble();
+        final y = (packet['y'] as num).toDouble();
+        final idea = _ideas[id];
+        if (idea != null) {
+          _ideas[id] = idea.copyWith(x: x, y: y);
+          await _saveLocal();
+          _emit();
+        }
+        break;
+
+      case 'idea_rate':
+        final ideaId = packet['ideaId'] as String;
+        final userId = packet['userId'] as String;
+        final rating = packet['rating'] as int;
+        final idea = _ideas[ideaId];
+        if (idea != null) {
+          final newRatings = Map<String, int>.from(idea.ratings);
+          newRatings[userId] = rating;
+          _ideas[ideaId] = idea.copyWith(ratings: newRatings);
+          await _saveLocal();
+          _emit();
+        }
+        break;
+
+      case 'request_cover_image':
+        final fileName = packet['fileName'] as String?;
+        if (fileName == null) { try { socket.destroy(); } catch (_) {} break; }
+        final dir = await getApplicationDocumentsDirectory();
+        final file = File('${dir.path}/$fileName');
+        if (await file.exists()) {
+          final bytes = await file.readAsBytes();
+          socket.add(utf8.encode(jsonEncode({
+            'type': 'cover_image_response',
+            'fileName': fileName,
+            'imageBase64': base64Encode(bytes),
+          })));
+          await socket.flush();
+        }
+        try { socket.destroy(); } catch (_) {}
+        break;
+    }
+  } catch (e) {
+    print('[Universe] Connection error: $e');
+    try { socket.destroy(); } catch (_) {}
+  }
+}
   // ─── Receive helpers ──────────────────────────────────────────────────────
 
   Future<void> _receiveUniverseUpsert(Map<String, dynamic> packet) async {
@@ -348,30 +377,45 @@ class UniverseService {
     }
   }
 
-  Future<void> _requestDataFrom(String ip) async {
-    try {
-      final socket = await Socket.connect(
-        ip,
-        kUniversePort,
-        timeout: const Duration(seconds: 5),
-      );
-      socket.add(utf8.encode(jsonEncode({'type': 'request_data'})));
-      await socket.flush();
-      await socket.close();
+ Future<void> _requestDataFrom(String ip) async {
+  Socket? socket;
+  try {
+    socket = await Socket.connect(ip, kUniversePort,
+        timeout: const Duration(seconds: 5));
+    socket.add(utf8.encode(jsonEncode({'type': 'request_data'})));
+    await socket.flush();
+    await socket.close();
 
-      final chunks = <int>[];
-      await for (final chunk in socket) {
-        chunks.addAll(chunk);
-      }
-      if (chunks.isEmpty) return;
+    final completer = Completer<Uint8List>();
+    final chunks = <int>[];
+    late StreamSubscription sub;
+    sub = socket.listen(
+      (data) => chunks.addAll(data),
+      onDone: () {
+        sub.cancel();
+        if (!completer.isCompleted) completer.complete(Uint8List.fromList(chunks));
+      },
+      onError: (_) {
+        sub.cancel();
+        if (!completer.isCompleted) completer.complete(Uint8List.fromList(chunks));
+      },
+      cancelOnError: false,
+    );
 
-      final data = jsonDecode(utf8.decode(chunks)) as Map<String, dynamic>;
-      await _mergeFullPayload(data);
-    } catch (e) {
-      print('[Universe] _requestDataFrom($ip) failed: $e');
-    }
+    final allBytes = await completer.future.timeout(
+      const Duration(seconds: 30),
+      onTimeout: () { sub.cancel(); return Uint8List.fromList(chunks); },
+    );
+
+    if (allBytes.isEmpty) return;
+    final data = jsonDecode(utf8.decode(allBytes)) as Map<String, dynamic>;
+    await _mergeFullPayload(data);
+  } catch (e) {
+    print('[Universe] _requestDataFrom($ip) failed: $e');
+  } finally {
+    try { socket?.destroy(); } catch (_) {}
   }
-
+}
   Map<String, dynamic> _buildFullPayload() {
     final universesJson = <Map<String, dynamic>>[];
     for (final u in _universes.values) {

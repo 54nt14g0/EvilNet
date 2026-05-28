@@ -451,139 +451,185 @@ class AuthService {
   }
 
   void _handleAuthConnection(Socket socket) async {
+  final completer = Completer<Uint8List>();
+  final chunks = <int>[];
+  late StreamSubscription sub;
+
+  sub = socket.listen(
+    (data) => chunks.addAll(data),
+    onDone: () {
+      sub.cancel();
+      if (!completer.isCompleted) {
+        completer.complete(Uint8List.fromList(chunks));
+      }
+    },
+    onError: (_) {
+      sub.cancel();
+      if (!completer.isCompleted) {
+        completer.complete(Uint8List.fromList(chunks));
+      }
+    },
+    cancelOnError: false,
+  );
+
+  Uint8List allBytes;
   try {
-    final chunks = <int>[];
-    await for (final chunk in socket) {
-      chunks.addAll(chunk);
-    }
-    if (chunks.isEmpty) {
-      try { await socket.close(); } catch (_) {}
-      return;
-    }
+    allBytes = await completer.future.timeout(
+      const Duration(seconds: 15),
+      onTimeout: () {
+        sub.cancel();
+        return Uint8List.fromList(chunks);
+      },
+    );
+  } catch (_) {
+    try { socket.destroy(); } catch (_) {}
+    return;
+  }
 
-    final raw = utf8.decode(chunks);
-    final data = jsonDecode(raw) as Map<String, dynamic>;
-    final type = data['type'] as String?;
+  if (allBytes.isEmpty) {
+    try { socket.destroy(); } catch (_) {}
+    return;
+  }
 
-    // ── Mapeo IP → username ─────────────────────────────────────────────
-    if (type == 'ip_mapping') {
-      final remoteIp = data['ip'] as String?;
-      final remoteUsername = data['username'] as String?;
-      if (remoteIp != null && remoteUsername != null) {
-        _ipToUsername[remoteIp] = remoteUsername;
-        _saveIpMapping();
-        _authController.add('users_updated');
-        Future.delayed(const Duration(seconds: 1), () async {
-          final u = _ipToUsername[remoteIp];
-          if (u != null) {
-            final matches = _users.where((usr) => usr.username == u);
-            if (matches.isNotEmpty) {
-              await ChatService().flushPendingFor(matches.first.id);
-            }
+  Map<String, dynamic> data;
+  try {
+    data = jsonDecode(utf8.decode(allBytes)) as Map<String, dynamic>;
+  } catch (_) {
+    try { socket.destroy(); } catch (_) {}
+    return;
+  }
+
+  final type = data['type'] as String?;
+
+  if (type == 'ip_mapping') {
+    try { socket.destroy(); } catch (_) {}
+    final remoteIp = data['ip'] as String?;
+    final remoteUsername = data['username'] as String?;
+    if (remoteIp != null && remoteUsername != null) {
+      _ipToUsername[remoteIp] = remoteUsername;
+      _saveIpMapping();
+      _authController.add('users_updated');
+      Future.delayed(const Duration(seconds: 1), () async {
+        final u = _ipToUsername[remoteIp];
+        if (u != null) {
+          final matches = _users.where((usr) => usr.username == u);
+          if (matches.isNotEmpty) {
+            await ChatService().flushPendingFor(matches.first.id);
           }
-        });
-      }
-      try { await socket.close(); } catch (_) {}
-      return;
+        }
+      });
     }
+    return;
+  }
 
-    // ── Petición de lista de usuarios ───────────────────────────────────
-    if (type == 'request_users') {
-      try {
-        final usersJson = await _buildUsersPayload();
-        final response = jsonEncode({
-          'type': 'users_response',
-          'version': _version,
-          'users': usersJson,
-        });
-        socket.add(utf8.encode(response));
-        await socket.flush();
-        // Solo cerrar el lado de escritura, el cliente ya cerró el suyo
-        await socket.close();
-      } catch (e) {
-        print('[AuthService] request_users response error: $e');
-        try { await socket.close(); } catch (_) {}
-      }
-      return;
+  if (type == 'request_users') {
+    try {
+      final usersJson = await _buildUsersPayload();
+      final response = utf8.encode(jsonEncode({
+        'type': 'users_response',
+        'version': _version,
+        'users': usersJson,
+      }));
+      socket.add(response);
+      await socket.flush();
+      await socket.close();
+      await socket.done;
+    } catch (e) {
+      print('[AuthService] request_users response error: $e');
+      try { socket.destroy(); } catch (_) {}
     }
+    return;
+  }
 
-    // ── Push / propagación de usuarios ──────────────────────────────────
-    if (type == 'users_push' || type == 'users_propagate') {
-      final originIp = data['originIp'] as String?;
-      try { await socket.close(); } catch (_) {}
-      final changed = await _mergeRemoteUsers(data);
+  if (type == 'users_push' || type == 'users_propagate') {
+    final originIp = data['originIp'] as String?;
+    try { socket.destroy(); } catch (_) {}
+    final changed = await _mergeRemoteUsers(data);
+    if (changed) {
+      final myIp = PeerService().myIp;
+      final peersToForward = PeerService().knownPeers.keys
+          .where((ip) => ip != originIp && ip != myIp)
+          .toList();
+      if (peersToForward.isNotEmpty) {
+        unawaited(_propagateToAll(peersToForward));
+      }
+    }
+    return;
+  }
 
-      if (changed) {
+  if (type == 'user_delete') {
+    final userId = data['userId'] as String?;
+    final originIp = data['originIp'] as String?;
+    try { socket.destroy(); } catch (_) {}
+    if (userId != null && userId != kSeedAdmin.id) {
+      final idx = _users.indexWhere((u) => u.id == userId);
+      if (idx != -1) {
+        _users.removeAt(idx);
+        _version++;
+        await _saveLocalUsers();
+        _authController.add('users_updated');
         final myIp = PeerService().myIp;
         final peersToForward = PeerService().knownPeers.keys
             .where((ip) => ip != originIp && ip != myIp)
             .toList();
         if (peersToForward.isNotEmpty) {
-          unawaited(_propagateToAll(peersToForward));
+          unawaited(_broadcastUserDelete(userId, peersToForward, originIp: myIp));
         }
       }
-      return;
     }
-
-    // ── Eliminación de usuario ───────────────────────────────────────────
-    if (type == 'user_delete') {
-      final userId = data['userId'] as String?;
-      final originIp = data['originIp'] as String?;
-      try { await socket.close(); } catch (_) {}
-      if (userId != null && userId != kSeedAdmin.id) {
-        final idx = _users.indexWhere((u) => u.id == userId);
-        if (idx != -1) {
-          _users.removeAt(idx);
-          _version++;
-          await _saveLocalUsers();
-          _authController.add('users_updated');
-
-          final myIp = PeerService().myIp;
-          final peersToForward = PeerService().knownPeers.keys
-              .where((ip) => ip != originIp && ip != myIp)
-              .toList();
-          if (peersToForward.isNotEmpty) {
-            unawaited(
-              _broadcastUserDelete(userId, peersToForward, originIp: myIp),
-            );
-          }
-        }
-      }
-      return;
-    }
-
-    try { await socket.close(); } catch (_) {}
-  } catch (e) {
-    print('[AuthService] _handleAuthConnection error: $e');
-    try { await socket.close(); } catch (_) {}
+    return;
   }
+
+  try { socket.destroy(); } catch (_) {}
 }
   // ─── Sincronización con peers ─────────────────────────────────────────────
 
   Future<void> _requestUsersFrom(String ip) async {
+  Socket? socket;
   try {
-    final socket = await Socket.connect(
-      ip,
-      kAuthPort,
+    socket = await Socket.connect(
+      ip, kAuthPort,
       timeout: const Duration(seconds: 5),
     );
     socket.add(utf8.encode(jsonEncode({'type': 'request_users'})));
     await socket.flush();
-    // Half-close: señal al servidor que terminamos de enviar
     await socket.close();
 
-    // Ahora leer la respuesta completa
+    final completer = Completer<Uint8List>();
     final chunks = <int>[];
-    await for (final chunk in socket) {
-      chunks.addAll(chunk);
-    }
+    late StreamSubscription sub;
+    sub = socket.listen(
+      (data) => chunks.addAll(data),
+      onDone: () {
+        sub.cancel();
+        if (!completer.isCompleted) {
+          completer.complete(Uint8List.fromList(chunks));
+        }
+      },
+      onError: (_) {
+        sub.cancel();
+        if (!completer.isCompleted) {
+          completer.complete(Uint8List.fromList(chunks));
+        }
+      },
+      cancelOnError: false,
+    );
 
-    if (chunks.isEmpty) return;
+    final allBytes = await completer.future.timeout(
+      const Duration(seconds: 15),
+      onTimeout: () {
+        sub.cancel();
+        return Uint8List.fromList(chunks);
+      },
+    );
 
-    final data = jsonDecode(utf8.decode(chunks)) as Map<String, dynamic>;
+    if (allBytes.isEmpty) return;
+    final data = jsonDecode(utf8.decode(allBytes)) as Map<String, dynamic>;
     await _mergeRemoteUsers(data);
   } catch (e) {
     print('[AuthService] _requestUsersFrom($ip) failed: $e');
+  } finally {
+    try { socket?.destroy(); } catch (_) {}
   }
 }
   // ─── Merge de usuarios remotos ────────────────────────────────────────────

@@ -432,41 +432,80 @@ Timer? _saveDebounce;
   }
 
   void _handleConnection(Socket socket) async {
+  final completer = Completer<Uint8List>();
+  final chunks = <int>[];
+  late StreamSubscription sub;
+
+  sub = socket.listen(
+    (data) => chunks.addAll(data),
+    onDone: () {
+      sub.cancel();
+      if (!completer.isCompleted) completer.complete(Uint8List.fromList(chunks));
+    },
+    onError: (_) {
+      sub.cancel();
+      if (!completer.isCompleted) completer.complete(Uint8List.fromList(chunks));
+    },
+    cancelOnError: false,
+  );
+
+  Uint8List allBytes;
   try {
-    final chunks = <int>[];
-    await for (final chunk in socket) {
-      chunks.addAll(chunk);
-    }
-    if (chunks.isEmpty) return;
+    allBytes = await completer.future.timeout(
+      const Duration(seconds: 30),
+      onTimeout: () { sub.cancel(); return Uint8List.fromList(chunks); },
+    );
+  } catch (_) {
+    try { socket.destroy(); } catch (_) {}
+    return;
+  }
 
-    String? type;
-    Map<String, dynamic>? packet;
+  if (allBytes.isEmpty) {
+    try { socket.destroy(); } catch (_) {}
+    return;
+  }
 
-    try {
-      final raw = utf8.decode(chunks);
-      packet = jsonDecode(raw) as Map<String, dynamic>;
-      type = packet['type'] as String?;
-    } catch (_) {
-      if (chunks.length >= 4) {
-        final headerLen = ByteData.view(
-          Uint8List.fromList(chunks.sublist(0, 4)).buffer,
-        ).getInt32(0, Endian.big);
-        if (chunks.length >= 4 + headerLen) {
-          final headerBytes = chunks.sublist(4, 4 + headerLen);
-          packet =
-              jsonDecode(utf8.decode(headerBytes)) as Map<String, dynamic>;
+  String? type;
+  Map<String, dynamic>? packet;
+
+  try {
+    final raw = utf8.decode(allBytes);
+    packet = jsonDecode(raw) as Map<String, dynamic>;
+    type = packet['type'] as String?;
+  } catch (_) {
+    if (allBytes.length >= 4) {
+      try {
+        final headerLen = ByteData.view(allBytes.buffer, 0, 4).getInt32(0, Endian.big);
+        if (allBytes.length >= 4 + headerLen) {
+          packet = jsonDecode(utf8.decode(allBytes.sublist(4, 4 + headerLen)))
+              as Map<String, dynamic>;
           type = packet['type'] as String?;
         }
-      }
+      } catch (_) {}
     }
+  }
 
-    if (packet == null || type == null) return;
+  if (packet == null || type == null) {
+    try { socket.destroy(); } catch (_) {}
+    return;
+  }
 
+  // Los tipos que necesitan responder NO destruyen el socket antes
+  final needsResponse = {
+    'request_data', 'request_cover_image', 'request_comment_images', 'image_transfer'
+  };
+
+  if (!needsResponse.contains(type)) {
+    try { socket.destroy(); } catch (_) {}
+  }
+
+  try {
     switch (type) {
       case 'request_data':
         final response = _buildFullPayload();
         socket.add(utf8.encode(jsonEncode(response)));
         await socket.flush();
+        try { socket.destroy(); } catch (_) {}
         break;
 
       case 'full_push':
@@ -474,25 +513,15 @@ Timer? _saveDebounce;
         break;
 
       case 'topic_upsert':
-        final topic = StudyTopic.fromJson(
-          packet['topic'] as Map<String, dynamic>,
-        );
+        final topic = StudyTopic.fromJson(packet['topic'] as Map<String, dynamic>);
         final imageBase64 = packet['imageBase64'] as String?;
         final imageFileName = packet['imageFileName'] as String?;
         final embeddedImages = packet['embeddedImages'] as List?;
-
         String? validCoverPath;
-
-        // Guardar portada
         if (imageBase64 != null && imageFileName != null) {
           try {
             final dir = await getApplicationDocumentsDirectory();
-            // ✅ CORREGIDO: null-check y operador !
-            final safeFileName = imageFileName
-                .split('/')
-                .last
-                .split('\\')
-                .last;
+            final safeFileName = imageFileName.split('/').last.split('\\').last;
             final destPath = '${dir.path}/$safeFileName';
             await File(destPath).writeAsBytes(base64Decode(imageBase64));
             validCoverPath = destPath;
@@ -500,8 +529,6 @@ Timer? _saveDebounce;
             print('[StudyRoom] Error saving cover image: $e');
           }
         }
-
-        // Guardar imágenes embebidas y reparar rutas en el Delta
         String fixedDelta = topic.contentDelta;
         if (embeddedImages != null && embeddedImages.isNotEmpty) {
           final dir = await getApplicationDocumentsDirectory();
@@ -510,13 +537,7 @@ Timer? _saveDebounce;
             final imgMap = img as Map<String, dynamic>;
             final fileName = imgMap['fileName'] as String;
             final b64 = imgMap['base64'] as String;
-            
-            // ✅ CORREGIDO: usar fileName (no imageFileName) y sanitizar ruta
-            final safeFileName = fileName
-                .split('/')
-                .last
-                .split('\\')
-                .last;
+            final safeFileName = fileName.split('/').last.split('\\').last;
             final destPath = '${dir.path}/$safeFileName';
             try {
               await File(destPath).writeAsBytes(base64Decode(b64));
@@ -525,41 +546,25 @@ Timer? _saveDebounce;
               print('[StudyRoom] Error saving embedded image: $e');
             }
           }
-          fixedDelta = await _fixEmbeddedImagePaths(
-            topic.contentDelta,
-            fileNameToLocalPath,
-          );
+          fixedDelta = await _fixEmbeddedImagePaths(topic.contentDelta, fileNameToLocalPath);
         }
-
-        final topicToSave = StudyTopic(
-          id: topic.id,
-          title: topic.title,
-          contentDelta: fixedDelta,
+        await _upsertTopicLocal(StudyTopic(
+          id: topic.id, title: topic.title, contentDelta: fixedDelta,
           coverImagePath: validCoverPath ?? topic.coverImagePath,
-          minHierarchy: topic.minHierarchy,
-          isSequential: topic.isSequential,
-          requiredTopicIds: topic.requiredTopicIds,
-          unlocksTopicIds: topic.unlocksTopicIds,
-          requiresApproval: topic.requiresApproval,
-          order: topic.order,
-          creatorId: topic.creatorId,
-          createdAt: topic.createdAt,
-          updatedAt: topic.updatedAt,
-          passwordHash: topic.passwordHash,  
-        );
-        await _upsertTopicLocal(topicToSave);
+          minHierarchy: topic.minHierarchy, isSequential: topic.isSequential,
+          requiredTopicIds: topic.requiredTopicIds, unlocksTopicIds: topic.unlocksTopicIds,
+          requiresApproval: topic.requiresApproval, order: topic.order,
+          creatorId: topic.creatorId, createdAt: topic.createdAt, updatedAt: topic.updatedAt,
+          passwordHash: topic.passwordHash,
+        ));
         break;
 
       case 'topic_delete':
-        final id = packet['topicId'] as String;
-        await _deleteTopicLocal(id);
+        await _deleteTopicLocal(packet['topicId'] as String);
         break;
 
       case 'comment_upsert':
-        final comment = StudyComment.fromJson(
-          packet['comment'] as Map<String, dynamic>,
-        );
-        // Guardar imágenes embebidas si vienen en el packet
+        final comment = StudyComment.fromJson(packet['comment'] as Map<String, dynamic>);
         final images = packet['images'] as List?;
         if (images != null && images.isNotEmpty) {
           final dir = await getApplicationDocumentsDirectory();
@@ -567,79 +572,56 @@ Timer? _saveDebounce;
           for (final img in images) {
             final imgMap = img as Map<String, dynamic>;
             final fileName = imgMap['fileName'] as String;
-            final b64 = imgMap['base64'] as String;
-            
-            // ✅ CORREGIDO: sanitizar nombre de archivo
-            final safeFileName = fileName
-                .split('/')
-                .last
-                .split('\\')
-                .last;
+            final safeFileName = fileName.split('/').last.split('\\').last;
             final destPath = '${dir.path}/$safeFileName';
             try {
-              await File(destPath).writeAsBytes(base64Decode(b64));
+              await File(destPath).writeAsBytes(base64Decode(imgMap['base64'] as String));
               savedPaths.add(destPath);
-            } catch (e) {
-              print('[StudyRoom] Error saving comment image: $e');
-            }
+            } catch (_) {}
           }
-          // Reconstruir el comentario con las rutas locales correctas
-          final fixedComment = StudyComment(
-            id: comment.id,
-            topicId: comment.topicId,
-            userId: comment.userId,
-            username: comment.username,
-            content: comment.content,
-            imagePaths: savedPaths,
-            status: comment.status,
-            timestamp: comment.timestamp,
-            isEdited: comment.isEdited,
-          );
-          await _upsertCommentLocal(fixedComment);
+          await _upsertCommentLocal(StudyComment(
+            id: comment.id, topicId: comment.topicId, userId: comment.userId,
+            username: comment.username, content: comment.content, imagePaths: savedPaths,
+            status: comment.status, timestamp: comment.timestamp, isEdited: comment.isEdited,
+          ));
         } else {
           await _upsertCommentLocal(comment);
         }
         break;
 
       case 'comment_delete':
-        final commentId = packet['commentId'] as String;
-        await _deleteCommentLocal(commentId);
+        await _deleteCommentLocal(packet['commentId'] as String);
         break;
 
       case 'progress_update':
-        final prog = UserProgress.fromJson(
-          packet['progress'] as Map<String, dynamic>,
-        );
-        await _upsertProgressLocal(prog);
+        await _upsertProgressLocal(
+            UserProgress.fromJson(packet['progress'] as Map<String, dynamic>));
         break;
-        
+
       case 'request_cover_image':
         final fileName = packet['fileName'] as String?;
-        if (fileName == null) break;
+        if (fileName == null) { try { socket.destroy(); } catch (_) {} break; }
         final dir = await getApplicationDocumentsDirectory();
         final file = File('${dir.path}/$fileName');
         if (!await file.exists()) {
-          socket.add(
-            utf8.encode(jsonEncode({'type': 'cover_image_not_found'})),
-          );
-          await socket.flush();
+          socket.add(utf8.encode(jsonEncode({'type': 'cover_image_not_found'})));
         } else {
           final bytes = await file.readAsBytes();
-          final response = jsonEncode({
+          socket.add(utf8.encode(jsonEncode({
             'type': 'cover_image_response',
             'fileName': fileName,
             'imageBase64': base64Encode(bytes),
-          });
-          socket.add(utf8.encode(response));
-          await socket.flush();
+          })));
         }
+        await socket.flush();
+        try { socket.destroy(); } catch (_) {}
         break;
 
       case 'request_comment_images':
         final commentId = packet['commentId'] as String?;
-        if (commentId == null) break;
+        if (commentId == null) { try { socket.destroy(); } catch (_) {} break; }
         final comment = _comments[commentId];
-        if (comment == null) break;
+        if (comment == null) { try { socket.destroy(); } catch (_) {} break; }
         final dir = await getApplicationDocumentsDirectory();
         final imagePayloads = <Map<String, String>>[];
         for (final imgPath in comment.imagePaths) {
@@ -647,33 +629,27 @@ Timer? _saveDebounce;
           if (!await f.exists()) continue;
           try {
             final bytes = await f.readAsBytes();
-            final fileName = imgPath.split(Platform.pathSeparator).last;
-            imagePayloads.add({
-              'fileName': fileName,
-              'base64': base64Encode(bytes),
-            });
+            final fn = imgPath.split(Platform.pathSeparator).last;
+            imagePayloads.add({'fileName': fn, 'base64': base64Encode(bytes)});
           } catch (_) {}
         }
-        socket.add(
-          utf8.encode(
-            jsonEncode({
-              'type': 'comment_images_response',
-              'commentId': commentId,
-              'images': imagePayloads,
-            }),
-          ),
-        );
+        socket.add(utf8.encode(jsonEncode({
+          'type': 'comment_images_response',
+          'commentId': commentId,
+          'images': imagePayloads,
+        })));
         await socket.flush();
+        try { socket.destroy(); } catch (_) {}
         break;
-        
+
       case 'image_transfer':
-        await _receiveImageTransfer(socket, packet, chunks);
+        await _receiveImageTransfer(socket, packet, allBytes.toList());
+        try { socket.destroy(); } catch (_) {}
         break;
     }
   } catch (e) {
     print('[StudyRoom] Connection error: $e');
-  } finally {
-    await socket.close();
+    try { socket.destroy(); } catch (_) {}
   }
 }
   // ─── Transferencia de imágenes ────────────────────────────────────────────
@@ -781,46 +757,55 @@ Timer? _saveDebounce;
   /// Ahora: enviamos el request, hacemos half-close (shutdown send),
   /// leemos toda la respuesta, LUEGO cerramos.
   Future<void> _requestDataFrom(String ip) async {
-    print('🔵 [StudyRoom] _requestDataFrom($ip) START');
-    try {
-      final socket = await Socket.connect(
-        ip,
-        kStudyPort,
-        timeout: const Duration(seconds: 5),
-      );
-      print('🔵 [StudyRoom] Connected to $ip:$kStudyPort');
+  print('🔵 [StudyRoom] _requestDataFrom($ip) START');
+  Socket? socket;
+  try {
+    socket = await Socket.connect(ip, kStudyPort,
+        timeout: const Duration(seconds: 5));
+    print('🔵 [StudyRoom] Connected to $ip:$kStudyPort');
 
-      // Enviar request
-      socket.add(utf8.encode(jsonEncode({'type': 'request_data'})));
-      await socket.flush();
+    socket.add(utf8.encode(jsonEncode({'type': 'request_data'})));
+    await socket.flush();
+    await socket.close();
 
-      // Half-close: señal al servidor que terminamos de enviar
-      // pero el socket sigue abierto para leer la respuesta
-      await socket.close(); // cierra sólo el lado de escritura en Dart sockets
+    final completer = Completer<Uint8List>();
+    final chunks = <int>[];
+    late StreamSubscription sub;
+    sub = socket.listen(
+      (data) => chunks.addAll(data),
+      onDone: () {
+        sub.cancel();
+        if (!completer.isCompleted) completer.complete(Uint8List.fromList(chunks));
+      },
+      onError: (_) {
+        sub.cancel();
+        if (!completer.isCompleted) completer.complete(Uint8List.fromList(chunks));
+      },
+      cancelOnError: false,
+    );
 
-      // Leer TODA la respuesta antes de continuar
-      final chunks = <int>[];
-      await for (final chunk in socket) {
-        chunks.addAll(chunk);
-      }
-      print('🔵 [StudyRoom] Received ${chunks.length} bytes from $ip');
+    final allBytes = await completer.future.timeout(
+      const Duration(seconds: 30),
+      onTimeout: () { sub.cancel(); return Uint8List.fromList(chunks); },
+    );
 
-      if (chunks.isEmpty) {
-        print('🔴 [StudyRoom] EMPTY response from $ip');
-        return;
-      }
-
-      final data = jsonDecode(utf8.decode(chunks)) as Map<String, dynamic>;
-      final topicCount = (data['topics'] as List?)?.length ?? 0;
-      print('🔵 [StudyRoom] Parsed response: $topicCount topics from $ip');
-      await _mergeFullPayload(data);
-      print(
-        '🔵 [StudyRoom] Merge complete. Total topics now: ${_topics.length}',
-      );
-    } catch (e) {
-      print('🔴 [StudyRoom] _requestDataFrom($ip) FAILED: $e');
+    print('🔵 [StudyRoom] Received ${allBytes.length} bytes from $ip');
+    if (allBytes.isEmpty) {
+      print('🔴 [StudyRoom] EMPTY response from $ip');
+      return;
     }
+
+    final data = jsonDecode(utf8.decode(allBytes)) as Map<String, dynamic>;
+    final topicCount = (data['topics'] as List?)?.length ?? 0;
+    print('🔵 [StudyRoom] Parsed response: $topicCount topics from $ip');
+    await _mergeFullPayload(data);
+    print('🔵 [StudyRoom] Merge complete. Total topics now: ${_topics.length}');
+  } catch (e) {
+    print('🔴 [StudyRoom] _requestDataFrom($ip) FAILED: $e');
+  } finally {
+    try { socket?.destroy(); } catch (_) {}
   }
+}
 
   Map<String, dynamic> _buildFullPayload() {
     final topicsJson = <Map<String, dynamic>>[];
