@@ -477,17 +477,17 @@ class _MenuScreenState extends State<MenuScreen>
 
   // ── Lifecycle ────────────────────────────────────────────────────────────────
 
- @override
-void dispose() {
-  _unreadSub?.cancel();
-  _glitchCtrl.dispose();
-  _scanlineCtrl.dispose();
-  _pulseCtrl.dispose();
-  _rainCtrl.dispose();
-  _videoCtrl?.dispose();
-  _musicPlayer.dispose();
-  super.dispose();
-}
+  @override
+  void dispose() {
+    _unreadSub?.cancel();
+    _glitchCtrl.dispose();
+    _scanlineCtrl.dispose();
+    _pulseCtrl.dispose();
+    _rainCtrl.dispose();
+    _videoCtrl?.dispose();
+    _musicPlayer.dispose();
+    super.dispose();
+  }
   // ── Helpers ─────────────────────────────────────────────────────────────────
 
   // 🔐 MERGE: Helper para colores según jerarquía
@@ -539,12 +539,13 @@ void dispose() {
     final isMobile = size.width < 600;
 
     if (_videoCtrl != null && _videoCtrl!.value.isInitialized) {
+      // Reemplaza el bloque móvil de _buildBackground()
       if (isMobile) {
         return Container(
           color: kDark,
           alignment: Alignment.center,
           child: FittedBox(
-            fit: BoxFit.contain,
+            fit: BoxFit.cover, // cover en lugar de contain
             child: SizedBox(
               width: _videoCtrl!.value.size.width,
               height: _videoCtrl!.value.size.height,
