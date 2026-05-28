@@ -279,87 +279,235 @@ class PeerService {
   }
 
   // ─── Sincronización video de fondo ───────────────────────────────────────
-  Future<void> _syncBackgroundVideoWithRetries(String ip) async {
-    // Intentar hasta 5 veces con espera creciente
-    // (3s, 8s, 20s, 45s, 90s desde el primer intento)
-    final delays = [3, 8, 20, 45, 90];
-    for (final seconds in delays) {
-      await Future.delayed(Duration(seconds: seconds));
-      // Verificar que el peer siga online antes de intentar
-      if (!knownPeers.containsKey(ip)) return;
-      try {
-        await _syncBackgroundVideoWithPeer(ip);
-        // Si llegó aquí sin excepción, sincronización exitosa
-        return;
-      } catch (_) {
-        // Continuar con el siguiente intento
-      }
-    }
-    print('[BgVideo] All retries exhausted for $ip');
-  }
+ Future<void> _syncBackgroundVideoWithRetries(String ip) async {
+  // Primer intento rápido a los 2 segundos
+  await Future.delayed(const Duration(seconds: 2));
+  if (!knownPeers.containsKey(ip)) return;
 
-  Future<void> _syncBackgroundVideoWithPeer(String ip) async {
+  for (int attempt = 1; attempt <= 5; attempt++) {
     try {
-      // DESPUÉS:
-      final socket = await Socket.connect(
-        ip,
-        kPort,
-        timeout: const Duration(seconds: 30),
-      );
-      final headerBytes = utf8.encode(
-        jsonEncode({'type': 'request_bg_video_state', 'senderIp': myIp}),
-      );
-      final lenBytes = ByteData(4)..setInt32(0, headerBytes.length, Endian.big);
-      socket.add(lenBytes.buffer.asUint8List());
-      socket.add(headerBytes);
-      await socket.flush();
-
-      final chunks = <int>[];
-      await for (final chunk in socket) {
-        chunks.addAll(chunk);
-      }
-      await socket.close();
-
-      if (chunks.length < 4) return;
-
-      final respHeaderLen = ByteData.view(
-        Uint8List.fromList(chunks.sublist(0, 4)).buffer,
-      ).getInt32(0, Endian.big);
-      if (chunks.length < 4 + respHeaderLen) return;
-
-      final respHeader =
-          jsonDecode(utf8.decode(chunks.sublist(4, 4 + respHeaderLen)))
-              as Map<String, dynamic>;
-
-      final peerHasVideo = respHeader['hasVideo'] as bool? ?? false;
-      final peerVideoTs = respHeader['videoTimestamp'] as String?;
-
-      final myVideoPath = await getBackgroundVideoPath();
-      final myVideoTs = await _getBackgroundVideoTimestamp();
-
-      if (myVideoPath != null) {
-        if (!peerHasVideo) {
-          await _sendBackgroundVideoToPeer(ip, myVideoPath);
-        } else {
-          if (peerVideoTs != null && myVideoTs != null) {
-            final peerDt = DateTime.tryParse(peerVideoTs);
-            final myDt = DateTime.tryParse(myVideoTs);
-            if (peerDt != null && myDt != null && peerDt.isAfter(myDt)) {
-              await _requestVideoTransferFrom(ip);
-            } else {
-              await _sendBackgroundVideoToPeer(ip, myVideoPath);
-            }
-          }
-        }
-      } else {
-        if (peerHasVideo) {
-          await _requestVideoTransferFrom(ip);
-        }
-      }
+      print('[BgVideo] Sync attempt $attempt with $ip');
+      await _syncBackgroundVideoWithPeer(ip);
+      return; // éxito
     } catch (e) {
-      print('[BgVideo] _syncBackgroundVideoWithPeer($ip) failed: $e');
+      print('[BgVideo] Attempt $attempt failed for $ip: $e');
+    }
+    if (attempt < 5) {
+      // Esperas: 3s, 8s, 20s, 45s
+      final delays = [3, 8, 20, 45];
+      await Future.delayed(Duration(seconds: delays[attempt - 1]));
+      if (!knownPeers.containsKey(ip)) return;
     }
   }
+  print('[BgVideo] All retries exhausted for $ip');
+}
+
+ Future<void> _syncBackgroundVideoWithPeer(String ip) async {
+  Socket? socket;
+  try {
+    socket = await Socket.connect(
+      ip,
+      kPort,
+      timeout: const Duration(seconds: 15),
+    );
+
+    final headerBytes = utf8.encode(
+      jsonEncode({'type': 'request_bg_video_state', 'senderIp': myIp}),
+    );
+    final lenBytes = ByteData(4)..setInt32(0, headerBytes.length, Endian.big);
+    socket.add(lenBytes.buffer.asUint8List());
+    socket.add(headerBytes);
+    await socket.flush();
+
+    // Half-close: señal de fin de escritura
+    await socket.close();
+
+    // Leer respuesta con Completer (compatible Android + Windows)
+    final completer = Completer<Uint8List>();
+    final chunks = <int>[];
+    late StreamSubscription sub;
+    sub = socket.listen(
+      (data) => chunks.addAll(data),
+      onDone: () {
+        sub.cancel();
+        completer.complete(Uint8List.fromList(chunks));
+      },
+      onError: (e) {
+        sub.cancel();
+        if (!completer.isCompleted) {
+          completer.complete(Uint8List.fromList(chunks));
+        }
+      },
+      cancelOnError: false,
+    );
+
+    final allBytes = await completer.future.timeout(
+      const Duration(seconds: 20),
+      onTimeout: () {
+        sub.cancel();
+        return Uint8List.fromList(chunks);
+      },
+    );
+
+    if (allBytes.length < 4) {
+      print('[BgVideo] _syncBackgroundVideoWithPeer($ip): response too short');
+      return;
+    }
+
+    final respHeaderLen = ByteData.view(
+      allBytes.buffer, 0, 4,
+    ).getInt32(0, Endian.big);
+
+    if (allBytes.length < 4 + respHeaderLen) {
+      print('[BgVideo] _syncBackgroundVideoWithPeer($ip): truncated');
+      return;
+    }
+
+    final respHeader =
+        jsonDecode(utf8.decode(allBytes.sublist(4, 4 + respHeaderLen)))
+            as Map<String, dynamic>;
+
+    final peerHasVideo = respHeader['hasVideo'] as bool? ?? false;
+    final peerVideoTs = respHeader['videoTimestamp'] as String?;
+
+    final myVideoPath = await getBackgroundVideoPath();
+    final myVideoTs = await _getBackgroundVideoTimestamp();
+
+    print('[BgVideo] $ip → hasVideo=$peerHasVideo ts=$peerVideoTs | '
+        'me → hasVideo=${myVideoPath != null} ts=$myVideoTs');
+
+    if (!peerHasVideo) {
+      if (myVideoPath != null) {
+        await _sendBackgroundVideoToPeer(ip, myVideoPath);
+      }
+      return;
+    }
+
+    // El peer SÍ tiene video
+    if (myVideoPath == null) {
+      print('[BgVideo] Peer $ip has video, I have none → downloading');
+      await _downloadVideoDirectlyFrom(ip);
+      return;
+    }
+
+    // Ambos tenemos video → comparar timestamps
+    if (peerVideoTs != null && myVideoTs != null) {
+      final peerDt = DateTime.tryParse(peerVideoTs);
+      final myDt = DateTime.tryParse(myVideoTs);
+      if (peerDt != null && myDt != null && peerDt.isAfter(myDt)) {
+        print('[BgVideo] Peer $ip has newer video → downloading');
+        await _downloadVideoDirectlyFrom(ip);
+      } else if (myDt != null && peerDt != null && myDt.isAfter(peerDt)) {
+        await _sendBackgroundVideoToPeer(ip, myVideoPath);
+      }
+    }
+  } catch (e) {
+    print('[BgVideo] _syncBackgroundVideoWithPeer($ip) failed: $e');
+  } finally {
+    try { socket?.destroy(); } catch (_) {}
+  }
+}
+/// Descarga el video de fondo directamente desde [ip] en una sola conexión.
+/// Más confiable que pedir al peer que inicie una transferencia hacia nosotros.
+Future<void> _downloadVideoDirectlyFrom(String ip) async {
+  Socket? socket;
+  try {
+    print('[BgVideo] _downloadVideoDirectlyFrom($ip) START');
+    socket = await Socket.connect(
+      ip,
+      kPort,
+      timeout: const Duration(seconds: 30),
+    );
+
+    final headerBytes = utf8.encode(
+      jsonEncode({'type': 'request_bg_video_file', 'senderIp': myIp}),
+    );
+    final lenBytes = ByteData(4)..setInt32(0, headerBytes.length, Endian.big);
+    socket.add(lenBytes.buffer.asUint8List());
+    socket.add(headerBytes);
+    await socket.flush();
+
+    // Half-close: señal de fin de escritura (igual que NookService)
+    await socket.close();
+
+    // Leer respuesta completa con Completer (no await-for)
+    final completer = Completer<Uint8List>();
+    final chunks = <int>[];
+    late StreamSubscription sub;
+    sub = socket.listen(
+      (data) => chunks.addAll(data),
+      onDone: () {
+        sub.cancel();
+        completer.complete(Uint8List.fromList(chunks));
+      },
+      onError: (e) {
+        sub.cancel();
+        if (!completer.isCompleted) {
+          completer.complete(Uint8List.fromList(chunks));
+        }
+      },
+      cancelOnError: false,
+    );
+
+    final allBytes = await completer.future.timeout(
+      const Duration(seconds: 60),
+      onTimeout: () {
+        sub.cancel();
+        return Uint8List.fromList(chunks);
+      },
+    );
+
+    if (allBytes.length < 4) {
+      print('[BgVideo] _downloadVideoDirectlyFrom($ip): response too short '
+          '(${allBytes.length} bytes)');
+      return;
+    }
+
+    final respHeaderLen = ByteData.view(
+      allBytes.buffer, 0, 4,
+    ).getInt32(0, Endian.big);
+
+    if (allBytes.length < 4 + respHeaderLen) {
+      print('[BgVideo] _downloadVideoDirectlyFrom($ip): truncated header');
+      return;
+    }
+
+    final respHeader =
+        jsonDecode(utf8.decode(allBytes.sublist(4, 4 + respHeaderLen)))
+            as Map<String, dynamic>;
+
+    final hasFile = respHeader['hasFile'] as bool? ?? false;
+    if (!hasFile) {
+      print('[BgVideo] _downloadVideoDirectlyFrom($ip): peer has no file');
+      return;
+    }
+
+    final fileName = respHeader['fileName'] as String? ?? 'background_video.mp4';
+    final videoTimestamp = respHeader['videoTimestamp'] as String?;
+    final fileBytes = allBytes.sublist(4 + respHeaderLen);
+
+    if (fileBytes.isEmpty) {
+      print('[BgVideo] _downloadVideoDirectlyFrom($ip): 0 bytes received');
+      return;
+    }
+
+    final dir = await getApplicationDocumentsDirectory();
+    final destPath = '${dir.path}/$fileName';
+    await File(destPath).writeAsBytes(fileBytes);
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(kBgVideoKey, destPath);
+    final ts = videoTimestamp ?? DateTime.now().toIso8601String();
+    await prefs.setString('${kBgVideoKey}_timestamp', ts);
+
+    print('[BgVideo] Saved $fileName (${fileBytes.length} bytes) from $ip');
+    _controller.add(PeerEvent('background_video_updated', destPath));
+  } catch (e) {
+    print('[BgVideo] _downloadVideoDirectlyFrom($ip) FAILED: $e');
+  } finally {
+    try { socket?.destroy(); } catch (_) {}
+  }
+}
 
   Future<void> _requestVideoTransferFrom(String ip) async {
     try {
@@ -479,157 +627,252 @@ class PeerService {
   // ─── Recepción ────────────────────────────────────────────────────────────
 
   void _handleIncomingConnection(Socket socket) {
-    _receiveData(socket);
+  _receiveData(socket);
+}
+
+Future<void> _receiveData(Socket socket) async {
+  // Leer request completa usando Completer con StreamSubscription
+  // (compatible Windows + Android, maneja half-close correctamente)
+  final completer = Completer<Uint8List>();
+  final chunks = <int>[];
+  late StreamSubscription sub;
+
+  sub = socket.listen(
+    (data) => chunks.addAll(data),
+    onDone: () {
+      sub.cancel();
+      if (!completer.isCompleted) {
+        completer.complete(Uint8List.fromList(chunks));
+      }
+    },
+    onError: (e) {
+      sub.cancel();
+      if (!completer.isCompleted) {
+        completer.complete(Uint8List.fromList(chunks));
+      }
+    },
+    cancelOnError: false,
+  );
+
+  Uint8List allBytes;
+  try {
+    allBytes = await completer.future.timeout(
+      const Duration(seconds: 30),
+      onTimeout: () {
+        sub.cancel();
+        return Uint8List.fromList(chunks);
+      },
+    );
+  } catch (e) {
+    print('[PeerService] _receiveData read error: $e');
+    try { socket.destroy(); } catch (_) {}
+    return;
   }
 
-  Future<void> _receiveData(Socket socket) async {
-    final completer = Completer<Uint8List>();
-    final chunks = <int>[];
+  if (allBytes.length < 4) {
+    try { socket.destroy(); } catch (_) {}
+    return;
+  }
 
-    socket.listen(
-      chunks.addAll,
-      onDone: () => completer.complete(Uint8List.fromList(chunks)),
-      onError: (_) => completer.complete(Uint8List.fromList(chunks)),
-      cancelOnError: true,
-    );
+  final headerLen = ByteData.view(
+    allBytes.buffer, 0, 4,
+  ).getInt32(0, Endian.big);
 
-    final allBytes = await completer.future;
-    if (allBytes.length < 4) return;
+  if (allBytes.length < 4 + headerLen) {
+    try { socket.destroy(); } catch (_) {}
+    return;
+  }
 
-    final headerLen = ByteData.view(
-      allBytes.buffer,
-      0,
-      4,
-    ).getInt32(0, Endian.big);
-    if (allBytes.length < 4 + headerLen) return;
+  final headerBytes = allBytes.sublist(4, 4 + headerLen);
+  final header = jsonDecode(utf8.decode(headerBytes)) as Map<String, dynamic>;
+  final packetType = header['type'] as String?;
 
-    final headerBytes = allBytes.sublist(4, 4 + headerLen);
-    final header = jsonDecode(utf8.decode(headerBytes)) as Map<String, dynamic>;
-    final packetType = header['type'] as String?;
+  // ── request_bg_video_state ──────────────────────────────────────────────
+  if (packetType == 'request_bg_video_state') {
+    final myPath = await getBackgroundVideoPath();
+    final myTs = await _getBackgroundVideoTimestamp();
+    final hasVideo = myPath != null;
+    final fileName = hasVideo
+        ? myPath.split(Platform.pathSeparator).last
+        : null;
 
-    // ── request_bg_video_state ──────────────────────────────────────────────
-    if (packetType == 'request_bg_video_state') {
-      final myPath = await getBackgroundVideoPath();
-      final myTs = await _getBackgroundVideoTimestamp();
-      final hasVideo = myPath != null;
-      final fileName = hasVideo
-          ? myPath.split(Platform.pathSeparator).last
-          : null;
-      final responseHeader = jsonEncode({
-        'hasVideo': hasVideo,
-        'videoFileName': fileName,
-        'videoTimestamp': myTs,
-      });
-      final respBytes = utf8.encode(responseHeader);
-      final lenBytes = ByteData(4)..setInt32(0, respBytes.length, Endian.big);
-      socket.add(lenBytes.buffer.asUint8List());
-      socket.add(respBytes);
+    final responseHeader = jsonEncode({
+      'hasVideo': hasVideo,
+      'videoFileName': fileName,
+      'videoTimestamp': myTs,
+    });
+    final respBytes = utf8.encode(responseHeader);
+
+    final fullResponse = Uint8List(4 + respBytes.length);
+    ByteData.view(fullResponse.buffer, 0, 4)
+        .setInt32(0, respBytes.length, Endian.big);
+    fullResponse.setRange(4, 4 + respBytes.length, respBytes);
+
+    try {
+      socket.add(fullResponse);
       await socket.flush();
       await socket.close();
-      return;
+      await socket.done;
+    } catch (e) {
+      print('[BgVideo] request_bg_video_state send error: $e');
+      try { socket.destroy(); } catch (_) {}
     }
-    // ── Anuncio de peer ─────────────────────────────────────────────────────────
-    if (packetType == 'peer_announce') {
-      await socket.close();
-      final senderIp = header['senderIp'] as String?;
-      final senderName = header['senderName'] as String? ?? 'Desconocido';
-      if (senderIp != null && senderIp != myIp) {
-        // Siempre procesar el anuncio — _onPeerDiscovered decide si sincronizar
-        _onPeerDiscovered(senderIp, senderName, isNew: false);
-
-        // Responder con nuestro anuncio solo si no lo hemos hecho recientemente
-        try {
-          final sock2 = await Socket.connect(
-            senderIp,
-            kPort,
-            timeout: const Duration(seconds: 4),
-          );
-          final hb = utf8.encode(
-            jsonEncode({
-              'type': 'peer_announce',
-              'senderIp': myIp,
-              'senderName': myName,
-              'senderId': myId,
-            }),
-          );
-          final lb = ByteData(4)..setInt32(0, hb.length, Endian.big);
-          sock2.add(lb.buffer.asUint8List());
-          sock2.add(hb);
-          await sock2.flush();
-          await sock2.close();
-          await sock2.done;
-        } catch (_) {}
-      }
-      return;
-    }
-
-    // ── request_bg_video_transfer ───────────────────────────────────────────
-    if (packetType == 'request_bg_video_transfer') {
-      await socket.close();
-      final senderIp = header['senderIp'] as String?;
-      if (senderIp != null) {
-        final myPath = await getBackgroundVideoPath();
-        if (myPath != null) {
-          await _sendBackgroundVideoToPeer(senderIp, myPath);
-        }
-      }
-      return;
-    }
-
-    // ── Paquetes de grupo ───────────────────────────────────────────────────
-    if (packetType != null &&
-        ['group_create', 'group_delete', 'group_update'].contains(packetType)) {
-      _handleGroupPacket(header);
-      return;
-    }
-
-    // ── Limpiar video de fondo ──────────────────────────────────────────────
-    if (header['isClearBackgroundVideo'] == true) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(kBgVideoKey);
-      await prefs.remove('${kBgVideoKey}_timestamp');
-      _controller.add(PeerEvent('background_video_cleared', null));
-      return;
-    }
-
-    // ── Video de fondo ──────────────────────────────────────────────────────
-    if (header['isBackgroundVideo'] == true) {
-      final fileBytes = allBytes.sublist(4 + headerLen);
-      final fileName = header['fileName'] as String? ?? 'background_video.mp4';
-      final videoTimestamp = header['videoTimestamp'] as String?;
-      try {
-        final dir = await getApplicationDocumentsDirectory();
-        final destPath = '${dir.path}/$fileName';
-        await File(destPath).writeAsBytes(fileBytes);
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString(kBgVideoKey, destPath);
-        final ts = videoTimestamp ?? DateTime.now().toIso8601String();
-        await prefs.setString('${kBgVideoKey}_timestamp', ts);
-        _controller.add(PeerEvent('background_video_updated', destPath));
-      } catch (e) {
-        print('❌ [ReceiveVideo] Error saving video: $e');
-      }
-      return;
-    }
-
-    // ── Material ────────────────────────────────────────────────────────────
-    if (packetType == 'material_broadcast') {
-      MaterialService().handleIncomingBroadcast(header);
-      return;
-    }
-    if (packetType == 'material_delete') {
-      MaterialService().handleIncomingDelete(header);
-      return;
-    }
-
-    // Todo lo demás (mensajes de chat) lo maneja ChatService en puerto 45003.
-    // PeerService ya no procesa mensajes de chat.
+    return;
   }
-  // ─── Sync de IDs de mensajes ──────────────────────────────────────────────
 
-  // ─── Seen receipts ────────────────────────────────────────────────────────
+  // ── request_bg_video_file ───────────────────────────────────────────────
+  if (packetType == 'request_bg_video_file') {
+    final myPath = await getBackgroundVideoPath();
+    final myTs = await _getBackgroundVideoTimestamp();
 
-  // ─── Guardar archivos en Isolate ─────────────────────────────────────────
+    if (myPath == null || !await File(myPath).exists()) {
+      final respBytes = utf8.encode(jsonEncode({'hasFile': false}));
+      final fullResponse = Uint8List(4 + respBytes.length);
+      ByteData.view(fullResponse.buffer, 0, 4)
+          .setInt32(0, respBytes.length, Endian.big);
+      fullResponse.setRange(4, 4 + respBytes.length, respBytes);
+      try {
+        socket.add(fullResponse);
+        await socket.flush();
+        await socket.close();
+        await socket.done;
+      } catch (_) {
+        try { socket.destroy(); } catch (_) {}
+      }
+      return;
+    }
+
+    try {
+      final fileBytes = await File(myPath).readAsBytes();
+      final fileName = myPath.split(Platform.pathSeparator).last;
+      final responseHeader = jsonEncode({
+        'hasFile': true,
+        'fileName': fileName,
+        'videoTimestamp': myTs,
+        'fileSize': fileBytes.length,
+      });
+      final respBytes = utf8.encode(responseHeader);
+
+      final fullResponse = Uint8List(4 + respBytes.length + fileBytes.length);
+      int offset = 0;
+      ByteData.view(fullResponse.buffer, 0, 4)
+          .setInt32(0, respBytes.length, Endian.big);
+      offset += 4;
+      fullResponse.setRange(offset, offset + respBytes.length, respBytes);
+      offset += respBytes.length;
+      fullResponse.setRange(offset, offset + fileBytes.length, fileBytes);
+
+      socket.add(fullResponse);
+      await socket.flush();
+      await socket.close();
+      await socket.done;
+      print('[BgVideo] Served ${fileBytes.length} bytes to '
+          '${socket.remoteAddress.address}');
+    } catch (e) {
+      print('[BgVideo] request_bg_video_file serve error: $e');
+      try { socket.destroy(); } catch (_) {}
+    }
+    return;
+  }
+
+  // ── request_bg_video_transfer (legado, mantener por compatibilidad) ───────
+  if (packetType == 'request_bg_video_transfer') {
+    try { socket.destroy(); } catch (_) {}
+    final senderIp = header['senderIp'] as String?;
+    if (senderIp != null) {
+      final myPath = await getBackgroundVideoPath();
+      if (myPath != null) {
+        await _sendBackgroundVideoToPeer(senderIp, myPath);
+      }
+    }
+    return;
+  }
+
+  // ── Anuncio de peer ─────────────────────────────────────────────────────
+  if (packetType == 'peer_announce') {
+    try { socket.destroy(); } catch (_) {}
+    final senderIp = header['senderIp'] as String?;
+    final senderName = header['senderName'] as String? ?? 'Desconocido';
+    if (senderIp != null && senderIp != myIp) {
+      _onPeerDiscovered(senderIp, senderName, isNew: false);
+      try {
+        final sock2 = await Socket.connect(
+          senderIp,
+          kPort,
+          timeout: const Duration(seconds: 4),
+        );
+        final hb = utf8.encode(jsonEncode({
+          'type': 'peer_announce',
+          'senderIp': myIp,
+          'senderName': myName,
+          'senderId': myId,
+        }));
+        final lb = ByteData(4)..setInt32(0, hb.length, Endian.big);
+        sock2.add(lb.buffer.asUint8List());
+        sock2.add(hb);
+        await sock2.flush();
+        await sock2.close();
+        await sock2.done;
+      } catch (_) {}
+    }
+    return;
+  }
+
+  // ── Paquetes de grupo ───────────────────────────────────────────────────
+  if (packetType != null &&
+      ['group_create', 'group_delete', 'group_update'].contains(packetType)) {
+    try { socket.destroy(); } catch (_) {}
+    _handleGroupPacket(header);
+    return;
+  }
+
+  // ── Limpiar video de fondo ──────────────────────────────────────────────
+  if (header['isClearBackgroundVideo'] == true) {
+    try { socket.destroy(); } catch (_) {}
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(kBgVideoKey);
+    await prefs.remove('${kBgVideoKey}_timestamp');
+    _controller.add(PeerEvent('background_video_cleared', null));
+    return;
+  }
+
+  // ── Video de fondo (broadcast directo) ─────────────────────────────────
+  if (header['isBackgroundVideo'] == true) {
+    try { socket.destroy(); } catch (_) {}
+    final fileBytes = allBytes.sublist(4 + headerLen);
+    final fileName = header['fileName'] as String? ?? 'background_video.mp4';
+    final videoTimestamp = header['videoTimestamp'] as String?;
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final destPath = '${dir.path}/$fileName';
+      await File(destPath).writeAsBytes(fileBytes);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(kBgVideoKey, destPath);
+      final ts = videoTimestamp ?? DateTime.now().toIso8601String();
+      await prefs.setString('${kBgVideoKey}_timestamp', ts);
+      _controller.add(PeerEvent('background_video_updated', destPath));
+    } catch (e) {
+      print('❌ [ReceiveVideo] Error saving video: $e');
+    }
+    return;
+  }
+
+  // ── Material ────────────────────────────────────────────────────────────
+  if (packetType == 'material_broadcast') {
+    try { socket.destroy(); } catch (_) {}
+    MaterialService().handleIncomingBroadcast(header);
+    return;
+  }
+  if (packetType == 'material_delete') {
+    try { socket.destroy(); } catch (_) {}
+    MaterialService().handleIncomingDelete(header);
+    return;
+  }
+
+  // Desconocido
+  try { socket.destroy(); } catch (_) {}
+}
+
 
   Future<String> _saveFileInIsolate(String fileName, Uint8List bytes) async {
     try {
