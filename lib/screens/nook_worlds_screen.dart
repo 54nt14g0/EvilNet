@@ -178,42 +178,49 @@ class _NookWorldsScreenState extends State<NookWorldsScreen>
   // ─── Crear mundo ──────────────────────────────────────────────────────────
 
   Future<void> _createWorld() async {
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (_) => const _WorldFormDialog(),
-    );
-    if (result == null) return;
+  final result = await showDialog<Map<String, dynamic>>(
+    context: context,
+    builder: (_) => const _WorldFormDialog(),
+  );
+  if (result == null) return;
 
-    final name = result['name'] as String;
-    final coverPath = result['coverPath'] as String?;
-    final minH = result['minHierarchy'] as int;
-    final password = result['password'] as String?;
+  final name = result['name'] as String;
+  final coverPath = result['coverPath'] as String?;
+  final minH = result['minHierarchy'] as int;
+  final password = result['password'] as String?;
 
-    String? savedCover;
-    if (coverPath != null) {
+  String? savedCover;
+  if (coverPath != null) {
+    try {
       final dir = await getApplicationDocumentsDirectory();
-      final fn = 'world_cover_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      await File(coverPath).copy('${dir.path}/$fn');
-      savedCover = '${dir.path}/$fn';
+      final ext = coverPath.split('.').last;
+      final fn = 'world_cover_${DateTime.now().millisecondsSinceEpoch}.$ext';
+      final destPath = '${dir.path}/$fn';
+      await File(coverPath).copy(destPath);
+      // Verificar que el archivo se copió correctamente
+      if (await File(destPath).exists()) {
+        savedCover = destPath;
+      }
+    } catch (e) {
+      print('[NookWorldsScreen] Error copying cover: $e');
     }
-
-    final world = NookWorld.create(
-      name: name,
-      creatorId: _auth.currentUser!.id,
-      minHierarchy: minH,
-      coverImagePath: savedCover,
-      password: (password != null && password.isNotEmpty) ? password : null,
-    );
-    await _service.upsertWorld(world);
-
-    // Ir directo a gestionar el mundo
-    if (!mounted) return;
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => NookWorldDetailScreen(world: world)),
-    );
   }
 
+  final world = NookWorld.create(
+    name: name,
+    creatorId: _auth.currentUser!.id,
+    minHierarchy: minH,
+    coverImagePath: savedCover,
+    password: (password != null && password.isNotEmpty) ? password : null,
+  );
+  await _service.upsertWorld(world);
+
+  if (!mounted) return;
+  Navigator.push(
+    context,
+    MaterialPageRoute(builder: (_) => NookWorldDetailScreen(world: world)),
+  );
+}
   void _showMsg(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -680,152 +687,241 @@ class _WorldFormDialogState extends State<_WorldFormDialog> {
     }
   }
 
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _passCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _pickCover() async {
     final r = await FilePicker.platform.pickFiles(type: FileType.image);
-    if (r != null && r.files.isNotEmpty) {
-      setState(() => _coverPath = r.files.first.path);
+    if (r != null && r.files.isNotEmpty && r.files.first.path != null) {
+      final path = r.files.first.path!;
+      // Verificar que el archivo existe antes de asignarlo
+      if (await File(path).exists()) {
+        setState(() => _coverPath = path);
+      }
     }
+  }
+
+  Widget _buildCoverPreview() {
+    if (_coverPath == null) {
+      return const Center(
+        child: Icon(
+          Icons.add_photo_alternate_outlined,
+          color: Colors.white38,
+          size: 24,
+        ),
+      );
+    }
+
+    final file = File(_coverPath!);
+    if (!file.existsSync()) {
+      return const Center(
+        child: Icon(
+          Icons.broken_image_outlined,
+          color: Colors.white38,
+          size: 24,
+        ),
+      );
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(4),
+      child: Image.file(
+        file,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: 80,
+        errorBuilder: (_, __, ___) => const Center(
+          child: Icon(
+            Icons.broken_image_outlined,
+            color: Colors.white38,
+            size: 24,
+          ),
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
+    return Dialog(
       backgroundColor: kNWPanel,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(6),
         side: BorderSide(color: kNW1.withOpacity(0.3)),
       ),
-      title: Text(
-        widget.existing == null ? '✦ NUEVO MUNDO' : '✦ EDITAR MUNDO',
-        style: const TextStyle(
-          fontFamily: 'monospace',
-          fontSize: 13,
-          color: kNW2,
-          letterSpacing: 2,
-        ),
-      ),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _Label('NOMBRE'),
-            const SizedBox(height: 4),
-            _NWField(controller: _nameCtrl, hint: 'nombre del mundo...'),
-            const SizedBox(height: 14),
-            _Label('PORTADA (opcional)'),
-            const SizedBox(height: 4),
-            GestureDetector(
-              onTap: _pickCover,
-              child: Container(
-                height: 80,
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: Colors.black26,
-                  border: Border.all(color: kNW1.withOpacity(0.3)),
-                  borderRadius: BorderRadius.circular(4),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 400, maxHeight: 600),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Título
+              Text(
+                widget.existing == null ? '✦ NUEVO MUNDO' : '✦ EDITAR MUNDO',
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 13,
+                  color: kNW2,
+                  letterSpacing: 2,
                 ),
-                child: _coverPath != null && File(_coverPath!).existsSync()
-                    ? ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: Image.file(
-                          File(_coverPath!),
-                          fit: BoxFit.cover,
-                          width: double.infinity,
+              ),
+              const SizedBox(height: 20),
+
+              // Contenido scrolleable
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const _Label('NOMBRE'),
+                      const SizedBox(height: 4),
+                      _NWField(
+                        controller: _nameCtrl,
+                        hint: 'nombre del mundo...',
+                      ),
+                      const SizedBox(height: 14),
+                      const _Label('PORTADA (opcional)'),
+                      const SizedBox(height: 4),
+                      GestureDetector(
+                        onTap: _pickCover,
+                        child: Container(
                           height: 80,
-                          errorBuilder: (_, __, ___) => const Center(
-                            child: Icon(
-                              Icons.broken_image_outlined,
-                              color: Colors.white38,
-                              size: 24,
-                            ),
+                          width: double.infinity,
+                          decoration: BoxDecoration(
+                            color: Colors.black26,
+                            border: Border.all(color: kNW1.withOpacity(0.3)),
+                            borderRadius: BorderRadius.circular(4),
                           ),
-                        ),
-                      )
-                    : const Center(
-                        child: Icon(
-                          Icons.add_photo_alternate_outlined,
-                          color: Colors.white38,
-                          size: 24,
+                          child: _buildCoverPreview(),
                         ),
                       ),
-              ),
-            ),
-            const SizedBox(height: 14),
-            _Label('JERARQUÍA MÍNIMA'),
-            const SizedBox(height: 4),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              decoration: BoxDecoration(
-                color: Colors.black26,
-                border: Border.all(color: kNW1.withOpacity(0.3)),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<int>(
-                  value: _minH,
-                  dropdownColor: kNWPanel,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    color: Colors.white,
-                  ),
-                  items: List.generate(
-                    10,
-                    (i) => DropdownMenuItem(
-                      value: i + 1,
-                      child: Text(
-                        'J${i + 1}',
-                        style: const TextStyle(
-                          fontFamily: 'monospace',
-                          color: Colors.white70,
+                      if (_coverPath != null) ...[
+                        const SizedBox(height: 4),
+                        GestureDetector(
+                          onTap: () => setState(() => _coverPath = null),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.close,
+                                size: 12,
+                                color: kNW3.withOpacity(0.7),
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                'QUITAR IMAGEN',
+                                style: TextStyle(
+                                  fontFamily: 'monospace',
+                                  fontSize: 9,
+                                  color: kNW3.withOpacity(0.7),
+                                  letterSpacing: 1,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
+                      ],
+                      const SizedBox(height: 14),
+                      const _Label('JERARQUÍA MÍNIMA'),
+                      const SizedBox(height: 4),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.black26,
+                          border: Border.all(color: kNW1.withOpacity(0.3)),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<int>(
+                            value: _minH,
+                            dropdownColor: kNWPanel,
+                            isExpanded: true,
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              color: Colors.white,
+                            ),
+                            items: List.generate(
+                              10,
+                              (i) => DropdownMenuItem(
+                                value: i + 1,
+                                child: Text(
+                                  'J${i + 1}',
+                                  style: const TextStyle(
+                                    fontFamily: 'monospace',
+                                    color: Colors.white70,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            onChanged: (v) => setState(() => _minH = v ?? 1),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      const _Label('CONTRASEÑA (opcional)'),
+                      const SizedBox(height: 4),
+                      _NWField(
+                        controller: _passCtrl,
+                        hint: 'dejar vacío = sin contraseña',
+                        obscure: true,
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                  ),
+                ),
+              ),
+
+              // Acciones
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text(
+                      'CANCELAR',
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        color: Colors.white38,
                       ),
                     ),
                   ),
-                  onChanged: (v) => setState(() => _minH = v ?? 1),
-                ),
+                  const SizedBox(width: 8),
+                  TextButton(
+                    onPressed: () {
+                      final name = _nameCtrl.text.trim();
+                      if (name.isEmpty) return;
+                      Navigator.pop(context, {
+                        'name': name,
+                        'coverPath': _coverPath,
+                        'minHierarchy': _minH,
+                        'password': _passCtrl.text,
+                      });
+                    },
+                    child: const Text(
+                      'GUARDAR',
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        color: kNW2,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ),
-            const SizedBox(height: 14),
-            _Label('CONTRASEÑA (opcional)'),
-            const SizedBox(height: 4),
-            _NWField(
-              controller: _passCtrl,
-              hint: 'dejar vacío = sin contraseña',
-              obscure: true,
-            ),
-          ],
+            ],
+          ),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text(
-            'CANCELAR',
-            style: TextStyle(fontFamily: 'monospace', color: Colors.white38),
-          ),
-        ),
-        TextButton(
-          onPressed: () {
-            final name = _nameCtrl.text.trim();
-            if (name.isEmpty) return;
-            Navigator.pop(context, {
-              'name': name,
-              'coverPath': _coverPath,
-              'minHierarchy': _minH,
-              'password': _passCtrl.text,
-            });
-          },
-          child: const Text(
-            'GUARDAR',
-            style: TextStyle(fontFamily: 'monospace', color: kNW2),
-          ),
-        ),
-      ],
     );
   }
 }
-
 // ─── Pantalla detalle/gestión de un mundo (admin) ─────────────────────────────
 
 class NookWorldDetailScreen extends StatefulWidget {
@@ -971,37 +1067,50 @@ class _NookWorldDetailScreenState extends State<NookWorldDetailScreen>
   }
 
   Future<void> _editWorld() async {
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (_) => _WorldFormDialog(existing: _world),
-    );
-    if (result == null) return;
+  final result = await showDialog<Map<String, dynamic>>(
+    context: context,
+    builder: (_) => _WorldFormDialog(existing: _world),
+  );
+  if (result == null) return;
 
-    final name = result['name'] as String;
-    final coverPath = result['coverPath'] as String?;
-    final minH = result['minHierarchy'] as int;
-    final password = result['password'] as String?;
+  final name = result['name'] as String;
+  final coverPath = result['coverPath'] as String?;
+  final minH = result['minHierarchy'] as int;
+  final password = result['password'] as String?;
 
-    String? savedCover = _world.coverImagePath;
-    if (coverPath != null && coverPath != _world.coverImagePath) {
+  String? savedCover = _world.coverImagePath;
+
+  // Solo copiar si es una ruta NUEVA (diferente a la ya guardada)
+  if (coverPath != null && coverPath != _world.coverImagePath) {
+    try {
       final dir = await getApplicationDocumentsDirectory();
-      final fn = 'world_cover_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      await File(coverPath).copy('${dir.path}/$fn');
-      savedCover = '${dir.path}/$fn';
+      final ext = coverPath.split('.').last;
+      final fn = 'world_cover_${DateTime.now().millisecondsSinceEpoch}.$ext';
+      final destPath = '${dir.path}/$fn';
+      await File(coverPath).copy(destPath);
+      if (await File(destPath).exists()) {
+        savedCover = destPath;
+      }
+    } catch (e) {
+      print('[NookWorldDetailScreen] Error copying cover: $e');
     }
-
-    final updated = _world.copyWith(
-      name: name,
-      coverImagePath: savedCover,
-      minHierarchy: minH,
-      passwordHash: (password != null && password.isNotEmpty)
-          ? NookWorld.hashPassword(password)
-          : null,
-      clearPassword: password == null || password.isEmpty,
-    );
-    await _service.upsertWorld(updated);
-    setState(() => _world = updated);
+  } else if (coverPath == null) {
+    savedCover = null;
   }
+
+  final updated = _world.copyWith(
+    name: name,
+    coverImagePath: savedCover,
+    clearCover: savedCover == null,
+    minHierarchy: minH,
+    passwordHash: (password != null && password.isNotEmpty)
+        ? NookWorld.hashPassword(password)
+        : null,
+    clearPassword: password == null || password.isEmpty,
+  );
+  await _service.upsertWorld(updated);
+  if (mounted) setState(() => _world = updated);
+}
 
   @override
   Widget build(BuildContext context) {

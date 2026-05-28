@@ -868,154 +868,67 @@ class _NookCanvasScreenState extends State<NookCanvasScreen>
   }
 
   Widget _buildRiddleInput(NookElement el, double w, double h, double scale) {
-    final solved = _isRiddleSolved(el.id);
-    final bgColor = el.textColor != null
-        ? Color(el.textColor!).withOpacity(0.85)
-        : Colors.black.withOpacity(0.65);
-    final textColor = el.buttonColor != null
-        ? Color(el.buttonColor!)
-        : Colors.white70;
-    final fontSize = (el.fontSize ?? 12) * scale;
+  final solved = _isRiddleSolved(el.id);
+  final bgColor = el.textColor != null
+      ? Color(el.textColor!).withOpacity(0.85)
+      : Colors.black.withOpacity(0.65);
+  final textColor = el.buttonColor != null
+      ? Color(el.buttonColor!)
+      : Colors.white70;
 
-    _riddleControllers.putIfAbsent(el.id, () => TextEditingController());
-    final ctrl = _riddleControllers[el.id]!;
+  // El tamaño de fuente del acertijo escala con el canvas
+  final questionFontSize = (el.fontSize ?? 12) * scale;
 
-    if (solved) {
-      return Container(
-        width: w,
-        height: h,
-        padding: EdgeInsets.all(8 * scale),
-        decoration: BoxDecoration(
-          color: Colors.green.withOpacity(0.12),
-          border: Border.all(color: Colors.green.withOpacity(0.4)),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Flexible(
-              child: SingleChildScrollView(
-                child: Text(
-                  el.riddleQuestion ?? '',
-                  style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: fontSize,
-                    color: textColor,
-                    height: 1.3,
-                  ),
-                ),
-              ),
-            ),
-            SizedBox(height: 4 * scale),
-            Row(
-              children: [
-                Icon(Icons.check_circle, color: Colors.green, size: 14 * scale),
-                SizedBox(width: 4 * scale),
-                Text(
-                  '¡RESUELTO!',
-                  style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 10 * scale,
-                    color: Colors.green,
-                    letterSpacing: 1,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      );
-    }
+  // El input y botón OK escalan proporcionalmente al tamaño de fuente elegido
+  final inputFontSize = questionFontSize * 0.85;
+  final okFontSize = questionFontSize * 0.75;
+  final okPaddingH = questionFontSize * 0.8;
+  final okPaddingV = questionFontSize * 0.65;
+  final inputPaddingH = questionFontSize * 0.55;
+  final inputPaddingV = questionFontSize * 0.55;
 
+  _riddleControllers.putIfAbsent(el.id, () => TextEditingController());
+  final ctrl = _riddleControllers[el.id]!;
+
+  if (solved) {
     return Container(
       width: w,
       height: h,
       padding: EdgeInsets.all(8 * scale),
       decoration: BoxDecoration(
-        color: bgColor,
-        border: Border.all(color: kNW1.withOpacity(0.45)),
+        color: Colors.green.withOpacity(0.12),
+        border: Border.all(color: Colors.green.withOpacity(0.4)),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Pregunta scrolleable para textos largos
           Flexible(
             child: SingleChildScrollView(
               child: Text(
                 el.riddleQuestion ?? '',
                 style: TextStyle(
                   fontFamily: 'monospace',
-                  fontSize: fontSize,
+                  fontSize: questionFontSize,
                   color: textColor,
                   height: 1.3,
                 ),
               ),
             ),
           ),
-          SizedBox(height: 6 * scale),
-          // Input de respuesta
-          // Input de respuesta
+          SizedBox(height: 4 * scale),
           Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Expanded(
-                child: TextField(
-                  controller: ctrl,
-                  style: TextStyle(
-                    fontFamily: 'monospace',
-                    color: Colors.white,
-                    fontSize: 12 * scale,
-                  ),
-                  decoration: InputDecoration(
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: 8 * scale,
-                      vertical: 8 * scale,
-                    ),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(4),
-                      borderSide: BorderSide(color: kNW1.withOpacity(0.3)),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(4),
-                      borderSide: BorderSide(color: kNW1.withOpacity(0.3)),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(4),
-                      borderSide: const BorderSide(color: kNW2),
-                    ),
-                    hintText: '...',
-                    hintStyle: const TextStyle(color: Colors.white24),
-                    filled: true,
-                    fillColor: Colors.black26,
-                  ),
-                  onSubmitted: (v) => _checkRiddle(el, v),
-                ),
-              ),
-              SizedBox(width: 6 * scale),
-              GestureDetector(
-                onTap: () => _checkRiddle(el, ctrl.text),
-                child: Container(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: 10 * scale,
-                    vertical: 10 * scale,
-                  ),
-                  decoration: BoxDecoration(
-                    color: kNW1.withOpacity(0.25),
-                    border: Border.all(color: kNW1.withOpacity(0.5)),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    'OK',
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 10 * scale,
-                      color: kNW2,
-                      letterSpacing: 1,
-                    ),
-                  ),
+              Icon(Icons.check_circle, color: Colors.green, size: questionFontSize),
+              SizedBox(width: 4 * scale),
+              Text(
+                '¡RESUELTO!',
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: okFontSize,
+                  color: Colors.green,
+                  letterSpacing: 1,
                 ),
               ),
             ],
@@ -1024,6 +937,103 @@ class _NookCanvasScreenState extends State<NookCanvasScreen>
       ),
     );
   }
+
+  return Container(
+    width: w,
+    height: h,
+    padding: EdgeInsets.all(8 * scale),
+    decoration: BoxDecoration(
+      color: bgColor,
+      border: Border.all(color: kNW1.withOpacity(0.45)),
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Flexible(
+          child: SingleChildScrollView(
+            child: Text(
+              el.riddleQuestion ?? '',
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: questionFontSize,
+                color: textColor,
+                height: 1.3,
+              ),
+            ),
+          ),
+        ),
+        SizedBox(height: 6 * scale),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: TextField(
+                controller: ctrl,
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  color: Colors.white,
+                  fontSize: inputFontSize,
+                ),
+                decoration: InputDecoration(
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: inputPaddingH,
+                    vertical: inputPaddingV,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(4),
+                    borderSide: BorderSide(color: kNW1.withOpacity(0.3)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(4),
+                    borderSide: BorderSide(color: kNW1.withOpacity(0.3)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(4),
+                    borderSide: const BorderSide(color: kNW2),
+                  ),
+                  hintText: '...',
+                  hintStyle: TextStyle(
+                    color: Colors.white24,
+                    fontSize: inputFontSize,
+                  ),
+                  filled: true,
+                  fillColor: Colors.black26,
+                ),
+                onSubmitted: (v) => _checkRiddle(el, v),
+              ),
+            ),
+            SizedBox(width: 6 * scale),
+            GestureDetector(
+              onTap: () => _checkRiddle(el, ctrl.text),
+              child: Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: okPaddingH,
+                  vertical: okPaddingV,
+                ),
+                decoration: BoxDecoration(
+                  color: kNW1.withOpacity(0.25),
+                  border: Border.all(color: kNW1.withOpacity(0.5)),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  'OK',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: okFontSize,
+                    color: kNW2,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
+}
 
   void _checkRiddle(NookElement el, String answer) {
     final correct = (el.riddleAnswer ?? '').trim();
