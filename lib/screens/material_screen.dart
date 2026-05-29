@@ -60,7 +60,7 @@ class _MaterialScreenState extends State<MaterialScreen>
   bool _showSearch = false;
 
   late AnimationController _scanCtrl;
-  late AnimationController _flickerCtrl;
+  
   late AnimationController _fabCtrl;
   bool _fabOpen = false;
 
@@ -89,10 +89,7 @@ class _MaterialScreenState extends State<MaterialScreen>
       duration: const Duration(seconds: 4),
     )..repeat();
 
-    _flickerCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 80),
-    )..repeat(reverse: true);
+  
 
     _fabCtrl = AnimationController(
       vsync: this,
@@ -112,7 +109,6 @@ class _MaterialScreenState extends State<MaterialScreen>
     _subscription?.cancel();
     _tabCtrl.dispose();
     _scanCtrl.dispose();
-    _flickerCtrl.dispose();
     _fabCtrl.dispose();
     _searchFocus.dispose();
     super.dispose();
@@ -190,13 +186,15 @@ class _MaterialScreenState extends State<MaterialScreen>
   }
 
   // ── SCANLINES ─────────────────────────────────────────────────────────────
-  Widget _buildScanlines() {
-    return AnimatedBuilder(
+ Widget _buildScanlines() {
+  return RepaintBoundary(
+    child: AnimatedBuilder(
       animation: _scanCtrl,
       builder: (_, __) =>
           CustomPaint(painter: _ScanlinePainter(_scanCtrl.value)),
-    );
-  }
+    ),
+  );
+}
 
   // ── HEADER ────────────────────────────────────────────────────────────────
   Widget _buildHeader(bool mobile) {
@@ -2362,28 +2360,31 @@ class _BottomSheetContainer extends StatelessWidget {
 // ─── SCANLINE PAINTER ─────────────────────────────────────────────────────────
 class _ScanlinePainter extends CustomPainter {
   final double t;
-  _ScanlinePainter(this.t);
+  const _ScanlinePainter(this.t);
+
+  static final _linePaint = Paint()..color = const Color(0x1F000000);
+  static final _scanPaint = Paint();
+  static const _scanGradient = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [
+      Colors.transparent,
+      Color(0x0ACC0000),
+      Color(0x12CC0000),
+      Color(0x0ACC0000),
+      Colors.transparent,
+    ],
+  );
 
   @override
   void paint(Canvas canvas, Size size) {
-    final linePaint = Paint()..color = Colors.black.withOpacity(0.12);
     for (double y = 0; y < size.height; y += 3) {
-      canvas.drawRect(Rect.fromLTWH(0, y, size.width, 1), linePaint);
+      canvas.drawRect(Rect.fromLTWH(0, y, size.width, 1), _linePaint);
     }
-    final scanY = (t * size.height * 1.2) % (size.height + 60) - 30;
-    final scanPaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [
-          Colors.transparent,
-          kRed.withOpacity(0.04),
-          kRed.withOpacity(0.07),
-          kRed.withOpacity(0.04),
-          Colors.transparent,
-        ],
-      ).createShader(Rect.fromLTWH(0, scanY, size.width, 60));
-    canvas.drawRect(Rect.fromLTWH(0, scanY, size.width, 60), scanPaint);
+    final scanY = (t * size.height * 1.2) % (size.height + 60) - 60;
+    final rect = Rect.fromLTWH(0, scanY, size.width, 60);
+    _scanPaint.shader = _scanGradient.createShader(rect);
+    canvas.drawRect(rect, _scanPaint);
   }
 
   @override

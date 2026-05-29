@@ -34,8 +34,8 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
 
   List<UniverseIdea> _ideas = [];
   UniverseCentralTopic? _centralTopic;
-  static const double _canvasSize = 8000.0;
-  static const double _canvasCenter = 4000.0;
+  static const double _canvasSize = 4000.0;
+  static const double _canvasCenter = 2000.0;
 
   String get _myUserId => _peer.myId;
   String get _myUsername => _auth.currentUser?.username ?? _peer.myName;
@@ -91,8 +91,8 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
           final rng = Random();
           final angle = rng.nextDouble() * 2 * pi;
           final radius = 200.0 + rng.nextDouble() * 200;
-          final x = 4000 + cos(angle) * radius;
-          final y = 4000 + sin(angle) * radius;
+          final x = _canvasCenter + cos(angle) * radius;
+          final y = _canvasCenter + sin(angle) * radius;
           await _service.addIdea(
             universeId: widget.universe.id,
             authorId: _myUserId,
@@ -395,10 +395,12 @@ class _UniverseCanvasScreenState extends State<UniverseCanvasScreen>
         children: [
           // Fondo cosmos animado
           Positioned.fill(
-            child: AnimatedBuilder(
-              animation: _starsCtrl,
-              builder: (_, __) => CustomPaint(
-                painter: _CanvasStarfieldPainter(_starsCtrl.value),
+            child: RepaintBoundary(
+              child: AnimatedBuilder(
+                animation: _starsCtrl,
+                builder: (_, __) => CustomPaint(
+                  painter: _CanvasStarfieldPainter(_starsCtrl.value),
+                ),
               ),
             ),
           ),

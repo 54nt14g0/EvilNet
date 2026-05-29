@@ -59,10 +59,10 @@ class _MenuScreenState extends State<MenuScreen>
   bool _videoActive = false;
 
   // Animaciones
-  late AnimationController _glitchCtrl;
+
   late AnimationController _scanlineCtrl;
   late AnimationController _pulseCtrl;
-  late AnimationController _rainCtrl;
+
   int _hoveredIndex = -1;
 
   // 🔐 MERGE: Getter dinámico para menú según jerarquía de usuario
@@ -96,59 +96,45 @@ class _MenuScreenState extends State<MenuScreen>
     return items;
   }
 
-  @override
-  void initState() {
-    super.initState();
+ @override
+void initState() {
+  super.initState();
 
-    final rng = Random();
-    _selectedBackground = 'assets/fondo${rng.nextInt(4) + 1}.jpg';
-    _selectedSong = 'song${rng.nextInt(4) + 1}.mp3';
+  final rng = Random();
+  _selectedBackground = 'assets/fondo${rng.nextInt(4) + 1}.jpg';
+  _selectedSong = 'song${rng.nextInt(4) + 1}.mp3';
 
-    _glitchCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 150),
-    )..repeat(reverse: true);
+  _scanlineCtrl = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 5),
+  )..repeat();
 
-    _scanlineCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 3),
-    )..repeat();
+  _pulseCtrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1800),
+  )..repeat(reverse: true);
 
-    _pulseCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1800),
-    )..repeat(reverse: true);
+  _startMusic();
+  _unreadSub = ChatService().unreadStream.listen((counts) {
+    if (mounted) setState(() => _totalUnread = ChatService().totalUnread);
+  });
+  _taskSub = TaskService().events.listen((_) {
+    if (mounted) {
+      final myId = AuthService().currentUser?.id ?? '';
+      setState(() => _taskBadge = TaskService().newTasksCountForUser(myId));
+    }
+  });
+  Future.microtask(() async {
+    await _initService();
+    await Future.delayed(const Duration(seconds: 1));
+    print('📦 [MenuScreen] Starting MaterialService...');
+    await MaterialService().start();
+  });
 
-    _rainCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 8),
-    )..repeat();
-
-    _startMusic();
-    _unreadSub = ChatService().unreadStream.listen((counts) {
-      if (mounted) setState(() => _totalUnread = ChatService().totalUnread);
-    });
-    _taskSub = TaskService().events.listen((_) {
-      if (mounted) {
-        final myId = AuthService().currentUser?.id ?? '';
-        setState(() => _taskBadge = TaskService().newTasksCountForUser(myId));
-      }
-    });
-    Future.microtask(() async {
-      await _initService();
-      await Future.delayed(const Duration(seconds: 1));
-      print('📦 [MenuScreen] Starting MaterialService...');
-      await MaterialService().start();
-    });
-
-    // 🔐 MERGE: Escuchar eventos de AuthService para refrescar UI
-    _auth.events.listen((e) {
-      if (mounted && e == 'users_updated') {
-        setState(() {}); // Refresca menú si cambian permisos de usuario
-      }
-    });
-  }
-
+  _auth.events.listen((e) {
+    if (mounted && e == 'users_updated') setState(() {});
+  });
+}
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -493,17 +479,15 @@ class _MenuScreenState extends State<MenuScreen>
   // ── Lifecycle ────────────────────────────────────────────────────────────────
 
   @override
-  void dispose() {
-    _unreadSub?.cancel();
-    _glitchCtrl.dispose();
-    _scanlineCtrl.dispose();
-    _pulseCtrl.dispose();
-    _rainCtrl.dispose();
-    _videoCtrl?.dispose();
-    _musicPlayer.dispose();
-    _taskSub?.cancel();
-    super.dispose();
-  }
+void dispose() {
+  _unreadSub?.cancel();
+  _scanlineCtrl.dispose();
+  _pulseCtrl.dispose();
+  _videoCtrl?.dispose();
+  _musicPlayer.dispose();
+  _taskSub?.cancel();
+  super.dispose();
+}
   // ── Helpers ─────────────────────────────────────────────────────────────────
 
   // 🔐 MERGE: Helper para colores según jerarquía
@@ -590,29 +574,31 @@ class _MenuScreenState extends State<MenuScreen>
   }
 
   Widget _buildScanlines() {
-    return AnimatedBuilder(
+  return RepaintBoundary(
+    child: AnimatedBuilder(
       animation: _scanlineCtrl,
       builder: (_, __) =>
           CustomPaint(painter: _ScanlinePainter(_scanlineCtrl.value)),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildVignette() {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: RadialGradient(
-          center: Alignment.center,
-          radius: 1.2,
-          colors: [
-            Colors.transparent,
-            kDark.withOpacity(0.7),
-            kDark.withOpacity(0.95),
-          ],
-          stops: const [0.3, 0.7, 1.0],
-        ),
+  return const DecoratedBox(
+    decoration: BoxDecoration(
+      gradient: RadialGradient(
+        center: Alignment.center,
+        radius: 1.2,
+        colors: [
+          Colors.transparent,
+          Color(0xB3020A06),
+          Color(0xF2020A06),
+        ],
+        stops: [0.3, 0.7, 1.0],
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildLayout() {
     final size = MediaQuery.of(context).size;
@@ -1128,32 +1114,31 @@ class _RetrowaveGridPainter extends CustomPainter {
 
 class _ScanlinePainter extends CustomPainter {
   final double t;
-  _ScanlinePainter(this.t);
+  const _ScanlinePainter(this.t);
+
+  static final _linePaint = Paint()..color = const Color(0x14000000);
+  static final _scanPaint = Paint();
+  static const _scanGradient = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [
+      Colors.transparent,
+      Color(0x0A00FFB2),
+      Color(0x1400FFB2),
+      Color(0x0A00FFB2),
+      Colors.transparent,
+    ],
+  );
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = Colors.black.withOpacity(0.08);
     for (double y = 0; y < size.height; y += 4) {
-      canvas.drawRect(Rect.fromLTWH(0, y, size.width, 2), paint);
+      canvas.drawRect(Rect.fromLTWH(0, y, size.width, 2), _linePaint);
     }
-
     final scanY = (t * size.height * 1.5) % (size.height + 100) - 50;
-    final scanPaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [
-          Colors.transparent,
-          kNeon.withOpacity(0.04),
-          kNeon.withOpacity(0.08),
-          kNeon.withOpacity(0.04),
-          Colors.transparent,
-        ],
-      ).createShader(Rect.fromLTWH(0, scanY.toDouble(), size.width, 80));
-    canvas.drawRect(
-      Rect.fromLTWH(0, scanY.toDouble(), size.width, 80),
-      scanPaint,
-    );
+    final rect = Rect.fromLTWH(0, scanY, size.width, 80);
+    _scanPaint.shader = _scanGradient.createShader(rect);
+    canvas.drawRect(rect, _scanPaint);
   }
 
   @override

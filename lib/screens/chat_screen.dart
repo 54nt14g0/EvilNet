@@ -653,11 +653,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       body: Stack(
         children: [
           // Scanlines de fondo
+          // REEMPLAZA CON:
           Positioned.fill(
-            child: AnimatedBuilder(
-              animation: _scanCtrl,
-              builder: (_, __) =>
-                  CustomPaint(painter: _ChatScanlinePainter(_scanCtrl.value)),
+            child: RepaintBoundary(
+              child: AnimatedBuilder(
+                animation: _scanCtrl,
+                builder: (_, __) =>
+                    CustomPaint(painter: _ChatScanlinePainter(_scanCtrl.value)),
+              ),
             ),
           ),
           SafeArea(
@@ -1547,33 +1550,31 @@ class _TerminalButton extends StatelessWidget {
 
 class _ChatScanlinePainter extends CustomPainter {
   final double t;
-  _ChatScanlinePainter(this.t);
+  const _ChatScanlinePainter(this.t);
+
+  static final _linePaint = Paint()..color = const Color(0x0500FF41);
+  static final _scanPaint = Paint();
+  static const _scanGradient = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [
+      Colors.transparent,
+      Color(0x0600FF41),
+      Color(0x0A00FF41),
+      Color(0x0600FF41),
+      Colors.transparent,
+    ],
+  );
 
   @override
   void paint(Canvas canvas, Size size) {
-    final linePaint = Paint()
-      ..color = const Color(0xFF00FF41).withOpacity(0.018);
     for (double y = 0; y < size.height; y += 4) {
-      canvas.drawRect(Rect.fromLTWH(0, y, size.width, 1.5), linePaint);
+      canvas.drawRect(Rect.fromLTWH(0, y, size.width, 1.5), _linePaint);
     }
-
     final scanY = (t * size.height * 1.2) % (size.height + 60) - 30;
-    final scanPaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [
-          Colors.transparent,
-          const Color(0xFF00FF41).withOpacity(0.025),
-          const Color(0xFF00FF41).withOpacity(0.04),
-          const Color(0xFF00FF41).withOpacity(0.025),
-          Colors.transparent,
-        ],
-      ).createShader(Rect.fromLTWH(0, scanY.toDouble(), size.width, 60));
-    canvas.drawRect(
-      Rect.fromLTWH(0, scanY.toDouble(), size.width, 60),
-      scanPaint,
-    );
+    final rect = Rect.fromLTWH(0, scanY, size.width, 60);
+    _scanPaint.shader = _scanGradient.createShader(rect);
+    canvas.drawRect(rect, _scanPaint);
   }
 
   @override

@@ -172,122 +172,123 @@ class _StudyRoomScreenState extends State<StudyRoomScreen>
     }
   }
 
-Future<bool> _promptTopicPassword(StudyTopic topic) async {
-  final ctrl = TextEditingController();
-  bool _obscure = true;
-  bool _wrong = false;
+  Future<bool> _promptTopicPassword(StudyTopic topic) async {
+    final ctrl = TextEditingController();
+    bool _obscure = true;
+    bool _wrong = false;
 
-  final result = await showDialog<bool>(
-    context: context,
-    builder: (_) => StatefulBuilder(
-      builder: (ctx, setSt) => AlertDialog(
-        backgroundColor: kSPanel,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(3),
-          side: BorderSide(color: kSRed.withOpacity(0.4)),
-        ),
-        title: Row(
-          children: [
-            const Icon(Icons.lock_outline, color: kSRed, size: 16),
-            const SizedBox(width: 8),
-            const Text(
-              'ACCESO RESTRINGIDO',
-              style: TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 12,
-                color: kSRedGlow,
-                letterSpacing: 2,
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
+          backgroundColor: kSPanel,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(3),
+            side: BorderSide(color: kSRed.withOpacity(0.4)),
+          ),
+          title: Row(
+            children: [
+              const Icon(Icons.lock_outline, color: kSRed, size: 16),
+              const SizedBox(width: 8),
+              const Text(
+                'ACCESO RESTRINGIDO',
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  color: kSRedGlow,
+                  letterSpacing: 2,
+                ),
               ),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              topic.title,
-              style: const TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 11,
-                color: kSTextDim,
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: ctrl,
-              obscureText: _obscure,
-              autofocus: true,
-              style: const TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 13,
-                color: kSText,
-              ),
-              decoration: InputDecoration(
-                hintText: 'contraseña...',
-                hintStyle: const TextStyle(
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                topic.title,
+                style: const TextStyle(
                   fontFamily: 'monospace',
                   fontSize: 11,
                   color: kSTextDim,
                 ),
-                errorText: _wrong ? 'CONTRASEÑA INCORRECTA' : null,
-                errorStyle: const TextStyle(
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ctrl,
+                obscureText: _obscure,
+                autofocus: true,
+                style: const TextStyle(
                   fontFamily: 'monospace',
-                  fontSize: 9,
-                  color: kSRedGlow,
+                  fontSize: 13,
+                  color: kSText,
                 ),
-                filled: true,
-                fillColor: kSBg,
-                suffixIcon: IconButton(
-                  icon: Icon(
-                    _obscure ? Icons.visibility_off : Icons.visibility,
+                decoration: InputDecoration(
+                  hintText: 'contraseña...',
+                  hintStyle: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 11,
                     color: kSTextDim,
-                    size: 16,
                   ),
-                  onPressed: () => setSt(() => _obscure = !_obscure),
+                  errorText: _wrong ? 'CONTRASEÑA INCORRECTA' : null,
+                  errorStyle: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 9,
+                    color: kSRedGlow,
+                  ),
+                  filled: true,
+                  fillColor: kSBg,
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscure ? Icons.visibility_off : Icons.visibility,
+                      color: kSTextDim,
+                      size: 16,
+                    ),
+                    onPressed: () => setSt(() => _obscure = !_obscure),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.zero,
+                    borderSide: BorderSide(color: kSRed.withOpacity(0.3)),
+                  ),
+                  focusedBorder: const OutlineInputBorder(
+                    borderRadius: BorderRadius.zero,
+                    borderSide: BorderSide(color: kSRedGlow),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
                 ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.zero,
-                  borderSide: BorderSide(color: kSRed.withOpacity(0.3)),
-                ),
-                focusedBorder: const OutlineInputBorder(
-                  borderRadius: BorderRadius.zero,
-                  borderSide: BorderSide(color: kSRedGlow),
-                ),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 12, vertical: 10,
-                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text(
+                'CANCELAR',
+                style: TextStyle(fontFamily: 'monospace', color: kSTextDim),
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                final hash = md5.convert(utf8.encode(ctrl.text)).toString();
+                if (hash == topic.passwordHash) {
+                  Navigator.pop(ctx, true);
+                } else {
+                  setSt(() => _wrong = true);
+                }
+              },
+              child: const Text(
+                'ACCEDER',
+                style: TextStyle(fontFamily: 'monospace', color: kSRedGlow),
               ),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text(
-              'CANCELAR',
-              style: TextStyle(fontFamily: 'monospace', color: kSTextDim),
-            ),
-          ),
-          TextButton(
-            onPressed: () {
-              final hash = md5.convert(utf8.encode(ctrl.text)).toString();
-              if (hash == topic.passwordHash) {
-                Navigator.pop(ctx, true);
-              } else {
-                setSt(() => _wrong = true);
-              }
-            },
-            child: const Text(
-              'ACCEDER',
-              style: TextStyle(fontFamily: 'monospace', color: kSRedGlow),
-            ),
-          ),
-        ],
       ),
-    ),
-  );
-  return result ?? false;
-}
+    );
+    return result ?? false;
+  }
   // ─── Reorder ──────────────────────────────────────────────────────────────
 
   void _saveReorder(List<StudyTopic> reordered) async {
@@ -305,11 +306,14 @@ Future<bool> _promptTopicPassword(StudyTopic topic) async {
       body: Stack(
         children: [
           // Scanlines de fondo
+          // REEMPLAZA CON:
           Positioned.fill(
-            child: AnimatedBuilder(
-              animation: _scanCtrl,
-              builder: (_, __) =>
-                  CustomPaint(painter: _SRScanlinePainter(_scanCtrl.value)),
+            child: RepaintBoundary(
+              child: AnimatedBuilder(
+                animation: _scanCtrl,
+                builder: (_, __) =>
+                    CustomPaint(painter: _SRScanlinePainter(_scanCtrl.value)),
+              ),
             ),
           ),
           // Contenido principal
@@ -1182,29 +1186,31 @@ class _ConfirmDialog extends StatelessWidget {
 
 class _SRScanlinePainter extends CustomPainter {
   final double t;
-  _SRScanlinePainter(this.t);
+  const _SRScanlinePainter(this.t);
+
+  static final _linePaint = Paint()..color = const Color(0x0F000000);
+  static final _scanPaint = Paint();
+  static const _scanGradient = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [
+      Colors.transparent,
+      Color(0x08CC0000),
+      Color(0x0FCC0000),
+      Color(0x08CC0000),
+      Colors.transparent,
+    ],
+  );
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = Colors.black.withOpacity(0.06);
     for (double y = 0; y < size.height; y += 3) {
-      canvas.drawRect(Rect.fromLTWH(0, y, size.width, 1), paint);
+      canvas.drawRect(Rect.fromLTWH(0, y, size.width, 1), _linePaint);
     }
-    // Línea de scan lenta y tenue
     final scanY = (t * size.height * 0.8) % (size.height + 60) - 30;
-    final scanPaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [
-          Colors.transparent,
-          kSRed.withOpacity(0.03),
-          kSRed.withOpacity(0.06),
-          kSRed.withOpacity(0.03),
-          Colors.transparent,
-        ],
-      ).createShader(Rect.fromLTWH(0, scanY, size.width, 60));
-    canvas.drawRect(Rect.fromLTWH(0, scanY, size.width, 60), scanPaint);
+    final rect = Rect.fromLTWH(0, scanY, size.width, 60);
+    _scanPaint.shader = _scanGradient.createShader(rect);
+    canvas.drawRect(rect, _scanPaint);
   }
 
   @override

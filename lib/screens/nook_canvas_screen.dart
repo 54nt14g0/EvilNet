@@ -711,10 +711,12 @@ class _NookCanvasScreenState extends State<NookCanvasScreen>
     }
 
     return Positioned.fill(
-      child: AnimatedBuilder(
-        animation: _bgPulse,
-        builder: (_, __) =>
-            CustomPaint(painter: _CanvasDefaultBgPainter(_bgPulse.value)),
+      child: RepaintBoundary(
+        child: AnimatedBuilder(
+          animation: _bgPulse,
+          builder: (_, __) =>
+              CustomPaint(painter: _CanvasDefaultBgPainter(_bgPulse.value)),
+        ),
       ),
     );
   }
@@ -868,36 +870,87 @@ class _NookCanvasScreenState extends State<NookCanvasScreen>
   }
 
   Widget _buildRiddleInput(NookElement el, double w, double h, double scale) {
-  final solved = _isRiddleSolved(el.id);
-  final bgColor = el.textColor != null
-      ? Color(el.textColor!).withOpacity(0.85)
-      : Colors.black.withOpacity(0.65);
-  final textColor = el.buttonColor != null
-      ? Color(el.buttonColor!)
-      : Colors.white70;
+    final solved = _isRiddleSolved(el.id);
+    final bgColor = el.textColor != null
+        ? Color(el.textColor!).withOpacity(0.85)
+        : Colors.black.withOpacity(0.65);
+    final textColor = el.buttonColor != null
+        ? Color(el.buttonColor!)
+        : Colors.white70;
 
-  // El tamaño de fuente del acertijo escala con el canvas
-  final questionFontSize = (el.fontSize ?? 12) * scale;
+    // El tamaño de fuente del acertijo escala con el canvas
+    final questionFontSize = (el.fontSize ?? 12) * scale;
 
-  // El input y botón OK escalan proporcionalmente al tamaño de fuente elegido
-  final inputFontSize = questionFontSize * 0.85;
-  final okFontSize = questionFontSize * 0.75;
-  final okPaddingH = questionFontSize * 0.8;
-  final okPaddingV = questionFontSize * 0.65;
-  final inputPaddingH = questionFontSize * 0.55;
-  final inputPaddingV = questionFontSize * 0.55;
+    // El input y botón OK escalan proporcionalmente al tamaño de fuente elegido
+    final inputFontSize = questionFontSize * 0.85;
+    final okFontSize = questionFontSize * 0.75;
+    final okPaddingH = questionFontSize * 0.8;
+    final okPaddingV = questionFontSize * 0.65;
+    final inputPaddingH = questionFontSize * 0.55;
+    final inputPaddingV = questionFontSize * 0.55;
 
-  _riddleControllers.putIfAbsent(el.id, () => TextEditingController());
-  final ctrl = _riddleControllers[el.id]!;
+    _riddleControllers.putIfAbsent(el.id, () => TextEditingController());
+    final ctrl = _riddleControllers[el.id]!;
 
-  if (solved) {
+    if (solved) {
+      return Container(
+        width: w,
+        height: h,
+        padding: EdgeInsets.all(8 * scale),
+        decoration: BoxDecoration(
+          color: Colors.green.withOpacity(0.12),
+          border: Border.all(color: Colors.green.withOpacity(0.4)),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Flexible(
+              child: SingleChildScrollView(
+                child: Text(
+                  el.riddleQuestion ?? '',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: questionFontSize,
+                    color: textColor,
+                    height: 1.3,
+                  ),
+                ),
+              ),
+            ),
+            SizedBox(height: 4 * scale),
+            Row(
+              children: [
+                Icon(
+                  Icons.check_circle,
+                  color: Colors.green,
+                  size: questionFontSize,
+                ),
+                SizedBox(width: 4 * scale),
+                Text(
+                  '¡RESUELTO!',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: okFontSize,
+                    color: Colors.green,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
     return Container(
       width: w,
       height: h,
       padding: EdgeInsets.all(8 * scale),
       decoration: BoxDecoration(
-        color: Colors.green.withOpacity(0.12),
-        border: Border.all(color: Colors.green.withOpacity(0.4)),
+        color: bgColor,
+        border: Border.all(color: kNW1.withOpacity(0.45)),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
@@ -917,18 +970,68 @@ class _NookCanvasScreenState extends State<NookCanvasScreen>
               ),
             ),
           ),
-          SizedBox(height: 4 * scale),
+          SizedBox(height: 6 * scale),
           Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Icon(Icons.check_circle, color: Colors.green, size: questionFontSize),
-              SizedBox(width: 4 * scale),
-              Text(
-                '¡RESUELTO!',
-                style: TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: okFontSize,
-                  color: Colors.green,
-                  letterSpacing: 1,
+              Expanded(
+                child: TextField(
+                  controller: ctrl,
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    color: Colors.white,
+                    fontSize: inputFontSize,
+                  ),
+                  decoration: InputDecoration(
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: inputPaddingH,
+                      vertical: inputPaddingV,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(4),
+                      borderSide: BorderSide(color: kNW1.withOpacity(0.3)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(4),
+                      borderSide: BorderSide(color: kNW1.withOpacity(0.3)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(4),
+                      borderSide: const BorderSide(color: kNW2),
+                    ),
+                    hintText: '...',
+                    hintStyle: TextStyle(
+                      color: Colors.white24,
+                      fontSize: inputFontSize,
+                    ),
+                    filled: true,
+                    fillColor: Colors.black26,
+                  ),
+                  onSubmitted: (v) => _checkRiddle(el, v),
+                ),
+              ),
+              SizedBox(width: 6 * scale),
+              GestureDetector(
+                onTap: () => _checkRiddle(el, ctrl.text),
+                child: Container(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: okPaddingH,
+                    vertical: okPaddingV,
+                  ),
+                  decoration: BoxDecoration(
+                    color: kNW1.withOpacity(0.25),
+                    border: Border.all(color: kNW1.withOpacity(0.5)),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    'OK',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: okFontSize,
+                      color: kNW2,
+                      letterSpacing: 1,
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -937,103 +1040,6 @@ class _NookCanvasScreenState extends State<NookCanvasScreen>
       ),
     );
   }
-
-  return Container(
-    width: w,
-    height: h,
-    padding: EdgeInsets.all(8 * scale),
-    decoration: BoxDecoration(
-      color: bgColor,
-      border: Border.all(color: kNW1.withOpacity(0.45)),
-      borderRadius: BorderRadius.circular(8),
-    ),
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Flexible(
-          child: SingleChildScrollView(
-            child: Text(
-              el.riddleQuestion ?? '',
-              style: TextStyle(
-                fontFamily: 'monospace',
-                fontSize: questionFontSize,
-                color: textColor,
-                height: 1.3,
-              ),
-            ),
-          ),
-        ),
-        SizedBox(height: 6 * scale),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Expanded(
-              child: TextField(
-                controller: ctrl,
-                style: TextStyle(
-                  fontFamily: 'monospace',
-                  color: Colors.white,
-                  fontSize: inputFontSize,
-                ),
-                decoration: InputDecoration(
-                  contentPadding: EdgeInsets.symmetric(
-                    horizontal: inputPaddingH,
-                    vertical: inputPaddingV,
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(4),
-                    borderSide: BorderSide(color: kNW1.withOpacity(0.3)),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(4),
-                    borderSide: BorderSide(color: kNW1.withOpacity(0.3)),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(4),
-                    borderSide: const BorderSide(color: kNW2),
-                  ),
-                  hintText: '...',
-                  hintStyle: TextStyle(
-                    color: Colors.white24,
-                    fontSize: inputFontSize,
-                  ),
-                  filled: true,
-                  fillColor: Colors.black26,
-                ),
-                onSubmitted: (v) => _checkRiddle(el, v),
-              ),
-            ),
-            SizedBox(width: 6 * scale),
-            GestureDetector(
-              onTap: () => _checkRiddle(el, ctrl.text),
-              child: Container(
-                padding: EdgeInsets.symmetric(
-                  horizontal: okPaddingH,
-                  vertical: okPaddingV,
-                ),
-                decoration: BoxDecoration(
-                  color: kNW1.withOpacity(0.25),
-                  border: Border.all(color: kNW1.withOpacity(0.5)),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  'OK',
-                  style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: okFontSize,
-                    color: kNW2,
-                    letterSpacing: 1,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ],
-    ),
-  );
-}
 
   void _checkRiddle(NookElement el, String answer) {
     final correct = (el.riddleAnswer ?? '').trim();
@@ -2120,115 +2126,113 @@ class _EditableElementState extends State<_EditableElement> {
   static const double _handleSz = 22.0;
   static const double _actionH = 28.0;
 
- @override
-Widget build(BuildContext context) {
-  final w = widget.element.width * widget.scale;
-  final h = widget.element.height * widget.scale;
+  @override
+  Widget build(BuildContext context) {
+    final w = widget.element.width * widget.scale;
+    final h = widget.element.height * widget.scale;
 
-  final totalW = w + _handleSz;
-  final totalH = _actionH + h + _handleSz;
+    final totalW = w + _handleSz;
+    final totalH = _actionH + h + _handleSz;
 
-  return SizedBox(
-    width: totalW,
-    height: totalH,
-    child: Stack(
-      clipBehavior: Clip.none,
-      children: [
-        // ── Área de acciones (arriba) ──────────────────────────────
-        if (widget.isSelected)
-          Positioned(
-            top: 0,
-            left: 0,
-            height: _actionH,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _ActionBtn(
-                  icon: Icons.edit_outlined,
-                  color: kNW5,
-                  onTap: widget.onEdit,
-                ),
-                const SizedBox(width: 4),
-                _ActionBtn(
-                  icon: Icons.delete_outline,
-                  color: kNW3,
-                  onTap: widget.onDelete,
-                ),
-              ],
+    return SizedBox(
+      width: totalW,
+      height: totalH,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // ── Área de acciones (arriba) ──────────────────────────────
+          if (widget.isSelected)
+            Positioned(
+              top: 0,
+              left: 0,
+              height: _actionH,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _ActionBtn(
+                    icon: Icons.edit_outlined,
+                    color: kNW5,
+                    onTap: widget.onEdit,
+                  ),
+                  const SizedBox(width: 4),
+                  _ActionBtn(
+                    icon: Icons.delete_outline,
+                    color: kNW3,
+                    onTap: widget.onDelete,
+                  ),
+                ],
+              ),
             ),
-          ),
 
-        // ── Contenido + borde + drag ───────────────────────────────
-        Positioned(
-          top: _actionH,
-          left: 0,
-          child: GestureDetector(
-            onTap: widget.onSelect,
-            onPanStart: (d) {
-              widget.onSelect();
-              _resizing = false;
-              _lastPos = d.globalPosition;
-            },
-            onPanUpdate: (d) {
-              if (!_resizing) {
-                final delta = d.globalPosition - _lastPos;
+          // ── Contenido + borde + drag ───────────────────────────────
+          Positioned(
+            top: _actionH,
+            left: 0,
+            child: GestureDetector(
+              onTap: widget.onSelect,
+              onPanStart: (d) {
+                widget.onSelect();
+                _resizing = false;
                 _lastPos = d.globalPosition;
-                widget.onMove(delta.dx, delta.dy);
-              }
-            },
-            child: Stack(
-              children: [
-                if (widget.isSelected)
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          border: Border.all(color: kNW2, width: 1.5),
+              },
+              onPanUpdate: (d) {
+                if (!_resizing) {
+                  final delta = d.globalPosition - _lastPos;
+                  _lastPos = d.globalPosition;
+                  widget.onMove(delta.dx, delta.dy);
+                }
+              },
+              child: Stack(
+                children: [
+                  if (widget.isSelected)
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            border: Border.all(color: kNW2, width: 1.5),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                SizedBox(width: w, height: h, child: widget.child),
-              ],
-            ),
-          ),
-        ),
-
-        // ── Handle de resize — siempre dentro del viewport ─────────
-        if (widget.isSelected)
-          Positioned(
-            top: _actionH + h - _handleSz, // pegado al borde INTERNO inferior
-            left: w - _handleSz,           // pegado al borde INTERNO derecho
-            child: GestureDetector(
-              onPanStart: (_) => _resizing = true,
-              onPanUpdate: (d) => widget.onResize(d.delta.dx, d.delta.dy),
-              onPanEnd: (_) => _resizing = false,
-              child: Container(
-                width: _handleSz,
-                height: _handleSz,
-                decoration: BoxDecoration(
-                  color: kNW2,
-                  borderRadius: BorderRadius.circular(4),
-                  boxShadow: [
-                    BoxShadow(
-                      color: kNW2.withOpacity(0.5),
-                      blurRadius: 6,
-                    ),
-                  ],
-                ),
-                child: const Icon(
-                  Icons.open_in_full,
-                  size: 12,
-                  color: Colors.black,
-                ),
+                  SizedBox(width: w, height: h, child: widget.child),
+                ],
               ),
             ),
           ),
-      ],
-    ),
-  );
+
+          // ── Handle de resize — siempre dentro del viewport ─────────
+          if (widget.isSelected)
+            Positioned(
+              top: _actionH + h - _handleSz, // pegado al borde INTERNO inferior
+              left: w - _handleSz, // pegado al borde INTERNO derecho
+              child: GestureDetector(
+                onPanStart: (_) => _resizing = true,
+                onPanUpdate: (d) => widget.onResize(d.delta.dx, d.delta.dy),
+                onPanEnd: (_) => _resizing = false,
+                child: Container(
+                  width: _handleSz,
+                  height: _handleSz,
+                  decoration: BoxDecoration(
+                    color: kNW2,
+                    borderRadius: BorderRadius.circular(4),
+                    boxShadow: [
+                      BoxShadow(color: kNW2.withOpacity(0.5), blurRadius: 6),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.open_in_full,
+                    size: 12,
+                    color: Colors.black,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }
-}
+
 class _ActionBtn extends StatelessWidget {
   final IconData icon;
   final Color color;
