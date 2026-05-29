@@ -52,7 +52,7 @@ class _TasksScreenState extends State<TasksScreen>
     return labels;
   }
 
-  @override
+@override
 void initState() {
   super.initState();
   _sub = _service.events.listen((_) {
@@ -61,9 +61,9 @@ void initState() {
   for (final ip in _peer.knownPeers.keys) {
     _service.syncWithNewPeer(ip);
   }
-  // Forzar rebuild tras primer frame para mostrar tareas ya cargadas
+  // Marcar tareas como vistas al abrir la pantalla → limpia el badge
   WidgetsBinding.instance.addPostFrameCallback((_) {
-    if (mounted) setState(() {});
+    if (mounted) _service.markTasksSeenForUser(_myId);
   });
 }
 
@@ -737,50 +737,87 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     );
   }
 
-  Widget _buildInfoWindow() {
-    return _Win95Window(
-      title: 'Información',
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _InfoRow(label: 'Título:', value: _task.title),
+ Widget _buildInfoWindow() {
+  return _Win95Window(
+    title: 'Información',
+    child: Padding(
+      padding: const EdgeInsets.all(10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _InfoRow(label: 'Título:', value: _task.title),
+          _InfoRow(
+            label: 'Asignada por:',
+            value: '@${_task.assignerUsername} (J${_task.assignerHierarchy})',
+          ),
+          _InfoRow(
+            label: 'Para:',
+            value: '@${_task.assigneeUsername} (J${_task.assigneeHierarchy})',
+          ),
+          _InfoRow(label: 'Creada:', value: _fmtDateTime(_task.createdAt)),
+          if (_task.dueDate != null)
             _InfoRow(
-              label: 'Asignada por:',
-              value: '@${_task.assignerUsername} (J${_task.assignerHierarchy})',
+              label: 'Límite:',
+              value: _fmtDateTime(_task.dueDate!),
+              valueColor: _task.isOverdue ? const Color(0xFFCC0000) : null,
             ),
+          _InfoRow(
+            label: 'Importancia:',
+            value: _importanceLabel(_task.importance),
+            valueColor: _importanceColor(_task.importance),
+          ),
+          _InfoRow(
+            label: 'Estado:',
+            value: _completionLabel(_task),
+            valueColor: _completionColor(_task),
+          ),
+          if (_task.markedDoneByAssignee && _task.markedDoneAt != null)
             _InfoRow(
-              label: 'Para:',
-              value: '@${_task.assigneeUsername} (J${_task.assigneeHierarchy})',
+              label: 'Entregó el:',
+              value: _fmtDateTime(_task.markedDoneAt!),
             ),
-            _InfoRow(label: 'Creada:', value: _fmtDateTime(_task.createdAt)),
-            if (_task.dueDate != null)
-              _InfoRow(
-                label: 'Límite:',
-                value: _fmtDateTime(_task.dueDate!),
-                valueColor: _task.isOverdue ? const Color(0xFFCC0000) : null,
+          // Retroalimentación
+          if (_task.feedback != null && _task.feedback!.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: kRWPurple.withOpacity(0.07),
+                border: Border.all(color: kRWPurple.withOpacity(0.4)),
               ),
-            _InfoRow(
-              label: 'Importancia:',
-              value: _importanceLabel(_task.importance),
-              valueColor: _importanceColor(_task.importance),
-            ),
-            _InfoRow(
-              label: 'Estado:',
-              value: _completionLabel(_task),
-              valueColor: _completionColor(_task),
-            ),
-            if (_task.markedDoneByAssignee && _task.markedDoneAt != null)
-              _InfoRow(
-                label: 'Entregó el:',
-                value: _fmtDateTime(_task.markedDoneAt!),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'RETROALIMENTACIÓN:',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 9,
+                      color: kRWPurple,
+                      letterSpacing: 1,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _task.feedback!,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      color: kW95Text,
+                      height: 1.4,
+                    ),
+                  ),
+                ],
               ),
+            ),
           ],
-        ),
+        ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildDescriptionWindow() {
     return _Win95Window(
@@ -849,175 +886,204 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     );
   }
 
-  Widget _buildSolutionWindow() {
-    final sol = _task.solution;
+ Widget _buildSolutionWindow() {
+  final sol = _task.solution;
+  // La solución solo se puede agregar/editar si:
+  // soy el asignado, NO marqué "ya terminé", NO está vencida, NO calificada
+  final canEditSolution = _isAssignee &&
+      !_task.markedDoneByAssignee &&
+      !_task.isOverdue &&
+      _task.completion == TaskCompletion.none;
 
-    return _Win95Window(
-      title: 'Solución / Entrega',
-      accentColor: kRWNeon,
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (sol == null) ...[
-              const Text(
-                'No se ha entregado solución aún.',
-                style: TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 11,
-                  color: kW95Dark,
-                ),
+  return _Win95Window(
+    title: 'Solución / Entrega',
+    accentColor: kRWNeon,
+    child: Padding(
+      padding: const EdgeInsets.all(10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (sol == null) ...[
+            const Text(
+              'No se ha entregado solución aún.',
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 11,
+                color: kW95Dark,
               ),
-              if (_isAssignee && _task.completion == TaskCompletion.none) ...[
-                const SizedBox(height: 8),
-                _W95Button(
-                  label: '+ Agregar solución',
-                  onTap: () => _showSolutionDialog(context),
-                ),
-              ],
-            ] else ...[
-              _InfoRow(label: 'Enviada:', value: _fmtDateTime(sol.submittedAt)),
-              if (sol.editedAt != null)
-                _InfoRow(label: 'Editada:', value: _fmtDateTime(sol.editedAt!)),
+            ),
+            if (canEditSolution) ...[
               const SizedBox(height: 8),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: kW95Input,
-                  border: Border(
-                    top: const BorderSide(color: kW95Dark),
-                    left: const BorderSide(color: kW95Dark),
-                    right: const BorderSide(color: kW95Light),
-                    bottom: const BorderSide(color: kW95Light),
-                  ),
-                ),
-                child: Text(
-                  sol.text.isEmpty ? '(sin texto)' : sol.text,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 12,
-                    height: 1.5,
-                  ),
+              _W95Button(
+                label: '+ Agregar solución',
+                onTap: () => _showSolutionDialog(context),
+              ),
+            ] else if (_isAssignee) ...[
+              const SizedBox(height: 6),
+              Text(
+                _task.markedDoneByAssignee
+                    ? '⚠ Desmarca la entrega para agregar solución.'
+                    : _task.isOverdue
+                    ? '⚠ El plazo ha vencido.'
+                    : '',
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 10,
+                  color: kRWPink,
                 ),
               ),
-              if (sol.imagePaths.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: sol.imagePaths.map((p) {
-                    if (!File(p).existsSync()) return const SizedBox.shrink();
-                    return GestureDetector(
-                      onTap: () => _showFullImage(context, p),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          border: Border(
-                            top: const BorderSide(color: kW95Light),
-                            left: const BorderSide(color: kW95Light),
-                            right: const BorderSide(color: kW95Dark),
-                            bottom: const BorderSide(color: kW95Dark),
-                          ),
-                        ),
-                        child: Image.file(
-                          File(p),
-                          width: 80,
-                          height: 80,
-                          fit: BoxFit.cover,
+            ],
+          ] else ...[
+            _InfoRow(
+              label: 'Enviada:',
+              value: _fmtDateTime(sol.submittedAt),
+            ),
+            if (sol.editedAt != null)
+              _InfoRow(
+                label: 'Editada:',
+                value: _fmtDateTime(sol.editedAt!),
+              ),
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: kW95Input,
+                border: Border(
+                  top: const BorderSide(color: kW95Dark),
+                  left: const BorderSide(color: kW95Dark),
+                  right: const BorderSide(color: kW95Light),
+                  bottom: const BorderSide(color: kW95Light),
+                ),
+              ),
+              child: Text(
+                sol.text.isEmpty ? '(sin texto)' : sol.text,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  height: 1.5,
+                ),
+              ),
+            ),
+            if (sol.imagePaths.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: sol.imagePaths.map((p) {
+                  if (!File(p).existsSync()) return const SizedBox.shrink();
+                  return GestureDetector(
+                    onTap: () => _showFullImage(context, p),
+                    child: Container(
+                      decoration: const BoxDecoration(
+                        border: Border(
+                          top: BorderSide(color: kW95Light),
+                          left: BorderSide(color: kW95Light),
+                          right: BorderSide(color: kW95Dark),
+                          bottom: BorderSide(color: kW95Dark),
                         ),
                       ),
-                    );
-                  }).toList(),
-                ),
-              ],
-              if (_isAssignee) ...[
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    _W95Button(
-                      label: '✎ Editar',
-                      onTap: () => _showSolutionDialog(context),
+                      child: Image.file(
+                        File(p),
+                        width: 80,
+                        height: 80,
+                        fit: BoxFit.cover,
+                      ),
                     ),
-                    const SizedBox(width: 6),
-                    _W95Button(
-                      label: '✕ Eliminar',
-                      danger: true,
-                      onTap: () => _confirmDeleteSolution(context),
-                    ),
-                  ],
-                ),
-              ],
+                  );
+                }).toList(),
+              ),
+            ],
+            if (canEditSolution) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  _W95Button(
+                    label: '✎ Editar',
+                    onTap: () => _showSolutionDialog(context),
+                  ),
+                  const SizedBox(width: 6),
+                  _W95Button(
+                    label: '✕ Eliminar',
+                    danger: true,
+                    onTap: () => _confirmDeleteSolution(context),
+                  ),
+                ],
+              ),
             ],
           ],
-        ),
+        ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildActionsWindow() {
-    return _Win95Window(
-      title: 'Acciones',
-      accentColor: kRWPink,
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            // El asignado puede marcar "ya terminé"
-            if (_isAssignee &&
-                !_task.markedDoneByAssignee &&
-                _task.completion == TaskCompletion.none &&
-                !_task.isOverdue)
-              _W95Button(
-                label: '✓ Ya terminé',
-                accent: kRWNeon,
-                onTap: () => _confirmMarkDone(context),
-              ),
+  final canQualify = _isAssigner ||
+      (widget.isAdmin && !_isAssigner);
+  final taskNeedsQualification =
+      _task.markedDoneByAssignee || _task.isOverdue;
+  final alreadyQualified = _task.completion != TaskCompletion.none;
 
-            // El asignador califica (solo si el asignado marcó listo
-            // O si la tarea está vencida)
-            if (_isAssigner &&
-                (_task.markedDoneByAssignee || _task.isOverdue) &&
-                _task.completion == TaskCompletion.none)
-              _W95Button(
-                label: '⭐ Calificar',
-                accent: kRWPurple,
-                onTap: () => _showCalificationDialog(context),
-              ),
+  return _Win95Window(
+    title: 'Acciones',
+    accentColor: kRWPink,
+    child: Padding(
+      padding: const EdgeInsets.all(10),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          // Marcar "ya terminé" — solo si no marcado, no vencido, no calificado
+          if (_isAssignee &&
+              !_task.markedDoneByAssignee &&
+              _task.completion == TaskCompletion.none &&
+              !_task.isOverdue)
+            _W95Button(
+              label: '✓ Ya terminé',
+              accent: kRWNeon,
+              onTap: () => _confirmMarkDone(context),
+            ),
 
-            // También admins pueden calificar
-            if (widget.isAdmin &&
-                !_isAssigner &&
-                (_task.markedDoneByAssignee || _task.isOverdue) &&
-                _task.completion == TaskCompletion.none)
-              _W95Button(
-                label: '⭐ Calificar',
-                accent: kRWPurple,
-                onTap: () => _showCalificationDialog(context),
-              ),
+          // Desmarcar "ya terminé" — solo si está marcado, no calificado y no vencido
+          if (_isAssignee &&
+              _task.markedDoneByAssignee &&
+              _task.completion == TaskCompletion.none &&
+              !_task.isOverdue)
+            _W95Button(
+              label: '↩ Desmarcar entrega',
+              accent: kRWPink,
+              onTap: () => _confirmUnmarkDone(context),
+            ),
 
-            // El asignador o admin pueden editar
-            if (_isAssigner ||
-                (widget.isAdmin && _task.completion == TaskCompletion.none))
-              _W95Button(
-                label: '✎ Editar tarea',
-                onTap: () => _showEditDialog(context),
-              ),
+          // Calificar / Recalificar — asignador o admin cuando aplica
+          if (canQualify && (taskNeedsQualification || alreadyQualified))
+            _W95Button(
+              label: alreadyQualified ? '✏ Recalificar' : '⭐ Calificar',
+              accent: kRWPurple,
+              onTap: () => _showCalificationDialog(context),
+            ),
 
-            // Eliminar
-            if (_isAssigner || widget.isAdmin)
-              _W95Button(
-                label: '🗑 Eliminar',
-                danger: true,
-                onTap: () => _confirmDeleteTask(context),
-              ),
-          ],
-        ),
+          // Editar tarea
+          if (_isAssigner ||
+              (widget.isAdmin && _task.completion == TaskCompletion.none))
+            _W95Button(
+              label: '✎ Editar tarea',
+              onTap: () => _showEditDialog(context),
+            ),
+
+          // Eliminar
+          if (_isAssigner || widget.isAdmin)
+            _W95Button(
+              label: '🗑 Eliminar',
+              danger: true,
+              onTap: () => _confirmDeleteTask(context),
+            ),
+        ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   // ─── Diálogos ─────────────────────────────────────────────────────────────
 
@@ -1031,16 +1097,34 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     final err = await _service.markDone(_task.id);
     if (err != null && mounted) _showError(ctx, err);
   }
+  Future<void> _confirmUnmarkDone(BuildContext ctx) async {
+  final ok = await _showConfirm(
+    ctx,
+    '¿Desmarcar entrega?',
+    'Podrás editar la solución y volver\na marcar como terminada más adelante.',
+  );
+  if (!ok) return;
+  final err = await _service.unmarkDone(_task.id);
+  if (err != null && mounted) _showError(ctx, err);
+}
 
-  Future<void> _showCalificationDialog(BuildContext ctx) async {
-    TaskCompletion? selected;
-    await showDialog(
-      context: ctx,
-      builder: (_) => StatefulBuilder(
-        builder: (c, setSt) => _Win95Dialog(
-          title: 'Calificar tarea',
+ Future<void> _showCalificationDialog(BuildContext ctx) async {
+  TaskCompletion? selected =
+      _task.completion != TaskCompletion.none ? _task.completion : null;
+  final feedbackCtrl = TextEditingController(text: _task.feedback ?? '');
+
+  await showDialog(
+    context: ctx,
+    builder: (_) => StatefulBuilder(
+      builder: (c, setSt) => _Win95Dialog(
+        title: _task.completion != TaskCompletion.none
+            ? 'Recalificar tarea'
+            : 'Calificar tarea',
+        wide: true,
+        child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 '"${_task.title}"',
@@ -1052,49 +1136,60 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                 ),
               ),
               const SizedBox(height: 12),
-              for (final c in [
+              for (final comp in [
                 TaskCompletion.good,
                 TaskCompletion.regular,
                 TaskCompletion.bad,
                 TaskCompletion.notDone,
               ])
                 GestureDetector(
-                  onTap: () => setSt(() => selected = c),
+                  onTap: () => setSt(() => selected = comp),
                   child: Container(
                     margin: const EdgeInsets.only(bottom: 4),
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: selected == c ? kW95TitleBar : kW95Window,
+                      color: selected == comp ? kW95TitleBar : kW95Window,
                       border: Border(
                         top: BorderSide(
-                          color: selected == c ? kW95Dark : kW95Light,
+                          color: selected == comp ? kW95Dark : kW95Light,
                         ),
                         left: BorderSide(
-                          color: selected == c ? kW95Dark : kW95Light,
+                          color: selected == comp ? kW95Dark : kW95Light,
                         ),
                         right: BorderSide(
-                          color: selected == c ? kW95Light : kW95Dark,
+                          color: selected == comp ? kW95Light : kW95Dark,
                         ),
                         bottom: BorderSide(
-                          color: selected == c ? kW95Light : kW95Dark,
+                          color: selected == comp ? kW95Light : kW95Dark,
                         ),
                       ),
                     ),
                     child: Text(
-                      _completionLabelFor(c),
+                      _completionLabelFor(comp),
                       style: TextStyle(
                         fontFamily: 'monospace',
                         fontSize: 12,
-                        color: selected == c ? kW95TitleText : kW95Text,
+                        color: selected == comp ? kW95TitleText : kW95Text,
                       ),
                     ),
                   ),
                 ),
               const SizedBox(height: 12),
+              const _W95Label('Retroalimentación (opcional):'),
+              const SizedBox(height: 4),
+              _W95TextField(
+                controller: feedbackCtrl,
+                hint: 'Escribe comentarios sobre el desempeño...',
+                maxLines: 3,
+              ),
+              const SizedBox(height: 12),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  _W95Button(label: 'Cancelar', onTap: () => Navigator.pop(c)),
+                  _W95Button(
+                    label: 'Cancelar',
+                    onTap: () => Navigator.pop(c),
+                  ),
                   const SizedBox(width: 8),
                   _W95Button(
                     label: 'Confirmar',
@@ -1103,9 +1198,11 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                         ? null
                         : () async {
                             Navigator.pop(c);
+                            final fb = feedbackCtrl.text.trim();
                             final err = await _service.setCompletion(
                               _task.id,
                               selected!,
+                              feedback: fb.isEmpty ? null : fb,
                             );
                             if (err != null && mounted) {
                               _showError(ctx, err);
@@ -1118,9 +1215,11 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
 
+  feedbackCtrl.dispose();
+}
   void _showSolutionDialog(BuildContext ctx) {
     showDialog(
       context: ctx,
@@ -1382,22 +1481,49 @@ class _CreateTaskDialogState extends State<_CreateTaskDialog> {
   }
 
   Future<void> _pickDate() async {
-    final now = DateTime.now();
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _dueDate ?? now.add(const Duration(days: 3)),
-      firstDate: now,
-      lastDate: now.add(const Duration(days: 365)),
-      builder: (ctx, child) => Theme(
-        data: ThemeData.light().copyWith(
-          colorScheme: const ColorScheme.light(primary: kW95TitleBar),
-        ),
-        child: child!,
+  final now = DateTime.now();
+  final pickedDate = await showDatePicker(
+    context: context,
+    initialDate: _dueDate ?? now.add(const Duration(days: 3)),
+    firstDate: now,
+    lastDate: now.add(const Duration(days: 365)),
+    builder: (ctx, child) => Theme(
+      data: ThemeData.light().copyWith(
+        colorScheme: const ColorScheme.light(primary: kW95TitleBar),
       ),
-    );
-    if (picked != null) setState(() => _dueDate = picked);
-  }
+      child: child!,
+    ),
+  );
+  if (pickedDate == null) return;
 
+  // Seleccionar hora
+  final pickedTime = await showTimePicker(
+    context: context,
+    initialTime: _dueDate != null
+        ? TimeOfDay(hour: _dueDate!.hour, minute: _dueDate!.minute)
+        : const TimeOfDay(hour: 23, minute: 59),
+    builder: (ctx, child) => Theme(
+      data: ThemeData.light().copyWith(
+        colorScheme: const ColorScheme.light(primary: kW95TitleBar),
+      ),
+      child: child!,
+    ),
+  );
+
+  setState(() {
+    if (pickedTime != null) {
+      _dueDate = DateTime(
+        pickedDate.year,
+        pickedDate.month,
+        pickedDate.day,
+        pickedTime.hour,
+        pickedTime.minute,
+      );
+    } else {
+      _dueDate = pickedDate;
+    }
+  });
+}
   Future<void> _save() async {
     if (_titleCtrl.text.trim().isEmpty) return;
     if (widget.existing == null && _selectedAssigneeId == null) return;
@@ -1652,9 +1778,11 @@ class _CreateTaskDialogState extends State<_CreateTaskDialog> {
   }
 
   String _fmtDate(DateTime dt) =>
-      '${dt.day.toString().padLeft(2, '0')}/'
-      '${dt.month.toString().padLeft(2, '0')}/'
-      '${dt.year}';
+    '${dt.day.toString().padLeft(2, '0')}/'
+    '${dt.month.toString().padLeft(2, '0')}/'
+    '${dt.year} '
+    '${dt.hour.toString().padLeft(2, '0')}:'
+    '${dt.minute.toString().padLeft(2, '0')}';
 }
 
 // ─── Diálogo solución ─────────────────────────────────────────────────────────
@@ -1806,21 +1934,38 @@ class TaskPermissionsWidget extends StatefulWidget {
 class _TaskPermissionsWidgetState extends State<TaskPermissionsWidget> {
   final _service = TaskService();
   final _auth = AuthService();
+  StreamSubscription? _sub;
+
+  @override
+  void initState() {
+    super.initState();
+    // Escuchar cambios del servicio para refrescar switches
+    _sub = _service.events.listen((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final me = _auth.currentUser;
     if (me == null || me.jerarquia < 9) return const SizedBox.shrink();
 
-    final candidates =
-        _auth.users.where((u) => u.jerarquia < 9 && u.id != me.id).toList()
-          ..sort((a, b) => b.jerarquia.compareTo(a.jerarquia));
+    final candidates = _auth.users
+        .where((u) => u.jerarquia < 9 && u.id != me.id)
+        .toList()
+      ..sort((a, b) => b.jerarquia.compareTo(a.jerarquia));
 
     if (candidates.isEmpty) {
       return const Padding(
         padding: EdgeInsets.all(8),
         child: Text(
-          'No hay usuarios habilitables.',
+          'No hay usuarios habilitables (todos son J9+).',
           style: TextStyle(
             fontFamily: 'monospace',
             fontSize: 11,
@@ -1834,37 +1979,91 @@ class _TaskPermissionsWidgetState extends State<TaskPermissionsWidget> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: candidates.map((u) {
         final enabled = _service.isEnabledAssigner(u.id);
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 6),
+        return Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.2),
+            border: Border.all(
+              color: enabled
+                  ? const Color(0xFF00FFB2).withOpacity(0.3)
+                  : Colors.white12,
+            ),
+            borderRadius: BorderRadius.circular(2),
+          ),
           child: Row(
             children: [
               Expanded(
-                child: Text(
-                  '@${u.username}  (J${u.jerarquia})',
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 11,
-                    color: Colors.white70,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '@${u.username}',
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                        color: Colors.white70,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Text(
+                      'J${u.jerarquia} — puede asignar a J1–J${u.jerarquia - 1}',
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 9,
+                        color: Colors.white38,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              Switch(
-                value: enabled,
-                onChanged: (v) async {
-                  await _service.setAssignerPermission(u.id, v);
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: () async {
+                  final err = await _service.setAssignerPermission(
+                    u.id,
+                    !enabled,
+                  );
+                  if (err != null && mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          err,
+                          style: const TextStyle(fontFamily: 'monospace'),
+                        ),
+                      ),
+                    );
+                  }
                   if (mounted) setState(() {});
                 },
-                activeColor: const Color(0xFF00FFB2),
-                inactiveThumbColor: Colors.white38,
-                inactiveTrackColor: Colors.white12,
-              ),
-              Text(
-                enabled ? 'PUEDE ASIGNAR' : 'No puede',
-                style: TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 9,
-                  color: enabled ? const Color(0xFF00FFB2) : Colors.white24,
-                  letterSpacing: 1,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: enabled
+                        ? const Color(0xFF00FFB2).withOpacity(0.15)
+                        : Colors.white10,
+                    border: Border.all(
+                      color: enabled
+                          ? const Color(0xFF00FFB2).withOpacity(0.5)
+                          : Colors.white24,
+                    ),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                  child: Text(
+                    enabled ? '✓ HABILITADO' : '✗ DESHABILITADO',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 10,
+                      color: enabled
+                          ? const Color(0xFF00FFB2)
+                          : Colors.white38,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1,
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -1874,7 +2073,6 @@ class _TaskPermissionsWidgetState extends State<TaskPermissionsWidget> {
     );
   }
 }
-
 // ─── Widgets auxiliares Win95 ─────────────────────────────────────────────────
 
 class _Win95Window extends StatelessWidget {

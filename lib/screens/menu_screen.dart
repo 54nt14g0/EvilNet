@@ -17,6 +17,7 @@ import '../services/nook_service.dart';
 import 'nook_worlds_screen.dart';
 import '../services/task_service.dart';
 import 'tasks_screen.dart';
+import '../services/task_service.dart';
 
 import '../services/universe_service.dart';
 import 'universe_list_screen.dart';
@@ -46,6 +47,8 @@ class _MenuScreenState extends State<MenuScreen>
   bool _isRouteActive = false;
   int _totalUnread = 0;
   StreamSubscription? _unreadSub;
+  int _taskBadge = 0;
+  StreamSubscription? _taskSub;
   // Fondo y canción aleatorios
   late final String _selectedBackground;
   late final String _selectedSong;
@@ -124,6 +127,12 @@ class _MenuScreenState extends State<MenuScreen>
     _startMusic();
     _unreadSub = ChatService().unreadStream.listen((counts) {
       if (mounted) setState(() => _totalUnread = ChatService().totalUnread);
+    });
+    _taskSub = TaskService().events.listen((_) {
+      if (mounted) {
+        final myId = AuthService().currentUser?.id ?? '';
+        setState(() => _taskBadge = TaskService().newTasksCountForUser(myId));
+      }
     });
     Future.microtask(() async {
       await _initService();
@@ -492,6 +501,7 @@ class _MenuScreenState extends State<MenuScreen>
     _rainCtrl.dispose();
     _videoCtrl?.dispose();
     _musicPlayer.dispose();
+    _taskSub?.cancel();
     super.dispose();
   }
   // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -810,6 +820,7 @@ class _MenuScreenState extends State<MenuScreen>
     final shadowBlur = isMobile ? 4.0 : 8.0;
 
     final showBadge = item.label == 'Lobby' && _totalUnread > 0;
+    final showTaskBadge = item.label == 'Tareas' && _taskBadge > 0;
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hoveredIndex = index),
@@ -896,6 +907,27 @@ class _MenuScreenState extends State<MenuScreen>
                       fontFamily: 'monospace',
                       fontSize: 9,
                       color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              if (showTaskBadge) // ← NUEVO
+                Container(
+                  margin: const EdgeInsets.only(right: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.shade700,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    _taskBadge > 99 ? '99+' : '$_taskBadge',
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 9,
+                      color: Colors.black,
                       fontWeight: FontWeight.bold,
                     ),
                   ),

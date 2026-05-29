@@ -54,37 +54,26 @@ class TaskSolution {
 
 class Task {
   final String id;
-
-  // Asignador
   final String assignerId;
   final String assignerUsername;
   final int assignerHierarchy;
-
-  // Asignado
   final String assigneeId;
   final String assigneeUsername;
   final int assigneeHierarchy;
-
-  // Contenido
   final String title;
   final String description;
   final List<String> descriptionImagePaths;
-
-  // Metadatos
   final TaskImportance importance;
   final DateTime createdAt;
   final DateTime? dueDate;
   final DateTime updatedAt;
-
-  // Estado
   final TaskStatus status;
   final TaskCompletion completion;
   final bool markedDoneByAssignee;
   final DateTime? markedDoneAt;
-  final bool overdueFlagged; // ya se marcó automáticamente como notDone
-
-  // Solución
+  final bool overdueFlagged;
   final TaskSolution? solution;
+  final String? feedback; // ← NUEVO: retroalimentación del asignador
 
   const Task({
     required this.id,
@@ -107,6 +96,7 @@ class Task {
     this.markedDoneAt,
     this.overdueFlagged = false,
     this.solution,
+    this.feedback,
   });
 
   bool get isOverdue {
@@ -127,9 +117,12 @@ class Task {
     TaskCompletion? completion,
     bool? markedDoneByAssignee,
     DateTime? markedDoneAt,
+    bool clearMarkedDoneAt = false, // ← NUEVO
     bool? overdueFlagged,
     TaskSolution? solution,
     bool clearSolution = false,
+    String? feedback,
+    bool clearFeedback = false, // ← NUEVO
   }) {
     return Task(
       id: id,
@@ -151,9 +144,12 @@ class Task {
       completion: completion ?? this.completion,
       markedDoneByAssignee:
           markedDoneByAssignee ?? this.markedDoneByAssignee,
-      markedDoneAt: markedDoneAt ?? this.markedDoneAt,
+      markedDoneAt: clearMarkedDoneAt
+          ? null
+          : (markedDoneAt ?? this.markedDoneAt),
       overdueFlagged: overdueFlagged ?? this.overdueFlagged,
       solution: clearSolution ? null : (solution ?? this.solution),
+      feedback: clearFeedback ? null : (feedback ?? this.feedback),
     );
   }
 
@@ -178,6 +174,7 @@ class Task {
     'markedDoneAt': markedDoneAt?.toIso8601String(),
     'overdueFlagged': overdueFlagged,
     'solution': solution?.toJson(),
+    'feedback': feedback,
   };
 
   factory Task.fromJson(Map<String, dynamic> j) => Task(
@@ -213,5 +210,6 @@ class Task {
     solution: j['solution'] != null
         ? TaskSolution.fromJson(j['solution'] as Map<String, dynamic>)
         : null,
+    feedback: j['feedback'] as String?,
   );
 }

@@ -31,6 +31,7 @@ class TaskService {
   final List<Task> _tasks = [];
   // userId → puede asignar tareas
   final Set<String> _enabledAssigners = {};
+  final Set<String> _seenTaskIds = {};
 
   ServerSocket? _server;
   bool _started = false;
@@ -74,29 +75,34 @@ class TaskService {
   }
 
   Future<void> _loadLocal() async {
-    try {
-      final file = await _dataFile();
-      if (!await file.exists()) return;
-      final raw = await file.readAsString();
-      final data = jsonDecode(raw) as Map<String, dynamic>;
+  try {
+    final file = await _dataFile();
+    if (!await file.exists()) return;
+    final raw = await file.readAsString();
+    final data = jsonDecode(raw) as Map<String, dynamic>;
 
-      _tasks.clear();
-      for (final t in (data['tasks'] as List? ?? [])) {
-        try {
-          _tasks.add(Task.fromJson(t as Map<String, dynamic>));
-        } catch (_) {}
-      }
-
-      _enabledAssigners.clear();
-      _enabledAssigners.addAll(
-        List<String>.from(data['enabledAssigners'] as List? ?? []),
-      );
-
-      print('[TaskService] Loaded ${_tasks.length} tasks');
-    } catch (e) {
-      print('[TaskService] _loadLocal error: $e');
+    _tasks.clear();
+    for (final t in (data['tasks'] as List? ?? [])) {
+      try {
+        _tasks.add(Task.fromJson(t as Map<String, dynamic>));
+      } catch (_) {}
     }
+
+    _enabledAssigners.clear();
+    _enabledAssigners.addAll(
+      List<String>.from(data['enabledAssigners'] as List? ?? []),
+    );
+
+    _seenTaskIds.clear();
+    _seenTaskIds.addAll(
+      List<String>.from(data['seenTaskIds'] as List? ?? []),
+    );
+
+    print('[TaskService] Loaded ${_tasks.length} tasks');
+  } catch (e) {
+    print('[TaskService] _loadLocal error: $e');
   }
+}
 
   void _scheduleSave() {
     _saveDebounce?.cancel();
@@ -104,19 +110,19 @@ class TaskService {
   }
 
   Future<void> _saveLocal() async {
-    try {
-      final file = await _dataFile();
-      final data = {
-        'tasks': _tasks.map((t) => t.toJson()).toList(),
-        'enabledAssigners': _enabledAssigners.toList(),
-        'updatedAt': DateTime.now().toIso8601String(),
-      };
-      await file.writeAsString(jsonEncode(data));
-    } catch (e) {
-      print('[TaskService] _saveLocal error: $e');
-    }
+  try {
+    final file = await _dataFile();
+    final data = {
+      'tasks': _tasks.map((t) => t.toJson()).toList(),
+      'enabledAssigners': _enabledAssigners.toList(),
+      'seenTaskIds': _seenTaskIds.toList(),
+      'updatedAt': DateTime.now().toIso8601String(),
+    };
+    await file.writeAsString(jsonEncode(data));
+  } catch (e) {
+    print('[TaskService] _saveLocal error: $e');
   }
-
+}
   // ─── Servidor ─────────────────────────────────────────────────────────────
 
   Future<void> _startServer() async {
@@ -708,31 +714,63 @@ class TaskService {
     await _broadcastTask(updated);
     return null;
   }
+  Future<String?> unmarkDone(String taskId) async {
+  final me = AuthService().currentUser;
+  if (me == null) return 'No hay sesión';
+
+  final idx = _tasks.indexWhere((t) => t.id == taskId);
+  if (idx == -1) return 'Tarea no encontrada';
+
+  final task = _tasks[idx];
+  if (task.assigneeId != me.id) return 'No eres el asignado';
+  if (task.completion != TaskCompletion.none) {
+    return 'La tarea ya fue calificada, no se puede desmarcar';
+  }
+  if (task.isOverdue) return 'La tarea ya venció';
+
+  final updated = task.copyWith(
+    markedDoneByAssignee: false,
+    clearMarkedDoneAt: true,
+    status: TaskStatus.pending,
+  );
+
+  _tasks[idx] = updated;
+  _scheduleSave();
+  _emitUpdate();
+  await _broadcastTask(updated);
+  return null;
+}
 
   /// El asignador califica la tarea
-  Future<String?> setCompletion(String taskId, TaskCompletion completion) async {
-    final me = AuthService().currentUser;
-    if (me == null) return 'No hay sesión';
+  Future<String?> setCompletion(
+  String taskId,
+  TaskCompletion completion, {
+  String? feedback,
+}) async {
+  final me = AuthService().currentUser;
+  if (me == null) return 'No hay sesión';
 
-    final idx = _tasks.indexWhere((t) => t.id == taskId);
-    if (idx == -1) return 'Tarea no encontrada';
+  final idx = _tasks.indexWhere((t) => t.id == taskId);
+  if (idx == -1) return 'Tarea no encontrada';
 
-    final task = _tasks[idx];
-    if (task.assignerId != me.id && me.jerarquia < 9) {
-      return 'Solo el asignador puede calificar';
-    }
-
-    final updated = task.copyWith(
-      completion: completion,
-      status: TaskStatus.done,
-    );
-
-    _tasks[idx] = updated;
-    _scheduleSave();
-    _emitUpdate();
-    await _broadcastTask(updated);
-    return null;
+  final task = _tasks[idx];
+  if (task.assignerId != me.id && me.jerarquia < 9) {
+    return 'Solo el asignador puede calificar';
   }
+
+  final updated = task.copyWith(
+    completion: completion,
+    status: TaskStatus.done,
+    feedback: feedback,
+    clearFeedback: feedback == null,
+  );
+
+  _tasks[idx] = updated;
+  _scheduleSave();
+  _emitUpdate();
+  await _broadcastTask(updated);
+  return null;
+}
 
   /// El asignado envía/edita su solución
   Future<String?> submitSolution({
@@ -912,6 +950,24 @@ class TaskService {
     return List<Task>.from(_tasks)
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
   }
+  /// Cuántas tareas nuevas (no vistas) tiene este usuario asignadas
+int newTasksCountForUser(String userId) {
+  if (userId.isEmpty) return 0;
+  return _tasks
+      .where((t) => t.assigneeId == userId && !_seenTaskIds.contains(t.id))
+      .length;
+}
+
+/// Marca todas las tareas del usuario como vistas (limpia el badge)
+void markTasksSeenForUser(String userId) {
+  if (userId.isEmpty) return;
+  final ids = _tasks
+      .where((t) => t.assigneeId == userId)
+      .map((t) => t.id);
+  _seenTaskIds.addAll(ids);
+  _scheduleSave();
+  _emitUpdate();
+}
 
   void _emitUpdate() {
     _controller.add(TaskEvent('tasks_updated', null));
